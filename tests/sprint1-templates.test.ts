@@ -10,7 +10,7 @@ describe('Sprint 1: Template Completeness', () => {
 
     it('has all required markdown files', () => {
       const requiredFiles = [
-        'AGENTS.md', 'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md', 'TOOLS.md',
+        'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md', 'TOOLS.md',
         'GUARDRAILS.md', 'ONBOARDING.md', 'IDENTITY.md',
         'SYSTEM.md', 'USER.md', 'GOALS.md', 'MEMORY.md',
       ];
@@ -37,30 +37,22 @@ describe('Sprint 1: Template Completeness', () => {
       expect(settings.hooks.SessionEnd).toBeDefined();
     });
 
-    it('has core skills', () => {
-      const expectedSkills = [
-        'autoresearch', 'comms', 'cron-management', 'tasks', 'onboarding',
-        'heartbeat', 'memory', 'human-tasks',
-      ];
+    it('has all 6 skills', () => {
+      const expectedSkills = ['autoresearch', 'comms', 'cron-management', 'google-workspace', 'tasks', 'onboarding'];
       for (const skill of expectedSkills) {
         const skillPath = join(agentDir, '.claude', 'skills', skill, 'SKILL.md');
         expect(existsSync(skillPath), `Missing skill: ${skill}`).toBe(true);
       }
     });
 
-    it('AGENTS.md has first boot check', () => {
-      const content = readFileSync(join(agentDir, 'AGENTS.md'), 'utf-8');
+    it('CLAUDE.md has first boot check', () => {
+      const content = readFileSync(join(agentDir, 'CLAUDE.md'), 'utf-8');
       expect(content).toContain('First Boot Check');
       expect(content).toContain('ONBOARDING');
     });
 
-    it('CLAUDE.md imports AGENTS.md', () => {
+    it('CLAUDE.md references cortextos bus commands', () => {
       const content = readFileSync(join(agentDir, 'CLAUDE.md'), 'utf-8');
-      expect(content).toContain('@AGENTS.md');
-    });
-
-    it('AGENTS.md references cortextos bus commands', () => {
-      const content = readFileSync(join(agentDir, 'AGENTS.md'), 'utf-8');
       expect(content).toContain('cortextos bus');
       expect(content).not.toContain('bash $CTX_FRAMEWORK_ROOT/bus/');
     });
@@ -125,7 +117,7 @@ describe('Sprint 1: Template Completeness', () => {
 
     it('has all required markdown files', () => {
       const requiredFiles = [
-        'AGENTS.md', 'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md', 'TOOLS.md',
+        'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md', 'TOOLS.md',
         'GUARDRAILS.md', 'ONBOARDING.md', 'IDENTITY.md',
         'SYSTEM.md', 'USER.md', 'GOALS.md', 'MEMORY.md',
       ];
@@ -144,12 +136,11 @@ describe('Sprint 1: Template Completeness', () => {
       expect(cronNames).toContain('evening-review');
     });
 
-    it('has orchestrator-specific skills', () => {
+    it('has 12 skills including orchestrator-specific ones', () => {
       const expectedSkills = [
-        'autoresearch', 'comms', 'cron-management', 'tasks',
+        'autoresearch', 'comms', 'cron-management', 'google-workspace', 'tasks',
         'evening-review', 'goal-management', 'morning-review',
         'nighttime-mode', 'theta-wave', 'weekly-review', 'onboarding',
-        'heartbeat', 'memory', 'human-tasks',
       ];
       for (const skill of expectedSkills) {
         const skillPath = join(orchDir, '.claude', 'skills', skill, 'SKILL.md');
@@ -157,8 +148,8 @@ describe('Sprint 1: Template Completeness', () => {
       }
     });
 
-    it('AGENTS.md has orchestrator-specific content', () => {
-      const content = readFileSync(join(orchDir, 'AGENTS.md'), 'utf-8');
+    it('CLAUDE.md has orchestrator-specific content', () => {
+      const content = readFileSync(join(orchDir, 'CLAUDE.md'), 'utf-8');
       expect(content).toContain('ORCHESTRATOR');
       expect(content).toContain('COORDINATION');
       expect(content).toContain('Decompose');
@@ -192,7 +183,7 @@ describe('Sprint 1: Template Completeness', () => {
 
     it('has all required markdown files', () => {
       const requiredFiles = [
-        'AGENTS.md', 'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md', 'TOOLS.md',
+        'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md', 'TOOLS.md',
         'GUARDRAILS.md', 'ONBOARDING.md', 'IDENTITY.md',
         'SYSTEM.md', 'USER.md', 'GOALS.md', 'MEMORY.md',
       ];
@@ -214,12 +205,11 @@ describe('Sprint 1: Template Completeness', () => {
       expect(config.ecosystem.local_version_control).toBeDefined();
     });
 
-    it('has analyst-specific skills', () => {
+    it('has 11 skills including analyst-specific ones', () => {
       const expectedSkills = [
-        'autoresearch', 'comms', 'cron-management', 'tasks',
+        'autoresearch', 'comms', 'cron-management', 'google-workspace', 'tasks',
         'catalog-browse', 'community-publish', 'local-version-control',
         'theta-wave', 'upstream-sync', 'onboarding',
-        'heartbeat', 'memory', 'human-tasks',
       ];
       for (const skill of expectedSkills) {
         const skillPath = join(analystDir, '.claude', 'skills', skill, 'SKILL.md');
@@ -227,8 +217,8 @@ describe('Sprint 1: Template Completeness', () => {
       }
     });
 
-    it('AGENTS.md has analyst-specific content', () => {
-      const content = readFileSync(join(analystDir, 'AGENTS.md'), 'utf-8');
+    it('CLAUDE.md has analyst-specific content', () => {
+      const content = readFileSync(join(analystDir, 'CLAUDE.md'), 'utf-8');
       expect(content).toContain('Analyst');
       expect(content).toContain('metrics');
     });
