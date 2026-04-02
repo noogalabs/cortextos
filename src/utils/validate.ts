@@ -11,6 +11,14 @@ export function validateAgentName(name: string): void {
   }
 }
 
+export function validateOrgName(org: string): void {
+  if (!org || !AGENT_NAME_REGEX.test(org)) {
+    throw new Error(
+      `Invalid org name '${org}'. Must contain only lowercase letters, numbers, underscores, and hyphens.`
+    );
+  }
+}
+
 export function validatePriority(priority: string): asserts priority is Priority {
   if (!VALID_PRIORITIES.includes(priority as Priority)) {
     throw new Error(

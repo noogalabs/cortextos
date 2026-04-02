@@ -3,6 +3,7 @@ import { join, basename } from 'path';
 import { homedir } from 'os';
 import type { CtxEnv } from '../types/index.js';
 import { ensureDir } from './atomic.js';
+import { validateAgentName, validateOrgName } from './validate.js';
 
 /**
  * Resolve the cortextOS environment context.
@@ -80,6 +81,23 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
         if (!orchestrator && ctx.orchestrator) orchestrator = ctx.orchestrator;
       }
     } catch { /* ignore */ }
+  }
+
+  // Security (H9): Validate agent name and org before they flow into filesystem paths.
+  // These come from env vars / .cortextos-env and must match [a-z0-9_-]+.
+  if (agentName) {
+    try {
+      validateAgentName(agentName);
+    } catch (err) {
+      throw new Error(`CTX_AGENT_NAME is invalid: ${(err as Error).message}`);
+    }
+  }
+  if (org) {
+    try {
+      validateOrgName(org);
+    } catch (err) {
+      throw new Error(`CTX_ORG is invalid: ${(err as Error).message}`);
+    }
   }
 
   return { instanceId, ctxRoot, frameworkRoot, agentName, agentDir, org, projectRoot, timezone, orchestrator };
