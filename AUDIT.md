@@ -236,6 +236,19 @@ Skill = directory with SKILL.md (YAML frontmatter + markdown body); discovery: f
 
 Types: raw skill, chained skills, skill+tool pair, skill+cron
 
+### 4.2a Autoresearch (experiments) cron — ❌ not wired up per agent
+
+The `autoresearch/SKILL.md` skill exists in every agent template but is intentionally NOT in the default cron list. It must be configured per-agent during onboarding.
+
+Required action (part of onboarding chain redesign — Layer 5):
+- During each agent's onboarding, ask: "What metric do you want to optimize?" and "How often should I run experiments?"
+- Create a cron entry: `{"name": "experiment-<metric>", "interval": "<window>", "prompt": "Read .claude/skills/autoresearch/SKILL.md. Run one experiment cycle for metric '<metric>'."}`
+- Add to that agent's `config.json` crons array
+- Create `experiments/config.json` and `experiments/surfaces/<metric>/current.md` for the agent
+
+This applies to ALL agents (specialist, analyst, orchestrator). The metric and surface are role-specific.
+Ensure this step is in the specialist, analyst, and orchestrator onboarding flows when Layer 5 is redesigned.
+
 ### 4.3 Analyst metrics collection — 🔲 not audited
 
 ---
