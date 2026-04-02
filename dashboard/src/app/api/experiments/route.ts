@@ -32,6 +32,7 @@ interface Experiment {
 
 interface Cycle {
   name: string;
+  agent: string;
   surface: string;
   metric: string;
   metric_type: string;

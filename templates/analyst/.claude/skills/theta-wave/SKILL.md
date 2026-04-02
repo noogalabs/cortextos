@@ -115,8 +115,11 @@ cortextos bus manage-cycle modify <agent> --cycle <name> \
   --window <new_window> \
   --loop-interval <new_loop_interval> \
   --surface <new_surface> \
-  --measurement "<new_method>"
+  --measurement "<new_method>" \
+  --metric-type <quantitative|qualitative> \
+  --enabled <true|false>
 ```
+Use `--enabled false` to pause a stale or converged cycle instead of removing it entirely — pausing preserves the cycle history.
 
 **Remove converged or irrelevant cycles:**
 ```bash

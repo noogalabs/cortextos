@@ -81,7 +81,16 @@ export interface ExperimentCycle {
 export interface ExperimentConfig {
   approval_required?: boolean;
   cycles?: ExperimentCycle[];
-  theta_wave_notifications?: boolean;
+  theta_wave?: {
+    enabled?: boolean;
+    interval?: string;
+    metric?: string;
+    metric_type?: string;
+    direction?: string;
+    auto_create_agent_cycles?: boolean;
+    auto_modify_agent_cycles?: boolean;
+  };
+  monitoring?: Record<string, unknown>;
 }
 
 // --- Helpers ---

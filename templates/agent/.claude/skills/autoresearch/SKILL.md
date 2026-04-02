@@ -146,8 +146,12 @@ Then set up the cron (using the loop interval the user chose):
 
 To modify a cycle when the user asks:
 ```bash
-cortextos bus manage-cycle modify $CTX_AGENT_NAME --cycle "<name>" --window "<new>" --loop-interval "<new>"
+cortextos bus manage-cycle modify $CTX_AGENT_NAME --cycle "<name>" \
+  --window "<new>" \
+  --loop-interval "<new>" \
+  --enabled <true|false>
 ```
+Use `--enabled false` to pause a cycle without deleting it.
 
 ## Important Rules
 

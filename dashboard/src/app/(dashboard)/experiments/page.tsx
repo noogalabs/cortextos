@@ -29,6 +29,7 @@ interface Experiment {
   metric: string;
   hypothesis: string;
   changes_description?: string | null;
+  measurement?: string;
   surface: string;
   direction: string;
   window: string;

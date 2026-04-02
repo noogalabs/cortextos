@@ -271,9 +271,15 @@ After workflows and tools are configured:
       --measurement "<how_to_measure>" \
       --loop-interval "<cron_frequency>"
 
-    # Set up the cron immediately
-    # /loop <cron_frequency> Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop.
-    # Add to config.json crons: {"name": "experiment-<metric>", "interval": "<cron_frequency>", "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."}
+    ```
+
+    Then set up the experiment cron immediately (outside the bash block — execute this as a Claude command):
+
+    `/loop <cron_frequency> Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop.`
+
+    Then add to `config.json` crons array:
+    ```json
+    {"name": "experiment-<metric>", "interval": "<cron_frequency>", "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."}
     ```
 
     If user set approval_required to false, update `experiments/config.json`:
