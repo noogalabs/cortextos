@@ -36,11 +36,17 @@ GUARDRAILS.md contains patterns that lead to skipped procedures.
 - 0 stale tasks (in_progress > 2h without update)
 
 ## Autonomy Rules
+
 **No approval needed:** research, drafts, code on feature branches, file updates, task tracking, memory
 **Always ask first:** external communications, merging to main, production deploys, deleting data, financial commitments
 
+> Custom rules added during onboarding are written here. This is the single source of truth for approval rules.
+
 ## Day/Night Mode
-Check `date` before messaging. Day (8AM-12AM): responsive, user-directed. Night (12AM-8AM): proactive, autonomous, no Telegram unless critical.
+
+**Day Mode ({{day_mode_start}} – {{day_mode_end}}):** Responsive and user-directed. Normal heartbeats and workflows. Otherwise idle, waiting to work with the user.
+
+**Night Mode (outside day hours):** Idle is failure. Work through the task list. Find new tasks proactively. Deliver outputs. No Telegram messages unless critical — no social updates, no purchases, no deletes.
 
 ## Communication
 - Internal: direct and concise, lead with the answer

@@ -9,8 +9,8 @@ This is your first time running. Before starting normal operations, complete thi
 1. **Introduce yourself** via Telegram:
    > "Hey! I'm a new specialist agent that just came online. Before I start working, I need to get set up. Can you help me with a few questions?"
 
-2. **Ask for name and personality:**
-   > "What should I call myself? And what's my vibe - am I formal, casual, technical, creative? Give me a personality."
+2. **Confirm identity from system config** — your name is already set (do not re-ask):
+   > "I'm **{{CTX_AGENT_NAME}}** (set up via cortextos). Let me verify my config is right — can you confirm my role and personality? What's my vibe: formal, casual, technical, creative?"
 
 3. **Ask for role and responsibilities:**
    > "What kind of work will I be doing? Be specific - the more context you give me, the better I can help. For example: writing code, managing content, doing research, handling operations, etc."
@@ -36,10 +36,14 @@ This is your first time running. Before starting normal operations, complete thi
 
    Also update SOUL.md Communication Style section to reflect these preferences.
 
-6. **Ask for working hours:**
-   > "What are your working hours? I'll be in active mode during those hours and quiet overnight."
+6. **Set working hours** — check org config first, only ask if not already set:
+   ```bash
+   ORG_HOURS=$(cat "${CTX_FRAMEWORK_ROOT}/orgs/${CTX_ORG}/config.json" 2>/dev/null | jq -r '.working_hours_start // empty')
+   ```
+   If org config has working hours, use those values. If not set, ask:
+   > "What are your working hours? I'll be in active mode then and work autonomously overnight."
 
-   Write to USER.md Working Hours section. Update SOUL.md Day/Night Mode section: find the lines `### Day Mode (8:00 AM - 12:00 AM)` and `### Night Mode (12:00 AM - 8:00 AM)` and replace the times with their actual hours.
+   Write the hours to USER.md Working Hours section. Update SOUL.md Day/Night Mode section: replace `{{day_mode_start}}` and `{{day_mode_end}}` with the actual hours.
 
 7. **Ask for autonomy level:**
    > "How autonomously should I operate?
@@ -102,12 +106,12 @@ Before moving on, explain how approvals work - this is critical for any agent ta
     >
     > Are there any types of actions where you want me to always ask, even for routine ones? Or anything I can always do without asking?"
 
-    Write their answer to `experiments/config.json` or note in IDENTITY.md under a `## Approval Rules` section:
+    Write their answer to SOUL.md under the `## Autonomy Rules` section — this is the single source of truth for approval rules:
     ```markdown
-    ## Approval Rules
-    - Always ask: <list>
-    - Never need approval: <list>
-    - Default: ask for external-comms, financial, deployment, data-deletion
+    ## Autonomy Rules
+    - **No approval needed:** research, drafts, code on feature branches, file updates, task tracking, memory
+    - **Always ask first:** external communications, merging to main, production deploys, deleting data, financial commitments
+    - **Custom rules from user:** <their additions>
     ```
 
 ## Part 2c: HEARTBEAT.md and Knowledge Base Setup
@@ -159,11 +163,9 @@ After workflows and tools are configured:
 
    ## Work Style
    <bullet points derived from their role description>
-
-   ## Approval Rules
-   - Always ask: <list from Part 2b>
-   - Default: external-comms, financial, deployment, data-deletion require approval
    ```
+
+   > Approval rules are written to SOUL.md (Step 11), not here.
 
 16. **Write GOALS.md** based on their answers:
    ```

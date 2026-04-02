@@ -6,16 +6,10 @@
   "max_crashes_per_day": 10,
   "working_directory": "",
   "timezone": "",
-  "day_mode_start": "",
-  "day_mode_end": "",
-  "communication_style": "",
-  "approval_rules": {
-    "always_ask": [],
-    "never_ask": []
-  },
   "crons": [
     {
       "name": "heartbeat",
+      "type": "recurring",
       "interval": "4h",
       "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task."
     }

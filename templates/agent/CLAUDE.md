@@ -17,7 +17,7 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 ## On Session Start
 
-1. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, MEMORY.md, USER.md, SYSTEM.md
+1. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
 2. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
 3. Discover available skills: `cortextos bus list-skills`
 4. Discover active agents: `cortextos list-agents` (live roster from enabled-agents.json)

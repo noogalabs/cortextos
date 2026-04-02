@@ -19,25 +19,48 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 ## On Session Start
 
-**First thing — before reading anything:**
-```bash
-cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"
-```
+Complete the following in order. Do not skip steps.
 
-Then complete the following in order:
+1. **Send boot message first** — before reading anything else:
+   ```bash
+   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"
+   ```
+2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
+3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
+4. Discover available skills: `cortextos bus list-skills --format text`
+5. Discover active agents: `cortextos list-agents` (live roster from enabled-agents.json)
+6. Restore crons from `config.json` — run CronList first (no duplicates). For each entry: if `type: "recurring"` (or no type), call `/loop {interval} {prompt}`; if `type: "once"`, check `fire_at` — recreate via CronCreate if still in the future, or delete from config.json if expired. Do NOT assume crons survived a restart.
+7. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
+8. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
+9. Check inbox: `cortextos bus check-inbox`
+10. Update heartbeat: `cortextos bus update-heartbeat "online"`
+11. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
+12. Write session start entry to daily memory (see Memory Protocol below)
+13. Send your full online status message — **only AFTER crons are confirmed set**. Tell them: crons running, pending messages, and what you are picking up from last session.
 
-1. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
-2. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
-3. Discover available skills: `cortextos bus list-skills --format text`
-4. Discover active agents: `cortextos list-agents` (live roster from enabled-agents.json)
-5. Restore crons from `config.json` — run CronList first (no duplicates). For each entry: if `type: "recurring"` (or no type), call `/loop {interval} {prompt}`; if `type: "once"`, check `fire_at` — recreate via CronCreate if still in the future, or delete from config.json if expired. Do NOT assume crons survived a restart.
-6. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
-7. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
-8. Check inbox: `cortextos bus check-inbox`
-9. Update heartbeat: `cortextos bus update-heartbeat "online"`
-10. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
-11. Write session start entry to daily memory (see Memory Protocol below)
-12. Send your online message to the user — **only AFTER crons are confirmed set**. Tell them your status: crons running, whether there are pending messages, and what you are picking up from last session.
+---
+
+## On Session End
+
+Run these steps before any restart (hard or soft) and on context exhaustion.
+
+1. Write final memory checkpoint to daily memory:
+   ```bash
+   echo "## Session End - $(date -u +%H:%M:%S UTC)\n- Status: [done/interrupted]\n- WORKING ON: [task or 'nothing']\n- Next: [what to pick up next session]" >> memory/$(date -u +%Y-%m-%d).md
+   ```
+2. Update heartbeat: `cortextos bus update-heartbeat "restarting"`
+3. Log session end: `cortextos bus log-event action session_end info --meta '{"agent":"'$CTX_AGENT_NAME'","reason":"[why]"}'`
+4. **Hard restart only** — notify user on Telegram:
+   ```bash
+   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Restarting now — will be back in a moment."
+   ```
+5. **Context exhaustion only** — notify first, then hard-restart:
+   ```bash
+   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Context window full. Hard-restarting with fresh session. Resuming from memory."
+   cortextos bus hard-restart --reason "context exhaustion"
+   ```
+
+**--continue restarts** (71h auto-restart): No user notification needed. Session history is preserved.
 
 ---
 
