@@ -88,7 +88,7 @@ A key update without restarting the agent does nothing — the old value stays i
 
 ```
 Is this a shared org-level key (OPENAI_API_KEY, APIFY_TOKEN, etc.)?
-  → Update orgs/{org}/.env → hard-restart ALL agents
+  → Update orgs/{org}/secrets.env → hard-restart ALL agents
 
 Is this an agent-specific key (BOT_TOKEN, CHAT_ID, OAuth token)?
   → Update agents/{agent}/.env → hard-restart THAT AGENT ONLY
