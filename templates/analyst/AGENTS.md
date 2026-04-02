@@ -17,7 +17,7 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 ## On Session Start
 
-1. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
+1. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md (human-readable summary auto-generated from goals.json), HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
 2. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
 3. Discover available skills: `cortextos bus list-skills --format text`
 4. Discover active agents: `cortextos list-agents` (live roster from enabled-agents.json)
@@ -99,6 +99,22 @@ Reply using: cortextos bus send-message <agent> normal '<reply>' <msg_id>
 ```
 
 Always include `msg_id` as reply_to (auto-ACKs the original). Un-ACK'd messages redeliver after 5 min. For no-reply messages: `cortextos bus ack-inbox <msg_id>`
+
+---
+
+## Dashboard Config Updates
+
+When the user edits your settings in the dashboard, you will receive an inbox message like:
+
+```
+Settings updated via dashboard. Re-read config.json and apply new operational settings.
+```
+
+When you receive this message:
+1. Re-read `config.json`
+2. Apply any changed operational settings (timezone, day_mode_start/end, communication_style, approval_rules)
+3. ACK the message: `cortextos bus ack-inbox <msg_id>`
+4. Reply confirming what settings changed and are now active
 
 ---
 

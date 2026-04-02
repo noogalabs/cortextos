@@ -21,15 +21,15 @@ YOU MUST read these files at the start of EVERY session. NO EXCEPTIONS:
 1. IDENTITY.md - who you are
 2. SOUL.md - how you behave
 3. GUARDRAILS.md - patterns to watch for and correct
-4. GOALS.md - what you're working toward
-4. HEARTBEAT.md - your recurring checklist
-5. MEMORY.md - long-term learnings
-6. memory/YYYY-MM-DD.md - today's session state (check for WORKING ON: entries)
-7. TOOLS.md - available bus scripts
-8. SYSTEM.md - cross-agent context
-9. config.json - cron schedule
-10. USER.md - who your user is, their preferences and working style
-11. ../../knowledge.md - org knowledge base (shared facts all agents need)
+4. GOALS.md - what you're working toward (human-readable summary auto-generated from goals.json)
+5. HEARTBEAT.md - your recurring checklist
+6. MEMORY.md - long-term learnings
+7. memory/YYYY-MM-DD.md - today's session state (check for WORKING ON: entries)
+8. TOOLS.md - available bus scripts
+9. SYSTEM.md - cross-agent context
+10. config.json - cron schedule
+11. USER.md - who your user is, their preferences and working style
+12. ../../knowledge.md - org knowledge base (shared facts all agents need)
 
 DO NOT start any work until all files are read. This is not optional.
 
@@ -75,13 +75,13 @@ cortextos bus list-tasks --agent $CTX_AGENT_NAME
 ```
 Resume any in_progress tasks. Check for WORKING ON: entries in today's memory.
 
-### 5. Read today's memory
+### 6. Read today's memory
 ```bash
 cat memory/$(date -u +%Y-%m-%d).md 2>/dev/null
 ```
 Look for `WORKING ON:` entries - these are tasks you were doing when the session ended. Resume them.
 
-### 6. Write session start to daily memory
+### 7. Write session start to daily memory
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
@@ -94,15 +94,15 @@ cat >> "memory/$TODAY.md" << MEMEOF
 MEMEOF
 ```
 
-### 7. Restore crons
+### 8. Restore crons
 Run CronList first (no duplicates). Read config.json crons array. For each entry: if `type: "recurring"` (or no type), call `/loop {interval} {prompt}`; if `type: "once"`, check `fire_at` — recreate via CronCreate if still in the future, delete from config.json if expired.
 
-### 8. Log session start event
+### 9. Log session start event
 ```bash
 cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'
 ```
 
-### 9. Notify on Telegram
+### 10. Notify on Telegram
 Send a message to the user that you're online with your status.
 
 ---
@@ -258,6 +258,22 @@ Reply using: cortextos bus send-telegram <chat_id> "<reply>"
 ```
 
 Process ALL Telegram messages immediately. The user is waiting for your response.
+
+---
+
+## Dashboard Config Updates
+
+When the user edits your settings in the dashboard, you will receive an inbox message like:
+
+```
+Settings updated via dashboard. Re-read config.json and apply new operational settings.
+```
+
+When you receive this message:
+1. Re-read `config.json`
+2. Apply any changed operational settings (timezone, day_mode_start/end, communication_style, approval_rules)
+3. ACK the message: `cortextos bus ack-inbox <msg_id>`
+4. Reply confirming what settings changed and are now active
 
 ---
 
