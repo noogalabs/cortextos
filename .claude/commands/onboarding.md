@@ -29,7 +29,7 @@ You are guiding the user through a complete interactive onboarding for cortextOS
 > - **Autoresearch** — agents run continuous experiments to improve themselves and your system. Measure outcomes, learn, propose changes — all gated by your approval.
 > - **Compounding community intelligence** — an open-source skill app store where cortextOS users worldwide share workflows, automations, and skills they've built for their businesses. Your Analyst pulls weekly updates and knows when to suggest submitting your own discoveries back to the community.
 > - **Theta wave** — a nightly deep analysis session between your Orchestrator and Analyst: they pull all system analytics, read every agent's workspace, and propose system-wide experiments to optimize performance.
-> - **Semantic Knowledge Base** *(coming soon)* — agents upload files from their workspace into a shared RAG database, searchable from the dashboard. Supports docs, images, audio, video — anything you want them to store as long-term shared memory.
+> - **Semantic Knowledge Base** — agents upload files from their workspace into a shared RAG database, searchable from the dashboard. Supports docs, images, audio, video — anything you want them to store as long-term shared memory.
 > - **Native iPhone App** *(coming soon)* — dashboard + Telegram in one app with push notifications and full system control from your phone.
 > - **Full codebase access** — agents can read and write your dashboard, core scripts, and the markdown files that define their own behavior. They can build custom dashboard pages for your business and eventually extend the iPhone app.
 
@@ -525,11 +525,45 @@ EOF
 
 ---
 
-## Phase 8f: Knowledge Base (Coming Soon)
+## Phase 8f: Semantic Knowledge Base
 
-> "cortextOS will soon include a semantic knowledge base. Agents will be able to upload files from their workspace — documents, images, audio, video — into a shared searchable database. All agents can query it with natural language, and you can search everything from the web dashboard. This feature is coming in a future update."
+> "cortextOS includes a semantic knowledge base — a shared RAG database your agents can read and write to. Agents upload files from their workspace — documents, images, audio, video — and any agent can query it with natural language. You can also search it from the web dashboard. Think of it as long-term shared memory across your entire team."
 
-Skip for now — no setup required.
+> "It requires a Google Gemini API key for embeddings. It's free to get one and the usage is minimal."
+
+Ask: "Do you want to set up the knowledge base now? You'll need a Gemini API key from https://aistudio.google.com/apikey (free tier works fine)."
+
+If yes:
+
+1. Get the API key from the user
+2. Write it to the org's secrets.env:
+   ```bash
+   SECRETS_FILE="orgs/${ORG_NAME}/secrets.env"
+   if [[ -f "$SECRETS_FILE" ]]; then
+     grep -q GEMINI_API_KEY "$SECRETS_FILE" || echo "GEMINI_API_KEY=<key>" >> "$SECRETS_FILE"
+   else
+     echo "GEMINI_API_KEY=<key>" > "$SECRETS_FILE"
+     chmod 600 "$SECRETS_FILE"
+   fi
+   ```
+
+3. Run KB setup:
+   ```bash
+   CTX_ORG="${ORG_NAME}" CTX_INSTANCE_ID="${INSTANCE_ID}" CTX_FRAMEWORK_ROOT="$(pwd)" bash bus/kb-setup.sh --org "${ORG_NAME}" --instance "${INSTANCE_ID}"
+   ```
+
+4. Verify it worked — the setup script tests core imports and creates the ChromaDB directory.
+
+5. Offer to ingest initial docs:
+   > "The knowledge base is ready. Want to seed it with any files now? Drop a file path or URL — docs, PDFs, images, anything. You can always add more later, and your agents will ingest their own findings as they work."
+
+   For each file:
+   ```bash
+   CTX_ORG="${ORG_NAME}" CTX_INSTANCE_ID="${INSTANCE_ID}" CTX_FRAMEWORK_ROOT="$(pwd)" GEMINI_API_KEY="<key>" bash bus/kb-ingest.sh "<path>" --org "${ORG_NAME}" --instance "${INSTANCE_ID}" --scope shared
+   ```
+
+If no:
+> "No problem. You can set it up anytime later by adding a GEMINI_API_KEY to your org's secrets.env and running `bash bus/kb-setup.sh --org <org>`. Your agents know how to use it once it's configured."
 
 ---
 
