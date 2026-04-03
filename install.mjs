@@ -504,17 +504,3 @@ console.log('');
 console.log('  That\'s it. The /onboarding command walks you through everything:');
 console.log('  org setup, agent creation, Telegram bots, dashboard, and more.');
 console.log('');
-console.log(`${BOLD}  Optional: Save your customizations to GitHub${R}`);
-console.log('  Create a new empty repository on GitHub (not a fork — just a blank repo).');
-console.log('  Then connect it as your "origin":');
-if (IS_WINDOWS) {
-  console.log(`     ${Y}cd "${INSTALL_DIR}" && git remote add origin <your-repo-url> && git push -u origin main${R}`);
-} else {
-  console.log(`     ${Y}cd ${INSTALL_DIR} && git remote add origin <your-repo-url> && git push -u origin main${R}`);
-}
-console.log('');
-console.log('  This lets your analyst agent:');
-console.log('  - Back up your agent customizations to your own private GitHub repo');
-console.log('  - Check for cortextOS framework updates from upstream (already configured)');
-console.log('  - Contribute custom skills back to the community catalog');
-console.log('');
