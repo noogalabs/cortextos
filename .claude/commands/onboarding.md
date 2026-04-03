@@ -1,11 +1,11 @@
 ---
 name: onboarding
-description: Interactive onboarding for cortextOS Node.js — walks through full setup from zero to a running multi-agent system
+description: Interactive onboarding for cortextOS Node.js - walks through full setup from zero to a running multi-agent system
 ---
 
 You are guiding the user through a complete interactive onboarding for cortextOS (Node.js version). Walk through each phase **in order**, checking results before proceeding. Explain everything in casual plain English. If any step fails, diagnose and fix before moving on. You must go through every step even if diverted mid step by the user. No exceptions. 
 
-**CRITICAL**: Sections marked with > blockquotes are **verbatim text** — deliver these word-for-word. Do not skip or paraphrase them.
+**CRITICAL**: Sections marked with > blockquotes are **verbatim text** - deliver these word-for-word. Do not skip or paraphrase them.
 
 **CRITICAL**: The more context the user provides, the better the system performs from day one. Encourage them to elaborate. Do not rush.
 
@@ -19,43 +19,43 @@ You are guiding the user through a complete interactive onboarding for cortextOS
 
 > "Here's what you're about to set up:"
 > - **Persistent agents** that run 24/7 with automatic crash recovery and session continuation. Each agent is a full Claude Code CLI session.
-> - **Telegram control** — text back and forth with your agents from your phone with full Claude Code capabilities.
-> - **Organizations** — groups of agents working together toward shared goals. Create as many organizations as you want and switch between them in the dashboard.
-> - **Task management** — agents create, assign, and complete tasks visible on a dashboard.
-> - **Approval workflows** — agents request your sign-off before taking high-stakes actions. Agents can also assign you tasks when they need your help.
-> - **Analytics** — cost tracking, task throughput, agent effectiveness metrics for optimization.
-> - **Web dashboard** — real-time monitoring of your entire system in a browser.
-> - **Agent teams** — your agents can spin up other persistent agents as permanent members of the team, and ephemeral worker agents for isolated deep work tasks. Agents can manage other agents as many layers deep as you want.
-> - **Autoresearch** — agents run continuous experiments to improve themselves and your system. Measure outcomes, learn, propose changes — all gated by your approval.
-> - **Compounding community intelligence** — an open-source skill app store where cortextOS users worldwide share workflows, automations, and skills they've built for their businesses. Your Analyst pulls weekly updates and knows when to suggest submitting your own discoveries back to the community.
-> - **Theta wave** — a nightly deep analysis session between your Orchestrator and Analyst: they pull all system analytics, read every agent's workspace, and propose system-wide experiments to optimize performance.
-> - **Semantic Knowledge Base** — agents upload files from their workspace into a shared RAG database, searchable from the dashboard. Supports docs, images, audio, video — anything you want them to store as long-term shared memory.
-> - **Native iPhone App** *(coming soon)* — dashboard + Telegram in one app with push notifications and full system control from your phone.
-> - **Full codebase access** — agents can read and write your dashboard, core scripts, and the markdown files that define their own behavior. They can build custom dashboard pages for your business and eventually extend the iPhone app.
+> - **Telegram control** - text back and forth with your agents from your phone with full Claude Code capabilities.
+> - **Organizations** - groups of agents working together toward shared goals. Create as many organizations as you want and switch between them in the dashboard.
+> - **Task management** - agents create, assign, and complete tasks visible on a dashboard.
+> - **Approval workflows** - agents request your sign-off before taking high-stakes actions. Agents can also assign you tasks when they need your help.
+> - **Analytics** - cost tracking, task throughput, agent effectiveness metrics for optimization.
+> - **Web dashboard** - real-time monitoring of your entire system in a browser.
+> - **Agent teams** - your agents can spin up other persistent agents as permanent members of the team, and ephemeral worker agents for isolated deep work tasks. Agents can manage other agents as many layers deep as you want.
+> - **Autoresearch** - agents run continuous experiments to improve themselves and your system. Measure outcomes, learn, propose changes - all gated by your approval.
+> - **Compounding community intelligence** - an open-source skill app store where cortextOS users worldwide share workflows, automations, and skills they've built for their businesses. Your Analyst pulls weekly updates and knows when to suggest submitting your own discoveries back to the community.
+> - **Theta wave** - a nightly deep analysis session between your Orchestrator and Analyst: they pull all system analytics, read every agent's workspace, and propose system-wide experiments to optimize performance.
+> - **Semantic Knowledge Base** - agents upload files from their workspace into a shared RAG database, searchable from the dashboard. Supports docs, images, audio, video - anything you want them to store as long-term shared memory.
+> - **Native iPhone App** *(coming soon)* - dashboard + Telegram in one app with push notifications and full system control from your phone.
+> - **Full codebase access** - agents can read and write your dashboard, core scripts, and the markdown files that define their own behavior. They can build custom dashboard pages for your business and eventually extend the iPhone app.
 
 > "Every cortextOS system is built around two core agents that are always present: the **Orchestrator** and the **Analyst**. They are the two halves of your cortextOS brain."
 >
-> "The **Orchestrator** is the leader. It takes your directives from Telegram, breaks them into tasks, delegates to the rest of your team, monitors what's getting done, routes approvals to you, and sends your daily briefings. It's your right hand — the agent that keeps everything moving in the right direction."
+> "The **Orchestrator** is the leader. It takes your directives from Telegram, breaks them into tasks, delegates to the rest of your team, monitors what's getting done, routes approvals to you, and sends your daily briefings. It's your right hand - the agent that keeps everything moving in the right direction."
 >
-> "The **Analyst** is the optimizer. It watches the entire system from the outside — tracking metrics, reading every agent's workspace, spotting bottlenecks and anomalies, and running the theta wave each night. It doesn't execute work; it makes the whole system better at executing work. Think of it as the CTO of your AI team."
+> "The **Analyst** is the optimizer. It watches the entire system from the outside - tracking metrics, reading every agent's workspace, spotting bottlenecks and anomalies, and running the theta wave each night. It doesn't execute work; it makes the whole system better at executing work. Think of it as the CTO of your AI team."
 >
 > "Together they run a continuous improvement loop while you sleep: the Orchestrator drives execution, the Analyst measures outcomes and proposes experiments, and every proposed change comes to you for approval before it goes live. The system gets smarter every week without you having to manage it."
 >
 > "Every specialist agent you add reports up to the Orchestrator. The Analyst watches all of them. The deeper your team grows, the more leverage these two give you."
 
-> "Here's how it works under the hood: A Node.js daemon manages your agents as persistent processes. Each agent is a Claude Code session running in a PTY — it reads its own markdown files (identity, goals, soul, heartbeat), sets up scheduled tasks, and communicates via a file-based message bus. You talk to agents over Telegram via their own bots. Everything is logged, monitored, and visible on a dashboard."
+> "Here's how it works under the hood: A Node.js daemon manages your agents as persistent processes. Each agent is a Claude Code session running in a PTY - it reads its own markdown files (identity, goals, soul, heartbeat), sets up scheduled tasks, and communicates via a file-based message bus. You talk to agents over Telegram via their own bots. Everything is logged, monitored, and visible on a dashboard."
 
-> "The setup flow: I'll help you configure the technical infrastructure here in Claude Code. Then your Orchestrator agent will come online in Telegram and walk you through its own setup — role confirmation, goals, cron schedule, communication preferences. At the end of that, the Orchestrator will walk you through creating a Telegram bot for your Analyst agent. The Analyst then does its own Telegram onboarding — monitoring setup, theta wave config, ecosystem preferences. Once that's done, the Analyst will recommend specialist agents based on your goals, and the Orchestrator handles creating each one. You'll just need to create a Telegram bot for each new agent via @BotFather."
+> "The setup flow: I'll help you configure the technical infrastructure here in Claude Code. Then your Orchestrator agent will come online in Telegram and walk you through its own setup - role confirmation, goals, cron schedule, communication preferences. At the end of that, the Orchestrator will walk you through creating a Telegram bot for your Analyst agent. The Analyst then does its own Telegram onboarding - monitoring setup, theta wave config, ecosystem preferences. Once that's done, the Analyst will recommend specialist agents based on your goals, and the Orchestrator handles creating each one. You'll just need to create a Telegram bot for each new agent via @BotFather."
 
-Ask: "Ready to get started? And — do you already have a Telegram bot token ready, or do we need to create one? While you answer, I will set up the dependencies"
+Ask: "Ready to get started? And - do you already have a Telegram bot token ready, or do we need to create one? While you answer, I will set up the dependencies"
 
 ---
 
 ## Phase 2: Dependency Check
 
-Check and auto-install all dependencies. Do not ask permission — just install what is missing.
+Check and auto-install all dependencies. Do not ask permission - just install what is missing.
 
-**First: verify Claude Code is authenticated** — agents run as Claude Code sessions and require a valid login:
+**First: verify Claude Code is authenticated** - agents run as Claude Code sessions and require a valid login:
 ```bash
 claude --version
 ```
@@ -89,13 +89,13 @@ For any missing dependency, install using the appropriate package manager:
 - `node` / `npm`: `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash - && sudo apt-get install -y nodejs`
 - `jq`: `sudo apt-get install -y jq`
 
-**Windows (PowerShell — run as Administrator):**
+**Windows (PowerShell - run as Administrator):**
 - `node` / `npm`: `winget install OpenJS.NodeJS` or `choco install nodejs`
 - `jq`: `winget install jqlang.jq` or `choco install jq`
 
 **All platforms:**
 - `pm2`: `npm install -g pm2`
-- `claude`: Tell user to install from https://docs.anthropic.com/en/docs/claude-code — cannot be auto-installed
+- `claude`: Tell user to install from https://docs.anthropic.com/en/docs/claude-code - cannot be auto-installed
 
 Verify Node is v20+:
 ```bash
@@ -154,7 +154,7 @@ done
 INSTANCE_ID="cortextos${INSTANCE_NUM}"
 ```
 
-**Note on environment variables:** `CTX_INSTANCE_ID`, `CTX_ROOT`, `CTX_ORG`, and `CTX_AGENT_NAME` are set automatically by the framework based on where commands are run from. You do not need to set these manually — they are referenced in the examples below for clarity.
+**Note on environment variables:** `CTX_INSTANCE_ID`, `CTX_ROOT`, `CTX_ORG`, and `CTX_AGENT_NAME` are set automatically by the framework based on where commands are run from. You do not need to set these manually - they are referenced in the examples below for clarity.
 
 Set variables for the rest of onboarding:
 ```bash
@@ -167,18 +167,18 @@ CTX_ROOT="${HOME}/.cortextos/${INSTANCE_ID}"
 
 ### 4a. Explain Organizations (verbatim)
 
-> "cortextOS organizes your agents into Organizations. An Organization is a group of agents that work together toward shared goals — for your business, a side project, or any domain of your life. Each org has its own task queue, approval workflow, analytics, set of dashboard pages, and shared context."
+> "cortextOS organizes your agents into Organizations. An Organization is a group of agents that work together toward shared goals - for your business, a side project, or any domain of your life. Each org has its own task queue, approval workflow, analytics, set of dashboard pages, and shared context."
 
 ### 4b. Gather Organization context
 
 Ask these questions one at a time. Follow up on interesting answers. Let the user elaborate.
 
-1. The more detail and context you give me to answer questions during onboarding, the better cortextOS will work for you after install. This applies for all onboarding steps of the system. "What do you want to call your first Organization?" (lowercase, hyphens OK — e.g., `mycompany`, `life-ops`, `cointally`)
+1. "The more detail and context you give me during onboarding, the better cortextOS will work from day one. What will this Organization be for? Describe it in a sentence or two."
+2. "What's the Organization's North Star - the ONE long-term goal everything should work toward?"
+3. "Based on that, what do you want to call this Organization?" (lowercase, hyphens OK - e.g., `mycompany`, `life-ops`, `cointally`)
 
 **Validate**: Convert to lowercase, replace spaces with hyphens, strip characters that are not `a-z`, `0-9`, or `-`. Show the cleaned name and confirm.
 
-2. "Describe what this Organization does in a sentence or two."
-3. "What's the Organization's North Star — the ONE long-term goal everything should work toward?"
 4. "What are the top 1-3 goals right now to move toward that?"
 5. "What's the single most important thing to get done this week? One sentence." (this becomes `daily_focus`)
 6. "What's your timezone?" (auto-detect if possible: `readlink /etc/localtime 2>/dev/null | sed 's:.*/zoneinfo/::'`)
@@ -223,13 +223,13 @@ Update `orgs/${ORG_NAME}/goals.json`:
 
 Ask:
 > "Let's set up your org's shared knowledge file. This is context that all your agents read on every boot. Tell me:"
-> 1. "Your business or project — what does it do, key products/services, model?"
-> 2. "Your team — key people and roles (human or AI, we will set up your other agents later)"
-> 3. "Technical setup — existing projects on this computer or elsewhere, repos, infrastructure, tools, key services"
-> 4. "Important links — dashboards, docs, tools"
+> 1. "Your business or project - what does it do, key products/services, model?"
+> 2. "Your team - key people and roles (human or AI, we will set up your other agents later)"
+> 3. "Technical setup - existing projects on this computer or elsewhere, repos, infrastructure, tools, key services"
+> 4. "Important links - dashboards, docs, tools"
 > 5. "Any key decisions or context agents should know?"
 
-Write the answers to `orgs/${ORG_NAME}/knowledge.md`. If answers are sparse, that's fine — agents will add to it.
+Write the answers to `orgs/${ORG_NAME}/knowledge.md`. If answers are sparse, that's fine - agents will add to it.
 
 ---
 
@@ -239,15 +239,15 @@ Write the answers to `orgs/${ORG_NAME}/knowledge.md`. If answers are sparse, tha
 
 > "Every Organization has two core roles: the **Orchestrator** and the **Analyst**."
 >
-> "The **Orchestrator** is your right hand — takes your directives, decomposes them into tasks, delegates to specialist agents, monitors progress, routes approvals, sends you briefings. It coordinates; it doesn't do specialist work itself."
+> "The **Orchestrator** is your right hand - takes your directives, decomposes them into tasks, delegates to specialist agents, monitors progress, routes approvals, sends you briefings. It coordinates; it doesn't do specialist work itself."
 >
-> "The **Analyst** is your system optimizer — monitors agent health, collects metrics, detects anomalies, proposes improvements. Think of it as the CTO of your AI team."
+> "The **Analyst** is your system optimizer - monitors agent health, collects metrics, detects anomalies, proposes improvements. Think of it as the CTO of your AI team."
 >
 > "Beyond these two, you can add specialist agents later through your Orchestrator on Telegram."
 
 ### 5b. Get agent names
 
-Ask: "What do you want to call your Orchestrator?" (suggest something org-appropriate — e.g., `commander`, `coordinator`, `chief`)
+Ask: "What do you want to call your Orchestrator?" (suggest something org-appropriate - e.g., `commander`, `coordinator`, `chief`)
 
 **Validate**: lowercase, hyphens, no special chars. Confirm with user.
 
@@ -270,7 +270,7 @@ Walk through step by step:
 3. "Send `/newbot`"
 4. "Give it a display name (e.g., 'MyOrg Orchestrator')"
 5. "Give it a username that ends in 'bot' (e.g., 'myorg_commander_bot')"
-6. "BotFather will reply with an HTTP API token — paste it here"
+6. "BotFather will reply with an HTTP API token - paste it here"
 7. Click the t.me link BotFather provides you to open the chat with your new agent. 
 
 After token paste:
@@ -292,7 +292,7 @@ done
 
 If ORCH_CHAT_ID is empty after 3 retries, tell user to send another message and try again. Do not proceed until it's a valid number.
 
-**Do NOT flush the Telegram offset** — the agent should see the user's first message when it boots.
+**Do NOT flush the Telegram offset** - the agent should see the user's first message when it boots.
 
 ### 6b. Create Agent Directory
 
@@ -325,7 +325,7 @@ ORCH_CONFIG="orgs/${ORG_NAME}/agents/${ORCH_NAME}/config.json"
 jq --arg model "claude-opus-4-6" '.model = $model' "${ORCH_CONFIG}" > "${TMPDIR:-/tmp}/_cfg.json" && mv "${TMPDIR:-/tmp}/_cfg.json" "${ORCH_CONFIG}"
 ```
 
-**Note:** Everything else — identity, personality, working hours, autonomy level, approval policy, cron schedule, USER.md — is configured by the Orchestrator itself during its Telegram onboarding. The template provides sensible defaults; the agent rewrites them with real content.
+**Note:** Everything else - identity, personality, working hours, autonomy level, approval policy, cron schedule, USER.md - is configured by the Orchestrator itself during its Telegram onboarding. The template provides sensible defaults; the agent rewrites them with real content.
 
 ### 6d. Enable Orchestrator
 
@@ -340,89 +340,58 @@ cat "${CTX_ROOT}/config/enabled-agents.json" | jq '.agents[] | select(.name == "
 
 ---
 
-## Phase 7: Start the Daemon
+## Phase 7: Dashboard Setup
 
-### 7a. Generate PM2 config
+### 7a. Explain (verbatim)
 
-```bash
-node dist/cli.js ecosystem
-```
+> "Let's set up the web dashboard first - this is your real-time view of all agents, tasks, approvals, costs, and analytics. We'll get it running before starting the agents."
 
-This generates `ecosystem.config.js` in the current directory. Verify it exists.
-
-### 7b. Start with PM2
+### 7b. Install and configure
 
 ```bash
-pm2 start ecosystem.config.js
-```
-
-Wait 5-10 seconds for the daemon to initialize, then save and set up auto-start:
-
-```bash
-pm2 save
-pm2 startup
-```
-
-> "PM2 just printed a command starting with `sudo env PATH=...`. Open a new terminal window, paste that command, and run it. It sets up the daemon to survive reboots. You only need to do this once."
->
-> "When you run it, your computer may ask for your password — this is normal. It's your Mac login password (or Linux user password), not any cortextOS password. Just type it in and press Enter. You won't see the characters appear as you type — that's normal for password prompts. Once it runs, come back here."
-
-Wait for them to confirm they've run it before continuing.
-
-### 7c. Verify daemon is running
-
-```bash
-pm2 list
-node dist/cli.js status --instance "${INSTANCE_ID}"
-```
-
-If daemon isn't running, check logs:
-```bash
-pm2 logs cortextos-daemon --lines 20
-```
-
----
-
-## Phase 8: Dashboard Setup
-
-### 8a. Explain (verbatim)
-
-> "Let's set up the web dashboard — real-time view of all your agents, tasks, approvals, costs, and analytics in the browser."
-
-### 8b. Install and configure
-
-```bash
-cd dashboard
+cd ${CTX_FRAMEWORK_ROOT}/dashboard
 npm install
 ```
 
-Write `dashboard/.env.local` (use the Write tool with full absolute paths — NOT `~`):
+Ask the user:
+> "Pick a username and password for the dashboard. This is what you'll use to log into localhost:3000."
+> "Username? (default: admin)"
+> "Password? (pick something you'll remember)"
+
+If the user doesn't want to pick, use the auto-generated password from `dashboard.env` and show it clearly.
+
+Read the generated AUTH_SECRET from `dashboard.env`:
+```bash
+cat "${CTX_ROOT}/dashboard.env"
 ```
+
+Write `${CTX_FRAMEWORK_ROOT}/dashboard/.env.local` (use the Write tool with full absolute paths - NOT `~`):
+```
+# AUTO-GENERATED by cortextOS onboarding. Edit ~/.cortextos/<instance>/dashboard.env to change credentials.
 CTX_ROOT=<full path to CTX_ROOT>
 CTX_FRAMEWORK_ROOT=<full path to repo root>
-AUTH_SECRET=cortextos-<timestamp>
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=cortextos
+AUTH_SECRET=<from dashboard.env>
+ADMIN_USERNAME=<user's choice or "admin">
+ADMIN_PASSWORD=<user's choice or generated>
 PORT=3000
 ```
 
-Get full paths:
+Then update `dashboard.env` to match:
 ```bash
-echo "CTX_ROOT: $(echo ${HOME}/.cortextos/${INSTANCE_ID})"
-echo "Framework root: $(pwd)/.."
+cat > "${CTX_ROOT}/dashboard.env" << EOF
+AUTH_SECRET=<keep existing from dashboard.env>
+ADMIN_USERNAME=<user's choice>
+ADMIN_PASSWORD=<user's choice>
+CTX_ROOT=${CTX_ROOT}
+CTX_FRAMEWORK_ROOT=${CTX_FRAMEWORK_ROOT}
+EOF
 ```
 
-### 8c. Build and start
+### 7c. Build and start
 
 For local access:
 ```bash
 npm run dev &
-```
-
-For persistent access (e.g., Cloudflare Tunnel):
-```bash
-npm run build
-npm start &
 ```
 
 Open in browser:
@@ -430,115 +399,28 @@ Open in browser:
 - Linux: `xdg-open http://localhost:3000`
 - Windows: `start http://localhost:3000`
 
-Login: `admin` / `cortextos`
-
-> "Tip: change the admin password in dashboard/.env.local after setup. Set ADMIN_PASSWORD=<yourpassword> and restart the dashboard."
+> "Dashboard is running. Log in with the credentials you just set. Nothing will be populated yet - that happens once agents start working."
 
 Walk the user through the dashboard pages:
 
-> "Here's a quick tour of what's in the dashboard:"
-> - **Agents** — real-time health status for all your agents. Green = heartbeat received recently. Red = stale or crashed.
-> - **Tasks** — every task across all agents. Create tasks, see who's working on what, track completions.
-> - **Approvals** — pending approval requests from agents. Click to approve or reject. Agents are blocked until you decide.
-> - **Analytics** — event timeline, cost tracking per agent, task throughput charts.
-> - **Experiments** — autoresearch cycles and results. See what your Analyst is testing.
-> - **Knowledge Base** — search your org's shared knowledge base (if enabled).
-> - **Workflows** — view and edit each agent's cron schedule.
-> - **Messages** — agent-to-agent and Telegram message history.
->
-> "The Agents and Approvals pages will be your most-visited. Bookmark localhost:3000."
+> "Quick tour of what's in the dashboard:"
+> - **Agents** - real-time health status. Green = healthy, Red = stale or crashed.
+> - **Tasks** - task queue across all agents. Create tasks, track completions.
+> - **Approvals** - pending approval requests. Approve or reject to unblock agents.
+> - **Analytics** - event timeline, cost tracking, task throughput.
+> - **Experiments** - autoresearch cycles and results.
+> - **Knowledge Base** - search your org's shared knowledge base.
 
-Go back to the repo root after:
+Go back to the repo root:
 ```bash
-cd ..
+cd ${CTX_FRAMEWORK_ROOT}
 ```
 
 ---
 
-## Phase 8d: Dashboard Settings
+## Phase 8: Knowledge Base
 
-Ask these two questions to set defaults for the whole system:
-
-1. "How many minutes before an agent is considered stale? (default: 120 minutes — this controls the health indicator in the dashboard)"
-2. "How many crashes in a day before an agent is automatically halted? (default: 10)"
-
-Update `orgs/${ORG_NAME}/agents/${ORCH_NAME}/config.json` with any custom values:
-
-```bash
-ORCH_CONFIG="orgs/${ORG_NAME}/agents/${ORCH_NAME}/config.json"
-# Update max_crashes_per_day if user changed it (default 10)
-jq --argjson crashes <value> '.max_crashes_per_day = $crashes' "${ORCH_CONFIG}" > "${TMPDIR:-/tmp}/_cfg.json" && mv "${TMPDIR:-/tmp}/_cfg.json" "${ORCH_CONFIG}"
-```
-
-Note: staleness threshold is a dashboard display setting — write it to `dashboard/.env.local`:
-```
-STALE_THRESHOLD_MINUTES=<value>
-```
-
----
-
-## Phase 8e: Theta Wave (Autoresearch)
-
-### What it is (verbatim)
-
-> "Theta wave is cortextOS's autonomous experimentation system. Your Analyst agent continuously runs experiments — trying different approaches, measuring outcomes, proposing improvements — and reports results to your Orchestrator for approval before making changes. You can enable or disable it now; the Analyst will configure the details during its Telegram onboarding."
-
-Ask: "Do you want to enable theta wave autoresearch? (yes/no — you can change this later)"
-
-If yes:
-
-Ask: "What should the Analyst focus experiments on? Suggestions: agent response quality, task throughput, briefing content, cron timing. You can say 'all of the above' or specify."
-
-Write their answer to `orgs/${ORG_NAME}/agents/${ANALYST_NAME}/GOALS.md` stub (it will be rewritten during Telegram onboarding, but seed it with their intent):
-
-```markdown
-## Theta Wave Focus
-<their answer>
-```
-
-Also ask: "How often should the Analyst run deep analysis cycles? (default: daily — options: 6h, 12h, 1d, 2d)"
-
-Store as `THETA_INTERVAL`. Seed it into the Analyst's experiments config so it's available on first boot:
-
-```bash
-ANALYST_EXP_DIR="orgs/${ORG_NAME}/agents/${ANALYST_NAME}/experiments"
-mkdir -p "${ANALYST_EXP_DIR}"
-cat > "${ANALYST_EXP_DIR}/config.json" << EOF
-{
-  "approval_required": true,
-  "theta_wave": {
-    "enabled": true,
-    "interval": "${THETA_INTERVAL}",
-    "metric": "system_effectiveness",
-    "metric_type": "qualitative_compound",
-    "direction": "higher",
-    "auto_create_agent_cycles": false,
-    "auto_modify_agent_cycles": false
-  },
-  "cycles": []
-}
-EOF
-```
-
-If no: note it for the Orchestrator context so it can offer to enable it later. Also write a disabled config:
-
-```bash
-ANALYST_EXP_DIR="orgs/${ORG_NAME}/agents/${ANALYST_NAME}/experiments"
-mkdir -p "${ANALYST_EXP_DIR}"
-cat > "${ANALYST_EXP_DIR}/config.json" << EOF
-{
-  "approval_required": true,
-  "theta_wave": { "enabled": false },
-  "cycles": []
-}
-EOF
-```
-
----
-
-## Phase 8f: Semantic Knowledge Base
-
-> "cortextOS includes a semantic knowledge base — a shared RAG database your agents can read and write to. Agents upload files from their workspace — documents, images, audio, video — and any agent can query it with natural language. You can also search it from the web dashboard. Think of it as long-term shared memory across your entire team."
+> "cortextOS includes a semantic knowledge base - a shared RAG database your agents can read and write to. Agents upload files from their workspace - documents, images, audio, video - and any agent can query it with natural language. You can also search it from the web dashboard. Think of it as long-term shared memory across your entire team."
 
 > "It requires a Google Gemini API key for embeddings. It's free to get one and the usage is minimal."
 
@@ -563,10 +445,10 @@ If yes:
    CTX_ORG="${ORG_NAME}" CTX_INSTANCE_ID="${INSTANCE_ID}" CTX_FRAMEWORK_ROOT="$(pwd)" bash bus/kb-setup.sh --org "${ORG_NAME}" --instance "${INSTANCE_ID}"
    ```
 
-4. Verify it worked — the setup script tests core imports and creates the ChromaDB directory.
+4. Verify it worked - the setup script tests core imports and creates the ChromaDB directory.
 
 5. Offer to ingest initial docs:
-   > "The knowledge base is ready. Want to seed it with any files now? Drop a file path or URL — docs, PDFs, images, anything. You can always add more later, and your agents will ingest their own findings as they work."
+   > "The knowledge base is ready. Want to seed it with any files now? Drop a file path or URL - docs, PDFs, images, anything. You can always add more later, and your agents will ingest their own findings as they work."
 
    For each file:
    ```bash
@@ -578,107 +460,59 @@ If no:
 
 ---
 
----
+## Phase 9: Start the Daemon
 
-## Phase 9: Wait for Orchestrator
+Everything is configured. Now start the agents.
 
-### 9a. Monitor boot
+### 9a. Generate PM2 config and start
 
-The Orchestrator is now running inside the daemon. To watch it boot:
 ```bash
-tail -f "${CTX_ROOT}/logs/${ORCH_NAME}/stdout.log"
+node dist/cli.js ecosystem
+pm2 start ecosystem.config.js
 ```
 
-> "The daemon auto-accepts the Claude Code directory trust prompt for you — no manual step needed. The agent will bootstrap itself in about 30-60 seconds."
+Wait 5-10 seconds for the daemon to initialize, then save:
 
-If no activity after 2 minutes, diagnose:
 ```bash
-pm2 logs cortextos-daemon --lines 30
-cat "${CTX_ROOT}/logs/${ORCH_NAME}/activity.log" 2>/dev/null | tail -20
+pm2 save
 ```
 
-### 9b. First Telegram interaction (verbatim)
-
-> "Your Orchestrator is bootstrapping. As soon as it's ready — about 30-60 seconds — it will message you on Telegram to start the interactive setup. As your first message, always type /onboarding"
->
-> "Here's exactly what the Orchestrator will walk you through on Telegram:"
-> 1. Its name, personality, and vibe
-> 2. Your working hours (sets day/night mode behavior)
-> 3. How autonomously it should operate
-> 4. What agents are on the team and delegation rules
-> 5. Its cron schedule — morning briefings, evening summaries, health checks
-> 6. Any tools or services it needs access to (GitHub, Google, etc.)
-> 7. Creating your Analyst agent (it will walk you through BotFather again for the Analyst's bot)
->
-> "Once the Orchestrator finishes, it will spawn your Analyst.does its own onboarding — about 5-10 minutes. At the end the Analyst will recommend any specialist agents and ask if you want to create them. Each specialist takes 3-5 minutes to onboard."
->
-> "Come back here if you hit any errors. Otherwise — you're done in Claude Code. Your Orchestrator has it from here."
-
-**Wait** for them to confirm the Orchestrator has messaged them before closing the onboarding.
-
----
-
-## Phase 10: Final Checklist
-
-Run a final verification:
+### 9b. Set up auto-start (survives reboots)
 
 ```bash
-# Daemon running?
+pm2 startup 2>&1
+```
+
+If the output contains "already configured" or an existing launch daemon, skip:
+> "PM2 auto-start is already configured."
+
+If it outputs a `sudo env PATH=...` command:
+> "One more step - PM2 needs to register itself so your agents survive reboots. It printed a command below. Copy it, open a new terminal, paste it, and hit Enter."
+>
+> "It will ask for your Mac password (the one you use to log in). When you type it, nothing appears on screen - that's normal. Just type and press Enter. This is a one-time setup."
+
+### 9c. Verify and hand off to Telegram
+
+```bash
 pm2 list | grep cortextos
-
-# Orchestrator in enabled list?
-cat "${CTX_ROOT}/config/enabled-agents.json"
-
-# Heartbeat written?
-cat "${CTX_ROOT}/state/${ORCH_NAME}/heartbeat.json" 2>/dev/null || echo "not yet"
-
-# Dashboard up?
-curl -s -o /dev/null -w "%{http_code}" http://localhost:3000
 ```
+
+> "Daemon is running. Your Orchestrator will message you on Telegram in 30-60 seconds. Head to Telegram and wait for the first message."
+
+---
+
+## Phase 10: Done
 
 Deliver verbatim:
 
-> "Here's what's now running:"
-> - **Orchestrator** (`<orch_name>`) — live on Telegram, currently onboarding itself with you
-> - **PM2 daemon** — manages agent process, auto-restarts on crash
-> - **Web dashboard** — real-time monitoring at localhost:3000 (login: admin / cortextos)
-
-> "Here's what was configured:"
-> - Instance ID, org name, timezone, communication style (knobs 1-3)
-> - Admin password, dashboard port, staleness threshold, max crashes/day (knobs 4-5, 24-25)
-> - Orchestrator name, Telegram credentials, model, session settings, cron schedule (knobs 6-11, 19-22)
-> - IDENTITY.md, GOALS.md, USER.md seed files (knobs 12, 14, 16)
-> - Org goals.json and knowledge.md (knobs 17-18)
-> - Approval policy defaults (knobs for external-comms, deployment, financial, data-deletion)
-> - Knowledge base / Gemini API key (if enabled)
-> - Theta wave focus and interval (if enabled)
-
-> "Still to configure in Telegram with your Orchestrator:"
-> - SOUL.md personality, HEARTBEAT.md monitoring config (knobs 13, 15)
-> - Final cron times and custom crons (knobs 19-22 finalized)
-> - Agent-specific API keys like Google, Notion, etc (knob 29)
-> - Analyst agent: all of the above for the Analyst
-
-> "Your Orchestrator will create the Analyst for you during its Telegram onboarding. You'll get a message from both agents when the full system is up."
-
-> "Key commands to know:"
-> - Check agent status: `cortextos status`
-> - View agent logs: `tail -f ~/.cortextos/<instance>/logs/<agent>/stdout.log`
-> - Send a message to an agent: `cortextos bus send-message <agent> normal 'your message'`
-> - List all agents: `cortextos list-agents`
-> - Create a task: `cortextos bus create-task "title" "description" <agent> normal`
-> - List tasks: `cortextos bus list-tasks --agent <agent>`
-> - Stop everything: `pm2 stop all`
-> - Start everything: `pm2 start ecosystem.config.js`
-> - Full CLI reference: `cortextos --help` and `cortextos bus --help`
-
-> "A few more things to know about the system:"
-> - **Event log:** Every agent action is logged. View in the dashboard Analytics tab or `cortextos bus log-event` to write your own.
-> - **Experiments:** Your Analyst will propose improvement experiments over time. Approve or reject them in the dashboard Experiments tab.
-> - **Worker agents:** For complex multi-step tasks, your agents can spawn ephemeral sub-agents. This is the m2c1-worker skill — ask your Orchestrator about it.
-> - **Community catalog:** Your Analyst can browse and install community-contributed skills weekly. See the dashboard Skills tab once the Analyst is running.
-
-> "You're all set. Go finish the onboarding with your Orchestrator on Telegram."
+> "You're all set. Here's what's running:"
+> - **Orchestrator** (`<orch_name>`) - starting up on Telegram now
+> - **Dashboard** - localhost:3000 (login: <username> / <password>)
+> - **PM2 daemon** - keeps everything alive, auto-restarts on crash
+>
+> "Go to Telegram and wait for your Orchestrator to message you. It will walk you through its personality, goals, crons, and creating your Analyst agent."
+>
+> "If anything breaks, come back here and run `pm2 logs cortextos-daemon --lines 30`."
 
 ---
 
