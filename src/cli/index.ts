@@ -21,6 +21,7 @@ import { tunnelCommand } from './tunnel.js';
 import { getConfigCommand } from './get-config.js';
 import { goalsCommand } from './goals.js';
 import { setupCommand } from './setup.js';
+import { spawnWorkerCommand, terminateWorkerCommand, listWorkersCommand, injectWorkerCommand } from './workers.js';
 
 const program = new Command();
 
@@ -49,6 +50,10 @@ program.addCommand(tunnelCommand);
 program.addCommand(getConfigCommand);
 program.addCommand(goalsCommand);
 program.addCommand(setupCommand);
+program.addCommand(spawnWorkerCommand);
+program.addCommand(terminateWorkerCommand);
+program.addCommand(listWorkersCommand);
+program.addCommand(injectWorkerCommand);
 
 // crash-alert: SessionEnd hook — cross-platform replacement for crash-alert.sh
 const crashAlertCommand = new Command('crash-alert')

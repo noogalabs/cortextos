@@ -8,7 +8,7 @@ triggers: ["worker", "parallelize", "spawn worker", "spin up", "parallel work", 
 
 > Spawn ephemeral Claude Code sessions for parallelized long-running tasks. Workers get a scoped task, produce deliverables, and are cleaned up when done. Use when work requires a full independent Claude Code session — not just a subagent tool call.
 
-> ⚠️ **MIGRATION IN PROGRESS** — The worker session spawning mechanism for the Node.js daemon system has not yet been defined. The concepts and workflow in this skill are correct; the implementation commands are pending. See grandamenium/cortextos#37. Do not attempt to spawn workers until this is resolved.
+> Worker session spawn is fully implemented. Use `cortextos spawn-worker` to launch isolated Claude Code sessions for parallelized tasks.
 
 ---
 
@@ -53,13 +53,18 @@ Before spawning, answer:
 
 ### Step 2: Spawn Worker Session
 
-> ⚠️ **Implementation pending** — The mechanism for spawning ephemeral Claude Code worker sessions in the cortextOS Node.js daemon system is not yet defined. This section will be updated once the approach is finalized (grandamenium/cortextos#37).
+```bash
+cortextos spawn-worker <worker-name> \
+  --dir <absolute-path-to-project-dir> \
+  --prompt "Read AGENTS.md for your task. Deliverables: <list>. When done: cortextos bus send-message $CTX_AGENT_NAME normal 'Done: <summary>'" \
+  --parent $CTX_AGENT_NAME
+```
 
-When implemented, a worker spawn will:
-- Create an isolated working directory with its own `.claude/` config
-- Set permissions to auto-approve (workers must never block on permission prompts)
-- Start a Claude Code session scoped to the task
-- Register the worker with the bus so it can send messages back to the parent
+The worker:
+- Runs `claude --dangerously-skip-permissions` in the given directory
+- Gets a bus identity (`CTX_AGENT_NAME=<worker-name>`) for two-way communication
+- Logs to `~/.cortextos/<instance>/logs/<worker-name>/stdout.log`
+- Is tracked by the daemon — use `cortextos list-workers` to monitor status
 
 ### Step 3: Inject Task Prompt
 
@@ -85,14 +90,28 @@ Workers communicate back via the bus. Check your inbox:
 cortextos bus check-inbox
 ```
 
+Check all worker statuses:
+```bash
+cortextos list-workers
+# Output: worker-name  running (pid 12345) ← parent-agent  42s  /path/to/dir
+```
+
 Check git progress in the worker's directory:
 ```bash
 cd <work-dir> && git log --oneline | head -5
 ```
 
+Nudge a stuck worker (equivalent of tmux send-keys):
+```bash
+cortextos inject-worker <worker-name> "Continue with phase 3. What's blocking you?"
+```
+
 ### Step 6: Cleanup
 
 ```bash
+# Terminate a running worker
+cortextos terminate-worker <worker-name>
+
 # Log completion
 cortextos bus log-event action worker_completed info \
   --meta '{"worker":"<worker-name>","deliverables":"<summary>"}'

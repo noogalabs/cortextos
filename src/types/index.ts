@@ -306,12 +306,30 @@ export type IPCCommandType =
   | 'stop-agent'
   | 'restart-agent'
   | 'wake'
-  | 'list-agents';
+  | 'list-agents'
+  | 'spawn-worker'
+  | 'terminate-worker'
+  | 'list-workers'
+  | 'inject-worker';
 
 export interface IPCRequest {
   type: IPCCommandType;
   agent?: string;
   data?: Record<string, unknown>;
+}
+
+// Worker Types
+
+export type WorkerStatusValue = 'starting' | 'running' | 'completed' | 'failed';
+
+export interface WorkerStatus {
+  name: string;
+  status: WorkerStatusValue;
+  pid?: number;
+  dir: string;
+  parent?: string;
+  spawnedAt: string;
+  exitCode?: number;
 }
 
 export interface IPCResponse {

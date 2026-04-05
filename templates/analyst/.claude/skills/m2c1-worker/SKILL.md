@@ -8,7 +8,7 @@ triggers: ["build", "m2c1", "worker agent", "autonomous build", "spin up worker"
 
 > Any cortextOS agent can autonomously build complete software by acting as the "human" in the M2C1 framework, managing a dedicated worker Claude Code session through the full 12-phase lifecycle.
 
-> ⚠️ **MIGRATION IN PROGRESS** — The mechanism for spawning and communicating with worker sessions in the Node.js daemon system has not yet been defined. The concepts and workflow in this skill are correct; the session spawn and real-time intervention commands are pending. See grandamenium/cortextos#37. Do not attempt to spawn workers until this is resolved.
+> Worker session spawn is fully implemented. Use `cortextos spawn-worker` to launch an isolated Claude Code M2C1 build session.
 
 ---
 
@@ -28,7 +28,7 @@ You provide the brain dump, answer discovery questions, help with tool setup, mo
 - M2C1 skill files available (copy from grandamenium/paul-workspace if not local)
 - A clear project idea or brain dump
 - An isolated directory for the build
-- Worker session spawn mechanism available (see grandamenium/cortextos#37)
+- Worker session spawn mechanism available (`cortextos spawn-worker`)
 
 ---
 
@@ -154,13 +154,25 @@ When you have questions during Phase 3 (Discovery), send them via send-message. 
 
 ## Phase 1: Spawn the Worker
 
-> ⚠️ **Implementation pending** — The mechanism for spawning an isolated Claude Code worker session in the cortextOS Node.js daemon system is not yet defined. This section will be updated once grandamenium/cortextos#37 is resolved.
+```bash
+WORKER_NAME="m2c1-$(basename $PROJECT_DIR)"
 
-When implemented, a worker spawn will:
-- Create an isolated session pointed at `$PROJECT_DIR`
-- Start Claude with `--dangerously-skip-permissions` (workers must never block on permission prompts)
-- Inject an initial prompt: "Read AGENTS.md for your instructions, then read BRAINDUMP.md for the project spec. Begin the M2C1 workflow starting with Phase 0."
-- Register the worker with the bus so it can send messages back to you
+cortextos spawn-worker "$WORKER_NAME" \
+  --dir "$PROJECT_DIR" \
+  --prompt "Read AGENTS.md for your instructions, then read BRAINDUMP.md for the project spec. Begin the M2C1 workflow starting with Phase 0." \
+  --parent $CTX_AGENT_NAME
+```
+
+The worker:
+- Runs in `$PROJECT_DIR` with `--dangerously-skip-permissions`
+- Gets `CTX_AGENT_NAME=$WORKER_NAME` so it can use `cortextos bus send-message` to reach you
+- Is tracked by the daemon: `cortextos list-workers` shows its status
+
+Log the spawn:
+```bash
+cortextos bus log-event action worker_spawned info \
+  --meta '{"worker":"'$WORKER_NAME'","parent":"'$CTX_AGENT_NAME'","project":"'$PROJECT_DIR'"}'
+```
 
 ---
 
@@ -202,12 +214,13 @@ If you do not know the answer, make a reasonable decision and note it. Do not bl
 
 ### Handling Stuck States
 
-> ⚠️ **Real-time intervention pending** — Direct session injection (equivalent to tmux send-keys) is not yet implemented in the Node.js system. See grandamenium/cortextos#37.
+If the worker appears stuck (no bus messages, no new git commits > 15 minutes):
 
-For now, if the worker appears stuck (no bus messages, no new git commits > 15 minutes):
-- Send a bus message nudging it: `cortextos bus send-message <worker-name> normal 'Continue with the M2C1 workflow. What phase are you on?'`
-- Check git for any recent commits
-- If bus message is not acknowledged after 5 minutes, the session may need manual restart
+1. Send a bus message: `cortextos bus send-message <worker-name> normal 'Continue with the M2C1 workflow. What phase are you on?'`
+2. Check git: `cd $PROJECT_DIR && git log --oneline | head -5`
+3. Inject directly into the PTY if still unresponsive: `cortextos inject-worker <worker-name> "Continue with the M2C1 workflow. What phase are you on?"`
+4. Check worker status: `cortextos list-workers`
+5. If halted: `cortextos terminate-worker <worker-name>` then re-spawn
 
 ---
 
@@ -276,8 +289,8 @@ cortextos bus send-message <worker-name> normal 'Source .env in your project dir
 
 Copy relevant cortextOS skills to the worker's project:
 ```bash
-# If the worker needs browser automation knowledge
-cp -r $CTX_FRAMEWORK_ROOT/templates/agent/.claude/skills/peekaboo-automation "$PROJECT_DIR/.claude/skills/"
+# If the worker needs browser automation knowledge, install via community catalog:
+cortextos bus install-community-item playwright-automation
 ```
 
 ---
@@ -364,28 +377,28 @@ cortextos bus send-message <worker-name> normal \
 ```bash
 # Log the milestone
 cortextos bus log-event milestone m2c1_complete info \
-  '{"project":"<name>","location":"<path>","tasks":<count>,"tests":<count>}'
+  --meta '{"project":"<name>","location":"<path>","tasks":<count>,"tests":<count>}'
 
 # Notify orchestrator
-cortextos bus send-message paul normal \
+cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal \
   'M2C1 build complete: <project>. Location: <path>. <summary>'
 
 # Clean up worker inbox
 rm -rf "$CTX_ROOT/inbox/<worker-name>"
 rm -rf "$CTX_ROOT/state/<worker-name>"
 
-# Terminate worker session (mechanism TBD — grandamenium/cortextos#37)
+cortextos terminate-worker "$WORKER_NAME"
 ```
 
 ### On Failure
 ```bash
 # Log what happened
 cortextos bus log-event action m2c1_failed info \
-  '{"project":"<name>","phase":"<where it failed>","reason":"<why>"}'
+  --meta '{"project":"<name>","phase":"<where it failed>","reason":"<why>"}'
 
 # Keep the directory for debugging
 # Report to orchestrator
-cortextos bus send-message paul normal \
+cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal \
   'M2C1 build FAILED: <project>. Failed at phase <N>. Reason: <why>. Directory preserved at <path>.'
 ```
 

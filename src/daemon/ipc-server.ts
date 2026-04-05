@@ -161,6 +161,48 @@ export class IPCServer {
           }
           break;
 
+        case 'spawn-worker': {
+          const d = request.data as { name?: string; dir?: string; prompt?: string; parent?: string; model?: string } | undefined;
+          if (!d?.name || !d?.dir || !d?.prompt) {
+            response = { success: false, error: 'spawn-worker requires: name, dir, prompt' };
+          } else {
+            this.agentManager.spawnWorker(d.name, d.dir, d.prompt, d.parent, d.model)
+              .catch(err => console.error(`[ipc] spawn-worker failed:`, err));
+            response = { success: true, data: `Spawning worker ${d.name}` };
+          }
+          break;
+        }
+
+        case 'terminate-worker': {
+          const workerName = request.data?.name as string | undefined;
+          if (!workerName) {
+            response = { success: false, error: 'terminate-worker requires: name' };
+          } else {
+            this.agentManager.terminateWorker(workerName)
+              .catch(err => console.error(`[ipc] terminate-worker failed:`, err));
+            response = { success: true, data: `Terminating worker ${workerName}` };
+          }
+          break;
+        }
+
+        case 'list-workers':
+          response = { success: true, data: this.agentManager.listWorkers() };
+          break;
+
+        case 'inject-worker': {
+          const injectName = request.data?.name as string | undefined;
+          const injectText = request.data?.text as string | undefined;
+          if (!injectName || !injectText) {
+            response = { success: false, error: 'inject-worker requires: name, text' };
+          } else {
+            const ok = this.agentManager.injectWorker(injectName, injectText);
+            response = ok
+              ? { success: true, data: `Injected into worker ${injectName}` }
+              : { success: false, error: `Worker ${injectName} not found or not running` };
+          }
+          break;
+        }
+
         default:
           response = { success: false, error: `Unknown command: ${request.type}` };
       }

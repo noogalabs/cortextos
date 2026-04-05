@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import type { AgentConfig, AgentStatus, CtxEnv, BusPaths } from '../types/index.js';
+import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
+import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -17,6 +18,7 @@ import { processMediaMessage } from '../telegram/media.js';
  */
 export class AgentManager {
   private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller }> = new Map();
+  private workers: Map<string, WorkerProcess> = new Map();
   private instanceId: string;
   private ctxRoot: string;
   private frameworkRoot: string;
@@ -328,6 +330,84 @@ export class AgentManager {
    */
   getAgentNames(): string[] {
     return [...this.agents.keys()];
+  }
+
+  // --- Worker management ---
+
+  /**
+   * Spawn an ephemeral worker session for a parallelized task.
+   */
+  async spawnWorker(name: string, dir: string, prompt: string, parent?: string, model?: string): Promise<void> {
+    if (this.workers.has(name)) {
+      throw new Error(`Worker "${name}" is already running`);
+    }
+    if (this.agents.has(name)) {
+      throw new Error(`"${name}" is already a registered agent name`);
+    }
+
+    const log = (msg: string) => console.log(`[worker:${name}] ${msg}`);
+    const worker = new WorkerProcess(name, dir, parent, log);
+
+    const env: CtxEnv = {
+      instanceId: this.instanceId,
+      ctxRoot: this.ctxRoot,
+      frameworkRoot: this.frameworkRoot,
+      agentName: name,
+      agentDir: dir,
+      org: this.org,
+      projectRoot: this.frameworkRoot,
+    };
+
+    const config = model ? { model } : {};
+
+    this.workers.set(name, worker);
+
+    worker.onDone((workerName) => {
+      // Auto-remove finished workers after a short delay so list-workers
+      // can still show the final status briefly before cleanup
+      setTimeout(() => {
+        if (this.workers.get(workerName)?.isFinished()) {
+          this.workers.delete(workerName);
+        }
+      }, 30_000); // keep for 30s after exit
+    });
+
+    await worker.spawn({ ...env, ...(model ? {} : {}) }, prompt);
+  }
+
+  /**
+   * Terminate a running worker session.
+   */
+  async terminateWorker(name: string): Promise<void> {
+    const worker = this.workers.get(name);
+    if (!worker) {
+      throw new Error(`Worker "${name}" not found`);
+    }
+    await worker.terminate();
+    this.workers.delete(name);
+  }
+
+  /**
+   * Inject text into a running worker's PTY (nudge / stuck-state recovery).
+   */
+  injectWorker(name: string, text: string): boolean {
+    const worker = this.workers.get(name);
+    if (!worker) return false;
+    return worker.inject(text);
+  }
+
+  /**
+   * Get status of all workers (running + recently completed).
+   */
+  listWorkers(): WorkerStatus[] {
+    return [...this.workers.values()].map(w => w.getStatus());
+  }
+
+  /**
+   * Get status of a specific worker.
+   */
+  getWorkerStatus(name: string): WorkerStatus | null {
+    return this.workers.get(name)?.getStatus() ?? null;
   }
 
   /**
