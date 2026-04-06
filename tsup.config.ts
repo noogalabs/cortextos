@@ -10,6 +10,7 @@ export default defineConfig({
     'hooks/hook-crash-alert': 'src/hooks/hook-crash-alert.ts',
     'hooks/hook-compact-telegram': 'src/hooks/hook-compact-telegram.ts',
     'hooks/hook-extract-facts': 'src/hooks/hook-extract-facts.ts',
+    'hooks/hook-idle-flag': 'src/hooks/hook-idle-flag.ts',
   },
   format: ['cjs'],
   target: 'node20',
