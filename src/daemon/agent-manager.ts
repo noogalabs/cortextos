@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
-import { join } from 'path';
-import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus } from '../types/index.js';
+import { join, relative } from 'path';
+import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
@@ -332,17 +332,24 @@ export class AgentManager {
               return;
             }
 
-            log(`[DEBUG] media.type=${media.type} image_path=${JSON.stringify(media.image_path)} file_path=${JSON.stringify(media.file_path)}`);
+            // BUG-046: Convert absolute paths to relative (from agent working dir).
+            // Claude Code strips absolute paths from pasted user input, so the
+            // agent never sees them. Relative paths survive injection.
+            const toRel = (p: string | undefined) => p ? relative(agentDir, p) : '';
+            const relImagePath = toRel(media.image_path);
+            const relFilePath = toRel(media.file_path);
+
+            log(`[DEBUG] media.type=${media.type} image_path=${JSON.stringify(relImagePath)} file_path=${JSON.stringify(relFilePath)}`);
             let formatted: string;
             if (media.type === 'photo') {
-              formatted = FastChecker.formatTelegramPhotoMessage(from, effectiveChatId, media.text, media.image_path ?? '');
+              formatted = FastChecker.formatTelegramPhotoMessage(from, effectiveChatId, media.text, relImagePath);
             } else if (media.type === 'document') {
-              formatted = FastChecker.formatTelegramDocumentMessage(from, effectiveChatId, media.text, media.file_path!, media.file_name!);
+              formatted = FastChecker.formatTelegramDocumentMessage(from, effectiveChatId, media.text, relFilePath, media.file_name!);
             } else if (media.type === 'voice' || media.type === 'audio') {
-              formatted = FastChecker.formatTelegramVoiceMessage(from, effectiveChatId, media.file_path!, media.duration);
+              formatted = FastChecker.formatTelegramVoiceMessage(from, effectiveChatId, relFilePath, media.duration);
             } else {
               // video or video_note
-              formatted = FastChecker.formatTelegramVideoMessage(from, effectiveChatId, media.text, media.file_path!, media.file_name || '', media.duration);
+              formatted = FastChecker.formatTelegramVideoMessage(from, effectiveChatId, media.text, relFilePath, media.file_name || '', media.duration);
             }
 
             if (checker.isDuplicate(formatted)) {
@@ -363,9 +370,8 @@ export class AgentManager {
         // Text message (non-media)
         const text = stripControlChars(msg.text || '');
         const lastSent = FastChecker.readLastSent(stateDir, effectiveChatId);
-        const replyToText = msg.reply_to_message?.text
-          ? stripControlChars(msg.reply_to_message.text)
-          : undefined;
+        // Build reply context from the replied-to message.
+        const replyToText = buildReplyContext(msg.reply_to_message);
 
         const formatted = FastChecker.formatTelegramTextMessage(
           from,
@@ -670,4 +676,29 @@ export class AgentManager {
     }
     return {}; // Default config
   }
+}
+
+/**
+ * Derive a human-readable reply context string from a Telegram replied-to message.
+ *
+ * Priority: text > caption > media type label.
+ * This is exported for unit testing; call sites use it via the message handler.
+ *
+ * Before this fix (BUG: reply context lost for media messages): only `.text` was
+ * checked, so replies to videos/photos/voice arrived as bare text with no
+ * indication of what was being replied to (e.g. "This one" with zero context).
+ */
+export function buildReplyContext(
+  replyMsg: TelegramMessage | undefined,
+): string | undefined {
+  if (!replyMsg) return undefined;
+  if (replyMsg.text) return stripControlChars(replyMsg.text);
+  if (replyMsg.caption) return stripControlChars(replyMsg.caption);
+  if (replyMsg.video) return '[video]';
+  if (replyMsg.video_note) return '[video note]';
+  if (replyMsg.photo) return '[photo]';
+  if (replyMsg.voice) return '[voice message]';
+  if (replyMsg.audio) return '[audio]';
+  if (replyMsg.document) return `[document: ${replyMsg.document.file_name ?? 'file'}]`;
+  return undefined;
 }
