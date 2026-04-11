@@ -17,7 +17,9 @@ vi.mock('child_process', async (importOriginal) => {
 
 // Import AFTER the mock is installed so the module binds to the mocked
 // function rather than the real one.
-const { ingestKnowledgeBaseChunked } = await import('../../../src/bus/knowledge-base.js');
+const { ingestKnowledgeBase, ingestKnowledgeBaseChunked } = await import(
+  '../../../src/bus/knowledge-base.js'
+);
 
 describe('ingestKnowledgeBaseChunked', () => {
   let frameworkRoot: string;
@@ -228,5 +230,45 @@ describe('ingestKnowledgeBaseChunked', () => {
     // Private scope maps to the agent-<name> collection.
     const argv = runFileSyncMock.mock.calls[0][1] as string[];
     expect(argv).toContain('agent-alice');
+  });
+
+  it('ingestKnowledgeBase and ingestKnowledgeBaseChunked reject identically for the same misconfig', () => {
+    // Genuine parity check: no manufactured mocks on the rejection path.
+    // Both functions hit their own real preflight code and must produce
+    // the same concrete Error for a --scope private missing agent config.
+    const paths = ['/fake/a.md'];
+
+    let nonChunkedErr: unknown;
+    try {
+      ingestKnowledgeBase(paths, {
+        ...baseOptions(),
+        scope: 'private',
+        // agent intentionally omitted
+      });
+    } catch (e) {
+      nonChunkedErr = e;
+    }
+
+    let chunkedErr: unknown;
+    try {
+      ingestKnowledgeBaseChunked(paths, {
+        ...baseOptions(),
+        scope: 'private',
+        // agent intentionally omitted
+        batchSize: 25,
+      });
+    } catch (e) {
+      chunkedErr = e;
+    }
+
+    expect(nonChunkedErr).toBeInstanceOf(Error);
+    expect(chunkedErr).toBeInstanceOf(Error);
+    // Same concrete error message from the same real preflight code path.
+    // The chunked variant uses the identical string as its sibling so users
+    // see consistent feedback regardless of which ingest command they run.
+    expect((nonChunkedErr as Error).message).toBe((chunkedErr as Error).message);
+    expect((nonChunkedErr as Error).message).toMatch(/--agent.*--scope private/);
+    // Neither variant invoked the subprocess — preflight caught both.
+    expect(runFileSyncMock).not.toHaveBeenCalled();
   });
 });

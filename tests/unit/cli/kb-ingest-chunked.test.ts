@@ -1,60 +1,82 @@
 /**
  * CLI-level tests for `cortextos bus kb-ingest-chunked`.
  *
- * Verifies that the CLI action handler:
- *   1. Exits non-zero when ingestKnowledgeBaseChunked returns a partial
- *      failure (matches the existing kb-ingest contract so callers can
- *      detect partial success via exit code and re-run for dedup recovery).
- *   2. Lets deterministic setup errors (e.g. scope private without agent)
- *      propagate as hard failures — they must NOT be swallowed by the
- *      CLI layer, mirroring the sibling `kb-ingest` command's behavior
- *      where ingestKnowledgeBase() throws straight through.
+ * Seam philosophy: these tests mock at the subprocess boundary
+ * (child_process.execFileSync) so the REAL ingestKnowledgeBase and
+ * ingestKnowledgeBaseChunked implementations run inside the CLI action.
+ * No mocks on the knowledge-base module itself.
+ *
+ * Scope: these tests cover CLI-specific behavior — how the commander
+ * action translates function results into exit codes. The parity +
+ * setup-error-propagation invariants are verified at the function
+ * level in tests/unit/bus/knowledge-base.test.ts, not here: the CLI
+ * action resolves `agent` from CTX_AGENT_NAME when --agent is omitted
+ * (fallback to basename(cwd)), so the `scope private without agent`
+ * misconfig is not reachable through the CLI wiring — env always fills
+ * in a default agent. Testing the setup-error path at the CLI level
+ * would require mocking resolveEnv, at which point it is no longer a
+ * genuine end-to-end test. Function-level coverage is the right seam.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { join } from 'path';
+import { tmpdir, homedir } from 'os';
 
-// Mock the knowledge-base module BEFORE busCommand imports it, so the
-// commander action wiring calls our stubs instead of the real subprocess
-// machinery. All four exports used by bus.ts are stubbed.
-const ingestKnowledgeBaseMock = vi.fn();
-const ingestKnowledgeBaseChunkedMock = vi.fn();
-const ensureKBDirsMock = vi.fn();
-const queryKnowledgeBaseMock = vi.fn();
+// Mock ONLY child_process.execFileSync so the real bus/knowledge-base
+// module runs end-to-end through the CLI action.
+const runFileSyncMock = vi.fn();
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return {
+    ...actual,
+    execFileSync: (...args: unknown[]) => runFileSyncMock(...args),
+  };
+});
 
-vi.mock('../../../src/bus/knowledge-base.js', () => ({
-  ingestKnowledgeBase: ingestKnowledgeBaseMock,
-  ingestKnowledgeBaseChunked: ingestKnowledgeBaseChunkedMock,
-  ensureKBDirs: ensureKBDirsMock,
-  queryKnowledgeBase: queryKnowledgeBaseMock,
-}));
-
-// Import AFTER the mock is installed.
+// Import AFTER the mock is installed so busCommand's transitive import
+// of child_process binds to the mocked function.
 const { busCommand } = await import('../../../src/cli/bus.js');
 
 describe('cortextos bus kb-ingest-chunked CLI', () => {
+  let frameworkRoot: string;
+  let testInstanceId: string;
+  let kbRoot: string;
+
   beforeEach(() => {
-    ingestKnowledgeBaseMock.mockReset();
-    ingestKnowledgeBaseChunkedMock.mockReset();
-    ensureKBDirsMock.mockReset();
-    queryKnowledgeBaseMock.mockReset();
-    // resolveEnv reads CTX_ORG; make sure an org is present so the
-    // command does not bail out on its "--org required" guard.
+    // Fake framework root with the venv bits getVenvPython() resolves to
+    // and a stub mmrag.py so the real ingest path can build its argv.
+    frameworkRoot = mkdtempSync(join(tmpdir(), 'cortextos-kb-cli-fw-'));
+    mkdirSync(join(frameworkRoot, 'knowledge-base', 'venv', 'bin'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'knowledge-base', 'scripts'), { recursive: true });
+    writeFileSync(join(frameworkRoot, 'knowledge-base', 'venv', 'bin', 'python3'), '');
+    writeFileSync(join(frameworkRoot, 'knowledge-base', 'scripts', 'mmrag.py'), '');
+
+    // Unique instance id per test run so the real mkdirSync in ensureKBDirs
+    // writes to a predictable tmpdir path we can clean up in afterEach.
+    // resolveEnv hardcodes ~/.cortextos/<instanceId> — we use a dedicated
+    // test-only instance id and rm it after.
+    testInstanceId = `test-kb-cli-${process.pid}-${Date.now()}`;
+    kbRoot = join(homedir(), '.cortextos', testInstanceId);
+
     process.env.CTX_ORG = 'acme';
+    process.env.CTX_INSTANCE_ID = testInstanceId;
+    process.env.CTX_FRAMEWORK_ROOT = frameworkRoot;
+
+    runFileSyncMock.mockReset();
+    // Default: subprocess returns empty string (success).
+    runFileSyncMock.mockReturnValue('');
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    rmSync(frameworkRoot, { recursive: true, force: true });
+    if (existsSync(kbRoot)) rmSync(kbRoot, { recursive: true, force: true });
     delete process.env.CTX_ORG;
+    delete process.env.CTX_INSTANCE_ID;
+    delete process.env.CTX_FRAMEWORK_ROOT;
   });
 
   it('exits 0 when all batches succeed', async () => {
-    ingestKnowledgeBaseChunkedMock.mockReturnValue({
-      totalFiles: 5,
-      totalBatches: 1,
-      successFiles: 5,
-      failedFiles: 0,
-      successBatches: 1,
-      failedBatches: [],
-    });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
       throw new Error(`__TEST_PROCESS_EXIT_${code}__`);
     }) as never);
@@ -66,102 +88,37 @@ describe('cortextos bus kb-ingest-chunked CLI', () => {
       '--scope', 'shared',
     ]);
 
-    // Clean runs must NOT call process.exit at all.
     expect(exitSpy).not.toHaveBeenCalled();
-    expect(ingestKnowledgeBaseChunkedMock).toHaveBeenCalledTimes(1);
+    // Real chunked function ran and invoked subprocess (one batch, 2 files).
+    expect(runFileSyncMock).toHaveBeenCalledTimes(1);
   });
 
-  it('exits non-zero when ingestKnowledgeBaseChunked reports a partial failure', async () => {
-    ingestKnowledgeBaseChunkedMock.mockReturnValue({
-      totalFiles: 50,
-      totalBatches: 2,
-      successFiles: 25,
-      failedFiles: 25,
-      successBatches: 1,
-      failedBatches: [2],
-    });
+  it('exits non-zero when one batch fails (real chunked loop, mocked subprocess)', async () => {
+    // 10 files at batch-size 5 → 2 batches. First succeeds, second throws.
+    runFileSyncMock
+      .mockReturnValueOnce('')
+      .mockImplementationOnce(() => {
+        throw new Error('spawnSync python3 ETIMEDOUT');
+      });
+
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
       throw new Error(`__TEST_PROCESS_EXIT_${code}__`);
     }) as never);
 
+    const paths = Array.from({ length: 10 }, (_, i) => `/fake/file-${i}.md`);
+
     await expect(
       busCommand.parseAsync([
         'node', 'cli', 'kb-ingest-chunked',
-        '/fake/a.md', '/fake/b.md',
+        ...paths,
         '--org', 'acme',
         '--scope', 'shared',
+        '--batch-size', '5',
       ]),
     ).rejects.toThrow(/__TEST_PROCESS_EXIT_1__/);
 
     expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it('lets deterministic setup errors propagate as hard failures (parity with kb-ingest)', async () => {
-    // Simulate the real preflight behavior: scope=private without agent
-    // throws from inside ingestKnowledgeBaseChunked. The CLI must NOT
-    // swallow it and must NOT convert it into a silent exit(1) — the
-    // error should surface through commander just like kb-ingest does.
-    ingestKnowledgeBaseChunkedMock.mockImplementation(() => {
-      throw new Error('--agent or CTX_AGENT_NAME required for --scope private');
-    });
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-      throw new Error(`__TEST_PROCESS_EXIT_${code}__`);
-    }) as never);
-
-    await expect(
-      busCommand.parseAsync([
-        'node', 'cli', 'kb-ingest-chunked',
-        '/fake/a.md',
-        '--org', 'acme',
-        '--scope', 'private',
-        // --agent intentionally omitted
-      ]),
-    ).rejects.toThrow(/--agent.*--scope private/);
-
-    // process.exit must NOT have been called — the thrown error propagated
-    // up through commander, which is the parity behavior we want.
-    expect(exitSpy).not.toHaveBeenCalled();
-  });
-
-  it('propagates the same setup error shape as the sibling kb-ingest command', async () => {
-    // Verify parity: kb-ingest also lets the setup error throw through.
-    // Both should reject the same way for the same misconfiguration.
-    ingestKnowledgeBaseMock.mockImplementation(() => {
-      throw new Error('--agent or CTX_AGENT_NAME required for --scope private');
-    });
-    ingestKnowledgeBaseChunkedMock.mockImplementation(() => {
-      throw new Error('--agent or CTX_AGENT_NAME required for --scope private');
-    });
-
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-      throw new Error(`__TEST_PROCESS_EXIT_${code}__`);
-    }) as never);
-
-    const siblingReject = busCommand
-      .parseAsync([
-        'node', 'cli', 'kb-ingest',
-        '/fake/a.md',
-        '--org', 'acme',
-        '--scope', 'private',
-      ])
-      .catch((e: Error) => e);
-
-    const chunkedReject = busCommand
-      .parseAsync([
-        'node', 'cli', 'kb-ingest-chunked',
-        '/fake/a.md',
-        '--org', 'acme',
-        '--scope', 'private',
-      ])
-      .catch((e: Error) => e);
-
-    const [siblingErr, chunkedErr] = await Promise.all([siblingReject, chunkedReject]);
-
-    expect(siblingErr).toBeInstanceOf(Error);
-    expect(chunkedErr).toBeInstanceOf(Error);
-    expect((siblingErr as Error).message).toMatch(/--agent.*--scope private/);
-    expect((chunkedErr as Error).message).toMatch(/--agent.*--scope private/);
-    // Neither command should have silently exited — errors must propagate.
-    expect(exitSpy).not.toHaveBeenCalled();
+    // Both batches were attempted despite the failure.
+    expect(runFileSyncMock).toHaveBeenCalledTimes(2);
   });
 });

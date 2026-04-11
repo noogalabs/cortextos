@@ -291,16 +291,21 @@ export function ingestKnowledgeBaseChunked(
     batchSize?: number;
   },
 ): ChunkedIngestResult {
-  // Preflight: validate deterministic configuration BEFORE entering the
-  // batch loop. The inner ingestKnowledgeBase() also performs these checks
-  // (and would throw on every batch otherwise), but catching those throws
-  // inside the loop would silently convert a single misconfiguration into
-  // a cascade of fake per-batch failures — hiding the real cause. Do it
-  // once up front and let setup errors propagate to the caller.
+  // Preflight: run ALL deterministic setup BEFORE entering the batch loop.
+  // The inner ingestKnowledgeBase() also performs these steps (config check
+  // AND mkdirSync), but catching those throws inside the loop would silently
+  // convert a single misconfiguration OR a real filesystem failure into a
+  // cascade of fake per-batch failures — hiding the real cause. Do the work
+  // once up front and let setup errors propagate to the caller. Covers:
+  //   1. scope/agent combo validation (matches ingestKnowledgeBase line 220)
+  //   2. KB chromadb directory creation (matches ingestKnowledgeBase line 229)
+  // The inner function keeps its own copies of these checks so direct callers
+  // still work; after the preflight they are idempotent no-ops.
   const scope = options.scope ?? 'shared';
   if (scope === 'private' && !options.agent) {
     throw new Error('--agent or CTX_AGENT_NAME required for --scope private');
   }
+  ensureKBDirs(options.instanceId, options.org);
 
   const batchSize = options.batchSize && options.batchSize > 0 ? options.batchSize : 25;
   const total = paths.length;
