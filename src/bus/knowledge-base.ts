@@ -240,12 +240,116 @@ export function ingestKnowledgeBase(
 
   execFileSync(pythonPath, args, {
     encoding: 'utf-8',
-    timeout: 120000,
+    // 5 min per batch — mmrag.py embeds files incrementally and a large batch
+    // (or a slow Gemini tail latency) can exceed the previous 120s budget.
+    // Callers with very large file sets should use ingestKnowledgeBaseChunked
+    // (see `cortextos bus kb-ingest-chunked`), which bounds each subprocess
+    // call to a configurable chunk size regardless of this ceiling.
+    timeout: 300000,
     env,
     stdio: 'inherit',
   });
 
   console.log(`\nIngest complete → collection: ${collection}`);
+}
+
+export interface ChunkedIngestResult {
+  totalFiles: number;
+  totalBatches: number;
+  successFiles: number;
+  failedFiles: number;
+  successBatches: number;
+  failedBatches: number[];
+}
+
+/**
+ * Chunked variant of {@link ingestKnowledgeBase} for large file sets.
+ *
+ * Splits `paths` into batches of `batchSize` (default 25) and runs
+ * {@link ingestKnowledgeBase} once per batch. On a per-batch failure it
+ * records the batch number, continues with the next batch, and returns a
+ * summary so the caller can decide what to retry.
+ *
+ * Important behavior note: `mmrag.py` commits embeddings to the Chroma
+ * store incrementally as it processes each file, not atomically at the end
+ * of a batch. If a batch is killed mid-run (e.g. by the execFileSync
+ * timeout), any files processed before the kill are already persisted.
+ * Re-running the same paths will dedup those files automatically, so the
+ * safe recovery pattern for a failed batch is: re-run `kb-ingest-chunked`
+ * with the same inputs (optionally a smaller `batchSize`) and let the
+ * content-hash dedup handle the already-committed portion.
+ */
+export function ingestKnowledgeBaseChunked(
+  paths: string[],
+  options: {
+    org: string;
+    agent?: string;
+    scope?: 'shared' | 'private';
+    force?: boolean;
+    frameworkRoot: string;
+    instanceId: string;
+    batchSize?: number;
+  },
+): ChunkedIngestResult {
+  const batchSize = options.batchSize && options.batchSize > 0 ? options.batchSize : 25;
+  const total = paths.length;
+  const totalBatches = total === 0 ? 0 : Math.ceil(total / batchSize);
+
+  const result: ChunkedIngestResult = {
+    totalFiles: total,
+    totalBatches,
+    successFiles: 0,
+    failedFiles: 0,
+    successBatches: 0,
+    failedBatches: [],
+  };
+
+  if (total === 0) {
+    console.log('Chunked ingest: no paths provided, nothing to do');
+    return result;
+  }
+
+  console.log(
+    `Chunked ingest: ${total} file(s) in ${totalBatches} batch(es) of ${batchSize}`,
+  );
+
+  for (let i = 0; i < total; i += batchSize) {
+    const batchNum = Math.floor(i / batchSize) + 1;
+    const chunk = paths.slice(i, i + batchSize);
+
+    console.log(`\n[batch ${batchNum}/${totalBatches}] ${chunk.length} file(s)`);
+
+    try {
+      ingestKnowledgeBase(chunk, {
+        org: options.org,
+        agent: options.agent,
+        scope: options.scope,
+        force: options.force,
+        frameworkRoot: options.frameworkRoot,
+        instanceId: options.instanceId,
+      });
+      result.successFiles += chunk.length;
+      result.successBatches += 1;
+    } catch (err) {
+      // Upper-bound the failed count at chunk.length — mmrag.py may have
+      // committed some files before the error, but that is opaque from here.
+      // Re-running will dedup the committed portion.
+      result.failedFiles += chunk.length;
+      result.failedBatches.push(batchNum);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`  BATCH ${batchNum} FAILED: ${msg}`);
+      console.error('  Continuing with next batch. Re-run this command to retry the failed batch — committed files will be deduped.');
+    }
+  }
+
+  console.log(
+    `\nChunked ingest done: ${result.successFiles}/${total} file(s) in successful batches, ${result.failedFiles} file(s) in failed batches`,
+  );
+  if (result.failedBatches.length > 0) {
+    console.log(`  Failed batches: ${result.failedBatches.join(', ')}`);
+  }
+
+  return result;
 }
 
 /**

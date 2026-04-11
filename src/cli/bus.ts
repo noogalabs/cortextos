@@ -13,7 +13,7 @@ import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunity
 import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { createApproval, updateApproval } from '../bus/approval.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
-import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
+import { queryKnowledgeBase, ingestKnowledgeBase, ingestKnowledgeBaseChunked, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
@@ -893,6 +893,42 @@ busCommand
       frameworkRoot: env.frameworkRoot || process.cwd(),
       instanceId: env.instanceId,
     });
+  });
+
+busCommand
+  .command('kb-ingest-chunked')
+  .description('Ingest large file sets into the knowledge base in bounded batches (default 25 files per batch)')
+  .argument('<paths...>', 'Files to ingest (chunked ingest does not expand directories — pass a resolved file list)')
+  .option('--org <org>', 'Organization name')
+  .option('--agent <name>', 'Agent name (for private scope)')
+  .option('--scope <s>', 'Scope: shared or private', 'shared')
+  .option('--force', 'Re-ingest even if already indexed')
+  .option('--batch-size <n>', 'Files per batch (default 25)', (v) => parseInt(v, 10), 25)
+  .action((paths: string[], opts: { org?: string; agent?: string; scope?: string; force?: boolean; batchSize?: number }) => {
+    const env = resolveEnv();
+    const org = opts.org || env.org;
+    if (!org) {
+      console.error('ERROR: --org or CTX_ORG required');
+      process.exit(1);
+    }
+
+    ensureKBDirs(env.instanceId, org);
+
+    const result = ingestKnowledgeBaseChunked(paths, {
+      org,
+      agent: opts.agent || env.agentName,
+      scope: (opts.scope as 'shared' | 'private') || 'shared',
+      force: opts.force,
+      frameworkRoot: env.frameworkRoot || process.cwd(),
+      instanceId: env.instanceId,
+      batchSize: opts.batchSize,
+    });
+
+    // Exit non-zero if any batch failed so callers can detect partial success
+    // (re-run to retry — committed files will dedup automatically).
+    if (result.failedBatches.length > 0) {
+      process.exit(1);
+    }
   });
 
 busCommand
