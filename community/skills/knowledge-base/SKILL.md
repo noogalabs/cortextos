@@ -48,6 +48,34 @@ Ingest after:
 
 ---
 
+## Large Ingests (50+ files) — use `kb-ingest-chunked`
+
+For big document sets (Notion exports, Obsidian vaults, multi-hundred-file migrations), use the chunked variant. It splits the input into bounded batches and continues past per-batch failures instead of dying on the first one.
+
+```bash
+# Default: 25 files per batch
+cortextos bus kb-ingest-chunked file1.md file2.md file3.md ... \
+  --org $CTX_ORG \
+  --scope shared
+
+# Tune the batch size if you hit timeouts on larger/heavier files
+cortextos bus kb-ingest-chunked *.md \
+  --org $CTX_ORG \
+  --scope shared \
+  --batch-size 15
+```
+
+Why chunking matters:
+- The underlying embedder (`mmrag.py`) is called via a single sync subprocess per batch with a 5-minute ceiling. One oversized batch can exceed that budget; chunking bounds each subprocess call to a predictable size.
+- Per-batch progress is logged so you can see which batch died if something goes wrong.
+- On a batch failure, the command continues with the next batch and exits non-zero with a list of failed batch numbers. A single outlier does not lose the whole run.
+
+**Recovery after a failed batch: re-run the same command.** `mmrag.py` commits embeddings incrementally as it processes each file — not atomically at the end of the batch — so any files processed before a failure are already persisted. Re-running lets content-hash dedup skip the already-committed files and retry only the missing ones. If batches keep timing out, lower `--batch-size`.
+
+Prefer the plain `kb-ingest` for a handful of files; switch to `kb-ingest-chunked` once you are past ~50 files or when the input is untrusted in size.
+
+---
+
 ## List Collections
 
 ```bash
