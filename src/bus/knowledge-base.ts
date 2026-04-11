@@ -291,6 +291,17 @@ export function ingestKnowledgeBaseChunked(
     batchSize?: number;
   },
 ): ChunkedIngestResult {
+  // Preflight: validate deterministic configuration BEFORE entering the
+  // batch loop. The inner ingestKnowledgeBase() also performs these checks
+  // (and would throw on every batch otherwise), but catching those throws
+  // inside the loop would silently convert a single misconfiguration into
+  // a cascade of fake per-batch failures — hiding the real cause. Do it
+  // once up front and let setup errors propagate to the caller.
+  const scope = options.scope ?? 'shared';
+  if (scope === 'private' && !options.agent) {
+    throw new Error('--agent or CTX_AGENT_NAME required for --scope private');
+  }
+
   const batchSize = options.batchSize && options.batchSize > 0 ? options.batchSize : 25;
   const total = paths.length;
   const totalBatches = total === 0 ? 0 : Math.ceil(total / batchSize);
@@ -323,7 +334,7 @@ export function ingestKnowledgeBaseChunked(
       ingestKnowledgeBase(chunk, {
         org: options.org,
         agent: options.agent,
-        scope: options.scope,
+        scope,
         force: options.force,
         frameworkRoot: options.frameworkRoot,
         instanceId: options.instanceId,
@@ -331,9 +342,11 @@ export function ingestKnowledgeBaseChunked(
       result.successFiles += chunk.length;
       result.successBatches += 1;
     } catch (err) {
-      // Upper-bound the failed count at chunk.length — mmrag.py may have
-      // committed some files before the error, but that is opaque from here.
-      // Re-running will dedup the committed portion.
+      // Only subprocess/execution failures reach this catch — deterministic
+      // config errors were caught by the preflight above and never enter
+      // the loop. Upper-bound the failed count at chunk.length; mmrag.py
+      // may have committed some files before the error, but that is opaque
+      // from here. Re-running will dedup the already-committed portion.
       result.failedFiles += chunk.length;
       result.failedBatches.push(batchNum);
       const msg = err instanceof Error ? err.message : String(err);

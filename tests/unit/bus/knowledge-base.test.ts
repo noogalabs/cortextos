@@ -192,4 +192,41 @@ describe('ingestKnowledgeBaseChunked', () => {
     expect(argv).toContain('shared-acme');
     expect(argv).toContain('--force');
   });
+
+  it('throws a setup error for scope private without agent (no batch loop)', () => {
+    const paths = Array.from({ length: 30 }, (_, i) => `/fake/file-${i}.md`);
+
+    // A deterministic config error must surface as a thrown exception from
+    // the preflight, NOT be swallowed and converted into N fake batch
+    // failures that count all files as failed.
+    expect(() =>
+      ingestKnowledgeBaseChunked(paths, {
+        ...baseOptions(),
+        scope: 'private',
+        // agent intentionally omitted
+        batchSize: 10,
+      }),
+    ).toThrow(/--agent.*required.*--scope private/);
+
+    // Subprocess must never be invoked when the preflight rejects.
+    expect(runFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('does not throw on scope private when agent is provided', () => {
+    const paths = Array.from({ length: 10 }, (_, i) => `/fake/file-${i}.md`);
+
+    const result = ingestKnowledgeBaseChunked(paths, {
+      ...baseOptions(),
+      scope: 'private',
+      agent: 'alice',
+      batchSize: 25,
+    });
+
+    expect(result.totalBatches).toBe(1);
+    expect(result.successFiles).toBe(10);
+    expect(runFileSyncMock).toHaveBeenCalledTimes(1);
+    // Private scope maps to the agent-<name> collection.
+    const argv = runFileSyncMock.mock.calls[0][1] as string[];
+    expect(argv).toContain('agent-alice');
+  });
 });
