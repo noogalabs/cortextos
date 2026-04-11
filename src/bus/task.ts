@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, renameSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, renameSync } from 'fs';
 import { join } from 'path';
 import type { Task, Priority, TaskStatus, BusPaths, StaleTaskReport, ArchiveReport } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
@@ -65,14 +65,85 @@ export function createTask(
 }
 
 /**
- * Update a task's status. Matches bash update-task.sh behavior.
+ * Find the on-disk path of a task file by ID, supporting cross-org lookup.
+ *
+ * cortextOS's standard dispatch pattern is an orchestrator in one org
+ * filing tasks that get assigned to specialists in other orgs. Before
+ * this helper existed, updateTask
+ * and completeTask hardcoded `join(paths.taskDir, taskId + '.json')` — which
+ * points at the CURRENT agent's org tasks dir — so the specialist could not
+ * drive the lifecycle of any task that was filed from a sibling org. Every
+ * cross-org assignment required a manual workaround dance where the filer
+ * ran update/complete on behalf of the assignee.
+ *
+ * This helper fixes that by using a two-tier lookup:
+ *
+ *   1. Fast path: check the caller's OWN org tasks dir first. Most tasks
+ *      live there and this check pays zero scan cost when it hits.
+ *   2. Fallback: scan every sibling org under `<ctxRoot>/orgs/*` for a
+ *      matching task file. Only runs when the fast path missed, so
+ *      same-org operations take no perf hit.
+ *
+ * Task IDs are generated as `task_<epoch_ms>_<3digit_random>` so real
+ * collisions are effectively impossible — but if the scan ever finds the
+ * same ID in multiple orgs (e.g. due to a bug in ID generation or a manual
+ * file copy), we warn loudly naming the task ID, the match count, AND the
+ * org names so an operator can investigate without having to grep the IDs
+ * themselves. We still return the first match and keep operations flowing;
+ * erroring on a theoretical collision would be worse UX than the warn.
+ *
+ * Exported because the helper is a useful primitive for any future caller
+ * that needs cross-org task lookup (e.g. a hypothetical `get-task` command,
+ * task-graph visualization, or cross-org list-tasks flag).
+ */
+export function findTaskFile(paths: BusPaths, taskId: string): string | null {
+  // Fast path: same-org lookup.
+  const sameOrg = join(paths.taskDir, `${taskId}.json`);
+  if (existsSync(sameOrg)) return sameOrg;
+
+  // Fallback: cross-org scan.
+  const orgsRoot = join(paths.ctxRoot, 'orgs');
+  const matches: Array<{ path: string; org: string }> = [];
+  try {
+    for (const entry of readdirSync(orgsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const candidate = join(orgsRoot, entry.name, 'tasks', `${taskId}.json`);
+      if (existsSync(candidate)) {
+        matches.push({ path: candidate, org: entry.name });
+      }
+    }
+  } catch {
+    return null; // orgs/ missing or unreadable
+  }
+
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    const orgList = matches.map((m) => m.org).join(', ');
+    console.warn(
+      `[task] Ambiguous task id ${taskId}: found in ${matches.length} orgs (${orgList}). ` +
+      `Operating on the first match in org '${matches[0].org}'. ` +
+      `Review task ID generation if this recurs.`,
+    );
+  }
+  return matches[0].path;
+}
+
+/**
+ * Update a task's status. Matches bash update-task.sh behavior, with the
+ * cross-org fallback from findTaskFile so an assignee in one org can drive
+ * the lifecycle of a task filed by an orchestrator in a sibling org.
  */
 export function updateTask(
   paths: BusPaths,
   taskId: string,
   status: TaskStatus,
 ): void {
-  const filePath = join(paths.taskDir, `${taskId}.json`);
+  const filePath = findTaskFile(paths, taskId);
+  if (!filePath) {
+    throw new Error(
+      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`,
+    );
+  }
   try {
     const content = readFileSync(filePath, 'utf-8');
     const task: Task = JSON.parse(content);
@@ -80,20 +151,27 @@ export function updateTask(
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     atomicWriteSync(filePath, JSON.stringify(task));
   } catch (err) {
-    throw new Error(`Task ${taskId} not found: ${err}`);
+    throw new Error(`Task ${taskId} update failed: ${err}`);
   }
 }
 
 /**
  * Complete a task. Sets status to done, completed_at, and optional result.
- * Matches bash complete-task.sh behavior.
+ * Matches bash complete-task.sh behavior, with the cross-org fallback from
+ * findTaskFile so an assignee in one org can complete a task filed by an
+ * orchestrator in a sibling org.
  */
 export function completeTask(
   paths: BusPaths,
   taskId: string,
   result?: string,
 ): void {
-  const filePath = join(paths.taskDir, `${taskId}.json`);
+  const filePath = findTaskFile(paths, taskId);
+  if (!filePath) {
+    throw new Error(
+      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`,
+    );
+  }
   try {
     const content = readFileSync(filePath, 'utf-8');
     const task: Task = JSON.parse(content);
@@ -105,7 +183,7 @@ export function completeTask(
     }
     atomicWriteSync(filePath, JSON.stringify(task));
   } catch (err) {
-    throw new Error(`Task ${taskId} not found: ${err}`);
+    throw new Error(`Task ${taskId} complete failed: ${err}`);
   }
 }
 
