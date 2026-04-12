@@ -8,6 +8,16 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import {
+  findGitRoot,
+  recordFailure,
+  markHealthy,
+  shouldRollback,
+  performRollback,
+  readRecoveryNote,
+  deleteRecoveryNote,
+  MIN_HEALTHY_SECONDS,
+} from './watchdog.js';
 
 type LogFn = (msg: string) => void;
 
@@ -51,6 +61,10 @@ export class AgentProcess {
   private dedup: MessageDedup;
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
+  // Watchdog: git repo root for crash-loop detection and rollback
+  private repoRoot: string | null = null;
+  // Watchdog: timer to mark the current commit healthy after MIN_HEALTHY_SECONDS
+  private healthTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -61,6 +75,13 @@ export class AgentProcess {
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
+
+    // Resolve the git root once at construction time. Used by the watchdog for
+    // commit-stability tracking and rollback. Null if not inside a git repo.
+    const agentDir = env.agentDir || env.workingDir;
+    if (agentDir) {
+      this.repoRoot = findGitRoot(agentDir);
+    }
   }
 
   /**
@@ -86,9 +107,14 @@ export class AgentProcess {
 
     // Determine start mode
     const mode = this.shouldContinue() ? 'continue' : 'fresh';
+    // Read the recovery note before building the prompt but do NOT delete it yet.
+    // The note is only deleted after pty.spawn() succeeds so that a spawn failure
+    // doesn't permanently swallow the recovery context (Bug-1 fix).
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    const recoveryNote = readRecoveryNote(stateDir);
     const prompt = mode === 'fresh'
-      ? this.buildStartupPrompt()
-      : this.buildContinuePrompt();
+      ? this.buildStartupPrompt(recoveryNote)
+      : this.buildContinuePrompt(recoveryNote);
 
     this.log(`Starting in ${mode} mode`);
     this.status = 'starting';
@@ -139,8 +165,15 @@ export class AgentProcess {
       this.sessionStart = new Date();
       this.log(`Running (pid: ${this.pty.getPid()})`);
 
+      // Delete the recovery note only after spawn succeeds so a spawn failure
+      // doesn't permanently lose the recovery context (Bug-1 fix).
+      if (recoveryNote) deleteRecoveryNote(stateDir);
+
       // Start session timer
       this.startSessionTimer();
+
+      // Start watchdog health timer — marks commit healthy after MIN_HEALTHY_SECONDS
+      this.startHealthTimer();
 
       this.notifyStatusChange();
     } catch (err) {
@@ -162,6 +195,7 @@ export class AgentProcess {
     this.stopRequested = true;
     this.log('Stopping...');
     this.clearSessionTimer();
+    this.clearHealthTimer();
 
     // Capture and null out pty BEFORE any awaits so handleExit() during graceful
     // shutdown doesn't race with us and trigger crash recovery or a double-kill.
@@ -301,6 +335,7 @@ export class AgentProcess {
   private handleExit(exitCode: number): void {
     this.pty = null;
     this.clearSessionTimer();
+    this.clearHealthTimer();
 
     // BUG-040 fix: check stopRequested instead of (only) stopping. The
     // stopping flag is cleared inside stop() after a 15s timeout window —
@@ -329,6 +364,21 @@ export class AgentProcess {
       this.status = 'halted';
       this.notifyStatusChange();
       return;
+    }
+
+    // Watchdog: record this crash against the current commit, then check
+    // whether the commit has been crashing repeatedly and needs a rollback.
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    recordFailure(stateDir, this.repoRoot);
+
+    if (this.repoRoot && shouldRollback(stateDir, this.repoRoot)) {
+      this.log(`Watchdog: commit unstable after ${this.crashCount} crashes — performing git rollback`);
+      const result = performRollback(stateDir, this.repoRoot);
+      if (result.success) {
+        this.log(`Watchdog: rolled back to ${result.rolledBackTo.slice(0, 12)}${result.stashRef ? `, stash: ${result.stashRef}` : ''}`);
+      } else {
+        this.log(`Watchdog: rollback failed — ${result.reason}`);
+      }
     }
 
     // Exponential backoff restart
@@ -377,7 +427,7 @@ export class AgentProcess {
     }
   }
 
-  private buildStartupPrompt(): string {
+  private buildStartupPrompt(recoveryNote: string | null): string {
     const onboardedPath = join(this.env.ctxRoot, 'state', this.name, '.onboarded');
     const onboardingPath = join(this.env.agentDir, 'ONBOARDING.md');
     const heartbeatPath = join(this.env.ctxRoot, 'state', this.name, 'heartbeat.json');
@@ -398,13 +448,23 @@ export class AgentProcess {
 
     const nowUtc = new Date().toISOString();
     const reminderBlock = this.buildReminderBlock();
-    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. Run CronList first to avoid duplicates.${reminderBlock} After setting up crons, send a Telegram message to the user saying you are back online.${onboardingAppend}`;
+    const recoveryBlock = recoveryNote
+      ? ` WATCHDOG RECOVERY: The daemon rolled back your git repository due to repeated crashes. Before doing anything else, read this recovery note and investigate the root cause:\n\n${recoveryNote}\n\nAfter reviewing, write your findings to memory and notify the operator.`
+      : '';
+    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. Run CronList first to avoid duplicates.${reminderBlock} After setting up crons, send a Telegram message to the user saying you are back online.${onboardingAppend}${recoveryBlock}`;
   }
 
-  private buildContinuePrompt(): string {
+  private buildContinuePrompt(recoveryNote: string | null): string {
     const nowUtc = new Date().toISOString();
     const reminderBlock = this.buildReminderBlock();
-    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. Restore your crons from config.json: recurring entries use /loop, once entries use CronCreate only if fire_at is still in the future (delete expired ones from config.json). Run CronList first — no duplicates.${reminderBlock} Check inbox. Resume normal operations. After restoring crons and checking inbox, send a Telegram message to the user saying you are back online.`;
+    // Bug-2 fix: inject recovery note in continue mode too.
+    // After a rollback, .jsonl files survive (they live outside the git repo),
+    // so shouldContinue() returns true and this path runs — without this the
+    // recovery note would sit on disk unused until a cold-start that may never come.
+    const recoveryBlock = recoveryNote
+      ? ` WATCHDOG RECOVERY: The daemon rolled back your git repository due to repeated crashes. Before doing anything else, read this recovery note and investigate the root cause:\n\n${recoveryNote}\n\nAfter reviewing, write your findings to memory and notify the operator.`
+      : '';
+    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. Restore your crons from config.json: recurring entries use /loop, once entries use CronCreate only if fire_at is still in the future (delete expired ones from config.json). Run CronList first — no duplicates.${reminderBlock} Check inbox. Resume normal operations. After restoring crons and checking inbox, send a Telegram message to the user saying you are back online.${recoveryBlock}`;
   }
 
   /**
@@ -438,6 +498,23 @@ export class AgentProcess {
     if (this.sessionTimer) {
       clearTimeout(this.sessionTimer);
       this.sessionTimer = null;
+    }
+  }
+
+  private startHealthTimer(): void {
+    this.healthTimer = setTimeout(() => {
+      const stateDir = join(this.env.ctxRoot, 'state', this.name);
+      markHealthy(stateDir, this.repoRoot);
+      if (this.repoRoot) {
+        this.log(`Watchdog: commit marked healthy after ${MIN_HEALTHY_SECONDS}s`);
+      }
+    }, MIN_HEALTHY_SECONDS * 1000);
+  }
+
+  private clearHealthTimer(): void {
+    if (this.healthTimer) {
+      clearTimeout(this.healthTimer);
+      this.healthTimer = null;
     }
   }
 
