@@ -1820,6 +1820,11 @@ busCommand
   .description('Stop hook: writes last_idle.flag timestamp so fast-checker knows agent finished its turn')
   .action(() => runHook('hook-idle-flag'));
 
+busCommand
+  .command('hook-loop-detector')
+  .description('PreToolUse hook: detects and blocks repeated tool loops (repetition and ping-pong patterns)')
+  .action(() => runHook('hook-loop-detector'));
+
 // --- OAuth token rotation commands ---
 
 busCommand
