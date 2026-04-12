@@ -43,7 +43,7 @@ const EXCLUDED_DIR_PREFIXES = [
   '.venv/',
 ];
 
-const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|sk-|ghp_|xoxb-|AKIA)/;
+const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|\bsk-|ghp_|xoxb-|AKIA)/;
 
 const SCRIPT_EXTENSIONS = new Set(['.sh', '.py', '.js']);
 
