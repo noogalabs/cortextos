@@ -11,6 +11,7 @@ export default defineConfig({
     'hooks/hook-compact-telegram': 'src/hooks/hook-compact-telegram.ts',
     'hooks/hook-extract-facts': 'src/hooks/hook-extract-facts.ts',
     'hooks/hook-idle-flag': 'src/hooks/hook-idle-flag.ts',
+    'hooks/hook-loop-detector': 'src/hooks/hook-loop-detector.ts',
   },
   format: ['cjs'],
   target: 'node20',
