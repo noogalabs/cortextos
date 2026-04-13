@@ -56,6 +56,7 @@ const sectionLabels: Record<string, string> = {
 };
 
 interface SidebarProps {
+  brandName?: string;
   pendingApprovals?: number;
   inProgressTasks?: number;
   onNavigate?: () => void;
@@ -63,6 +64,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
+  brandName,
   pendingApprovals = 0,
   inProgressTasks = 0,
   onNavigate,
@@ -99,7 +101,7 @@ export function Sidebar({
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground text-xs font-bold">
           cO
         </div>
-        <span className="text-sm font-semibold tracking-tight">cortextOS</span>
+        <span className="text-sm font-semibold tracking-tight">{brandName || 'cortextOS'}</span>
       </div>
 
       {/* Search trigger */}
