@@ -65,6 +65,10 @@ export class AgentProcess {
   private repoRoot: string | null = null;
   // Watchdog: timer to mark the current commit healthy after MIN_HEALTHY_SECONDS
   private healthTimer: ReturnType<typeof setTimeout> | null = null;
+  // Rate-limit recovery: pending restart timer. Stored so it can be cancelled
+  // if a second rate-limit exit fires before the first timer elapses (preventing
+  // two overlapping timers from racing and triggering a premature restart).
+  private rateLimitTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -107,11 +111,13 @@ export class AgentProcess {
 
     // Determine start mode
     const mode = this.shouldContinue() ? 'continue' : 'fresh';
-    // Read the recovery note before building the prompt but do NOT delete it yet.
-    // The note is only deleted after pty.spawn() succeeds so that a spawn failure
-    // doesn't permanently swallow the recovery context (Bug-1 fix).
+    // Read the recovery note and rate-limit marker before building the prompt
+    // but do NOT delete them yet. Both are deleted only after pty.spawn() succeeds
+    // so that a spawn failure doesn't permanently swallow the recovery context
+    // (mirrors the watchdog Bug-1 fix pattern).
     const stateDir = join(this.env.ctxRoot, 'state', this.name);
     const recoveryNote = readRecoveryNote(stateDir);
+    const hadRateLimit = this.hasRateLimitMarker(stateDir);
     const prompt = mode === 'fresh'
       ? this.buildStartupPrompt(recoveryNote)
       : this.buildContinuePrompt(recoveryNote);
@@ -165,9 +171,10 @@ export class AgentProcess {
       this.sessionStart = new Date();
       this.log(`Running (pid: ${this.pty.getPid()})`);
 
-      // Delete the recovery note only after spawn succeeds so a spawn failure
-      // doesn't permanently lose the recovery context (Bug-1 fix).
+      // Delete markers only after spawn succeeds so a spawn failure doesn't
+      // permanently lose the recovery context (Bug-1 fix pattern).
       if (recoveryNote) deleteRecoveryNote(stateDir);
+      if (hadRateLimit) this.deleteRateLimitMarker(stateDir);
 
       // Start session timer
       this.startSessionTimer();
@@ -340,6 +347,9 @@ export class AgentProcess {
   // --- Private methods ---
 
   private handleExit(exitCode: number): void {
+    // Capture the output buffer BEFORE nulling this.pty — needed for rate-limit
+    // detection below (hasRateLimitSignature reads from the buffer).
+    const outputBuffer = this.pty?.getOutputBuffer();
     this.pty = null;
     this.clearSessionTimer();
     this.clearHealthTimer();
@@ -361,6 +371,39 @@ export class AgentProcess {
       return;
     }
 
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+
+    // Rate-limit detection: if the PTY output contains Anthropic rate-limit or
+    // overload signatures, treat this as a planned pause rather than a crash.
+    // Rate-limit pauses do NOT count toward max_crashes_per_day and do NOT
+    // trigger the git watchdog — they are expected operational events tied to
+    // Anthropic's 5-hour rolling rate-limit window.
+    if (outputBuffer?.hasRateLimitSignature()) {
+      const pauseSeconds = this.config.rate_limit_pause_seconds ?? 18000;
+      this.log(`Rate-limit detected — pausing ${pauseSeconds}s before restart (not counted as crash)`);
+      this.status = 'rate-limited';
+      this.notifyStatusChange();
+      // Write a marker so the next boot prompt informs the agent it's recovering
+      // from a rate-limit pause rather than a normal crash.
+      try {
+        writeFileSync(join(stateDir, '.rate-limited'), pauseSeconds.toString(), 'utf-8');
+      } catch { /* ignore write errors */ }
+      // Cancel any prior rate-limit timer before scheduling a new one (Bug-1 fix).
+      // Without this, two sequential rate-limit exits leave two timers running;
+      // the first fires into the second pause window and triggers an early restart.
+      if (this.rateLimitTimer) {
+        clearTimeout(this.rateLimitTimer);
+        this.rateLimitTimer = null;
+      }
+      this.rateLimitTimer = setTimeout(() => {
+        this.rateLimitTimer = null;
+        if (this.status === 'rate-limited') {
+          this.start().catch(err => this.log(`Rate-limit restart failed: ${err}`));
+        }
+      }, pauseSeconds * 1000);
+      return;
+    }
+
     // Check crash limit
     this.crashCount++;
     const today = new Date().toISOString().split('T')[0];
@@ -375,7 +418,6 @@ export class AgentProcess {
 
     // Watchdog: record this crash against the current commit, then check
     // whether the commit has been crashing repeatedly and needs a rollback.
-    const stateDir = join(this.env.ctxRoot, 'state', this.name);
     recordFailure(stateDir, this.repoRoot);
 
     if (this.repoRoot && shouldRollback(stateDir, this.repoRoot)) {
@@ -399,6 +441,27 @@ export class AgentProcess {
         this.start().catch(err => this.log(`Restart failed: ${err}`));
       }
     }, backoff);
+  }
+
+  /**
+   * Check whether the rate-limit recovery marker exists (read-only).
+   * The caller is responsible for deleting it after a successful spawn via
+   * deleteRateLimitMarker(), so a failed spawn doesn't permanently swallow
+   * the recovery context (mirrors the watchdog readRecoveryNote pattern).
+   */
+  private hasRateLimitMarker(stateDir: string): boolean {
+    return existsSync(join(stateDir, '.rate-limited'));
+  }
+
+  /**
+   * Delete the rate-limit recovery marker.
+   * Call only after pty.spawn() succeeds.
+   */
+  private deleteRateLimitMarker(stateDir: string): void {
+    try {
+      const { unlinkSync } = require('fs');
+      unlinkSync(join(stateDir, '.rate-limited'));
+    } catch { /* ignore */ }
   }
 
   private shouldContinue(): boolean {
@@ -435,9 +498,10 @@ export class AgentProcess {
   }
 
   private buildStartupPrompt(recoveryNote: string | null): string {
-    const onboardedPath = join(this.env.ctxRoot, 'state', this.name, '.onboarded');
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    const onboardedPath = join(stateDir, '.onboarded');
     const onboardingPath = join(this.env.agentDir, 'ONBOARDING.md');
-    const heartbeatPath = join(this.env.ctxRoot, 'state', this.name, 'heartbeat.json');
+    const heartbeatPath = join(stateDir, 'heartbeat.json');
     let onboardingAppend = '';
 
     // If agent has a heartbeat but no .onboarded marker, they completed onboarding but
@@ -458,10 +522,14 @@ export class AgentProcess {
     const recoveryBlock = recoveryNote
       ? ` WATCHDOG RECOVERY: The daemon rolled back your git repository due to repeated crashes. Before doing anything else, read this recovery note and investigate the root cause:\n\n${recoveryNote}\n\nAfter reviewing, write your findings to memory and notify the operator.`
       : '';
-    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. Run CronList first to avoid duplicates.${reminderBlock} After setting up crons, send a Telegram message to the user saying you are back online.${onboardingAppend}${recoveryBlock}`;
+    const rateLimitBlock = this.hasRateLimitMarker(stateDir)
+      ? ' RATE-LIMIT RECOVERY: Your previous session was paused by the daemon due to an Anthropic rate-limit or overload response. You have been restarted after the configured recovery window. Resume normal operations — this was not a crash.'
+      : '';
+    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. Run CronList first to avoid duplicates.${reminderBlock} After setting up crons, send a Telegram message to the user saying you are back online.${onboardingAppend}${recoveryBlock}${rateLimitBlock}`;
   }
 
   private buildContinuePrompt(recoveryNote: string | null): string {
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
     const nowUtc = new Date().toISOString();
     const reminderBlock = this.buildReminderBlock();
     // Bug-2 fix: inject recovery note in continue mode too.
@@ -471,7 +539,10 @@ export class AgentProcess {
     const recoveryBlock = recoveryNote
       ? ` WATCHDOG RECOVERY: The daemon rolled back your git repository due to repeated crashes. Before doing anything else, read this recovery note and investigate the root cause:\n\n${recoveryNote}\n\nAfter reviewing, write your findings to memory and notify the operator.`
       : '';
-    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. Restore your crons from config.json: recurring entries use /loop, once entries use CronCreate only if fire_at is still in the future (delete expired ones from config.json). Run CronList first — no duplicates.${reminderBlock} Check inbox. Resume normal operations. After restoring crons and checking inbox, send a Telegram message to the user saying you are back online.${recoveryBlock}`;
+    const rateLimitBlock = this.hasRateLimitMarker(stateDir)
+      ? ' RATE-LIMIT RECOVERY: Your previous session was paused by the daemon due to an Anthropic rate-limit or overload response. You have been restarted after the configured recovery window. Resume normal operations — this was not a crash.'
+      : '';
+    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. Restore your crons from config.json: recurring entries use /loop, once entries use CronCreate only if fire_at is still in the future (delete expired ones from config.json). Run CronList first — no duplicates.${reminderBlock} Check inbox. Resume normal operations. After restoring crons and checking inbox, send a Telegram message to the user saying you are back online.${recoveryBlock}${rateLimitBlock}`;
   }
 
   /**
