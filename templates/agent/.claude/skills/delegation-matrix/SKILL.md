@@ -7,8 +7,10 @@ triggers: ["who owns", "delegation", "codex or agent", "should codex", "task sco
 
 # Delegation Matrix
 
+> **Note:** If Codex is not configured in your setup, the Agent handles implementation directly — skip the Codex column and "delegates" rows below.
+
 > Reference when scoping any task. Three roles, clear owner per work type.
-> Dividing line: **execution-heavy → Codex. Judgment-heavy → Agent.**
+> Dividing line: **execution-heavy → Codex (or Agent if Codex unavailable). Judgment-heavy → Agent.**
 
 ---
 
@@ -35,7 +37,7 @@ triggers: ["who owns", "delegation", "codex or agent", "should codex", "task sco
 
 ## Default Coding Workflow
 
-For any task touching **>~20 lines or multiple files**:
+### With Codex configured (recommended for tasks >~20 lines or multiple files):
 
 1. **Orchestrator** receives task from user, dispatches to Agent with context
 2. **Agent** designs the approach, writes a tight spec (what to build, file paths, expected behavior, edge cases)
@@ -43,7 +45,13 @@ For any task touching **>~20 lines or multiple files**:
 4. **Agent** reviews Codex output for correctness and architectural fit
 5. **Agent** opens the PR
 
-For **one-liners and config changes**: Agent writes directly, no Codex needed.
+### Without Codex:
+
+1. **Orchestrator** receives task, dispatches to Agent
+2. **Agent** designs and implements directly
+3. **Agent** opens the PR
+
+For **one-liners and config changes**: Agent writes directly in either case, no Codex needed.
 
 ---
 
@@ -55,7 +63,7 @@ For **one-liners and config changes**: Agent writes directly, no Codex needed.
 - The design is still open — spec isn't settled yet
 - Output will be shown directly to users or external systems
 
-**Always send to Codex when:**
+**Always send to Codex when** (if Codex is available):
 - The spec is unambiguous and complete
 - The task is mechanical repetition across many files
 - Test coverage for already-designed behavior
