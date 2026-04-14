@@ -1,23 +1,28 @@
 ---
 name: delegation-matrix
 effort: low
-description: "Orchestrator/agent/Codex delegation matrix. Reference this when scoping a task to determine who owns what. Dividing line: execution-heavy work goes to Codex, judgment-heavy work stays with the agent."
-triggers: ["who owns", "delegation", "codex or agent", "should codex", "task scoping", "who does this", "delegation matrix"]
+description: "Orchestrator/agent/Codex delegation matrix. Reference this when scoping a task to determine who owns what. Covers three Codex modes: reviewer-only (default), implementer+reviewer, and no Codex."
+triggers: ["who owns", "delegation", "codex or agent", "should codex", "task scoping", "who does this", "delegation matrix", "codex mode"]
 ---
 
 # Delegation Matrix
 
-> **Note:** If Codex is not configured in your setup, the Agent handles implementation directly — skip the Codex column and "delegates" rows below.
+> Reference when scoping any task. Dividing line: **execution-heavy → Codex (if configured as implementer). Judgment-heavy → Agent always.**
 
-> Reference when scoping any task. Three roles, clear owner per work type.
-> Dividing line: **execution-heavy → Codex (or Agent if Codex unavailable). Judgment-heavy → Agent.**
+Codex is a configurable option. Pick the mode that matches your setup:
+
+| Mode | Codex role | When to use |
+|------|-----------|-------------|
+| **Mode 1** (default) | Reviewer only | Out of the box — Codex reviews Agent output before PR |
+| **Mode 2** | Implementer + reviewer | Codex is set up and trusted for implementation |
+| **Mode 3** | Not used | No Codex in your stack — Agent handles everything |
 
 ---
 
-## Matrix
+## Ownership Matrix
 
-| Work type | Orchestrator | Agent | Codex |
-|-----------|-------------|-------|-------|
+| Work type | Orchestrator | Agent | Codex (Modes 1+2) |
+|-----------|-------------|-------|-------------------|
 | Requirement intake from user | **owns** | — | — |
 | Task decomposition + dispatch | **owns** | consults | — |
 | Briefings and status to user | **owns** | input | — |
@@ -25,49 +30,51 @@ triggers: ["who owns", "delegation", "codex or agent", "should codex", "task sco
 | Spec writing + acceptance criteria | — | **owns** | — |
 | Security and domain modeling | — | **owns** | — |
 | Ambiguous / judgment calls | routes | **owns** | — |
-| Review of Codex output | — | **owns** | — |
 | PR decisions (file, scope, merge) | — | **owns** | — |
-| First-pass implementation (clear spec) | — | delegates | **owns** |
-| Mechanical refactors and migrations | — | delegates | **owns** |
-| Repetitive multi-file edits | — | delegates | **owns** |
-| Test drafting and fixture setup | — | delegates | **owns** |
-| Applying decided fixes across files | — | delegates | **owns** |
+| First-pass implementation (clear spec) | — | **owns** (Modes 1+3) / delegates (Mode 2) | **owns** (Mode 2) |
+| Mechanical refactors and migrations | — | **owns** (Modes 1+3) / delegates (Mode 2) | **owns** (Mode 2) |
+| Repetitive multi-file edits | — | **owns** (Modes 1+3) / delegates (Mode 2) | **owns** (Mode 2) |
+| Test drafting and fixture setup | — | **owns** (Modes 1+3) / delegates (Mode 2) | **owns** (Mode 2) |
+| Code review before PR | — | **owns** (Mode 3) | **owns** (Modes 1+2) |
 
 ---
 
-## Default Coding Workflow
+## Default Coding Workflow by Mode
 
-### With Codex configured (recommended for tasks >~20 lines or multiple files):
+### Mode 1 — Codex as reviewer (default, out of box)
 
-1. **Orchestrator** receives task from user, dispatches to Agent with context
+1. **Orchestrator** receives task, dispatches to Agent
+2. **Agent** implements
+3. **Agent** passes output to Codex for review
+4. **Agent** applies Codex feedback, opens PR
+
+### Mode 2 — Codex as implementer + reviewer
+
+For tasks >~20 lines or touching multiple files:
+
+1. **Orchestrator** receives task, dispatches to Agent
 2. **Agent** designs the approach, writes a tight spec (what to build, file paths, expected behavior, edge cases)
 3. **Agent** calls Codex with the full spec — Codex implements
 4. **Agent** reviews Codex output for correctness and architectural fit
 5. **Agent** opens the PR
 
-### Without Codex:
+### Mode 3 — No Codex
 
 1. **Orchestrator** receives task, dispatches to Agent
 2. **Agent** designs and implements directly
 3. **Agent** opens the PR
 
-For **one-liners and config changes**: Agent writes directly in either case, no Codex needed.
+For **one-liners and config changes**: Agent writes directly in all modes.
 
 ---
 
-## When to Override
+## When to Keep Implementation with Agent (Modes 1+2)
 
-**Keep with Agent (don't send to Codex) when:**
-- The correct behavior is unclear and requires judgment
+Even in Mode 2, some work stays with the Agent:
+- Correct behavior is unclear and requires judgment
 - Security, auth, or trust-boundary code
-- The design is still open — spec isn't settled yet
-- Output will be shown directly to users or external systems
-
-**Always send to Codex when** (if Codex is available):
-- The spec is unambiguous and complete
-- The task is mechanical repetition across many files
-- Test coverage for already-designed behavior
-- Token cost of Agent implementation would be high
+- Design is still open — spec isn't settled yet
+- Output shown directly to users or external systems
 
 ---
 
