@@ -1,10 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('child_process', () => ({ exec: vi.fn() }));
+vi.mock('child_process', () => ({ exec: vi.fn(), execFile: vi.fn() }));
+vi.mock('../../../src/bus/message.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/bus/message.js')>();
+  return { ...actual, sendMessage: vi.fn() };
+});
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { execFile } from 'child_process';
 import { FastChecker } from '../../../src/daemon/fast-checker';
+import { sendMessage } from '../../../src/bus/message.js';
 import type { BusPaths, TelegramCallbackQuery } from '../../../src/types';
 
 // Minimal mock for AgentProcess
@@ -52,6 +58,7 @@ function createTestPaths(testDir: string): BusPaths {
     approvalDir: join(testDir, 'approvals'),
     analyticsDir: join(testDir, 'analytics'),
     heartbeatDir: join(testDir, 'heartbeats'),
+    deliverablesDir: join(testDir, 'deliverables'),
   };
   // Ensure directories exist
   for (const dir of Object.values(paths)) {
@@ -780,6 +787,298 @@ describe('FastChecker', () => {
       expect(result).toContain('local_file: /tmp/telegram-images/video_1743718313.mp4');
       expect(result).toContain('file_name: video_1743718313.mp4');
       expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
+    });
+  });
+
+  describe('checkUsageTier — usage rate guard', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    function createUsageChecker() {
+      const agent = createMockAgent();
+      const telegramApi = createMockTelegramApi();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi,
+        chatId: '999',
+      });
+      (checker as any).usageLastCheckedAt = 0;
+      return { checker, telegramApi };
+    }
+
+    it('TC-U1: transitions normal→high at 85%', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 85 }, seven_day: { utilization: 0 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'urgent',
+        expect.stringMatching(/85%|Tier 1/),
+      );
+      expect(telegramApi.sendMessage).toHaveBeenCalledTimes(1);
+      const persisted = JSON.parse(readFileSync(join(paths.stateDir, 'usage-tier.json'), 'utf-8'));
+      expect(persisted).toEqual(expect.objectContaining({ tier: 1 }));
+    });
+
+    it('TC-U2: transitions normal→critical at 95%', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 95 }, seven_day: { utilization: 0 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'urgent',
+        expect.stringMatching(/Critical|95%/),
+      );
+      expect(telegramApi.sendMessage).toHaveBeenCalledTimes(1);
+      const persisted = JSON.parse(readFileSync(join(paths.stateDir, 'usage-tier.json'), 'utf-8'));
+      expect(persisted).toEqual(expect.objectContaining({ tier: 2 }));
+    });
+
+    it('TC-U3: no alert when same tier (no transition)', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      (checker as any).usageTier = 1;
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 87 }, seven_day: { utilization: 0 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(telegramApi.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('TC-U4: recovery — high→normal fires alert', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      (checker as any).usageTier = 1;
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 10 }, seven_day: { utilization: 0 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'urgent',
+        expect.stringMatching(/recovered/i),
+      );
+      expect(telegramApi.sendMessage).toHaveBeenCalledTimes(1);
+      const persisted = JSON.parse(readFileSync(join(paths.stateDir, 'usage-tier.json'), 'utf-8'));
+      expect(persisted).toEqual(expect.objectContaining({ tier: 0 }));
+    });
+
+    it('TC-U5: state file persists tier across restarts (loadUsageTier)', () => {
+      writeFileSync(
+        join(paths.stateDir, 'usage-tier.json'),
+        JSON.stringify({ tier: 2, checkedAt: Date.now() }),
+      );
+
+      const checker = new FastChecker(createMockAgent(), paths, '/tmp/framework');
+
+      expect((checker as any).usageTier).toBe(2);
+    });
+
+    it('TC-U6: time gate — does not re-check within 15 minutes', async () => {
+      const { checker } = createUsageChecker();
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 85 }, seven_day: { utilization: 0 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+      await (checker as any).checkUsageTier();
+
+      expect(execFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('TC-U7: handles execFile error gracefully — no throw, no alert', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(new Error('network error'), '');
+        return {} as any;
+      });
+
+      await expect((checker as any).checkUsageTier()).resolves.toBeUndefined();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(telegramApi.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('TC-U8: uses max of five_hour and seven_day utilization', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 70 }, seven_day: { utilization: 90 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'urgent',
+        expect.stringMatching(/90%|Tier 1/),
+      );
+      expect(telegramApi.sendMessage).toHaveBeenCalledTimes(1);
+      const persisted = JSON.parse(readFileSync(join(paths.stateDir, 'usage-tier.json'), 'utf-8'));
+      expect(persisted).toEqual(expect.objectContaining({ tier: 1 }));
+    });
+  });
+
+  describe('checkGmailWatch — Gmail watch', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    function createGmailChecker(gmailWatch?: { query: string; intervalMs: number }) {
+      const checker = new FastChecker(createMockAgent(), paths, '/tmp/framework', gmailWatch ? { gmailWatch } : {});
+      (checker as any).gmailLastCheckedAt = 0;
+      return checker;
+    }
+
+    it('TC-G1: silent when gmailWatch not configured', async () => {
+      const checker = createGmailChecker();
+
+      await (checker as any).checkGmailWatch();
+
+      expect(execFile).not.toHaveBeenCalled();
+    });
+
+    it('TC-G2: detects unread messages and writes inbox entry', async () => {
+      const checker = createGmailChecker({ query: 'from:test.com is:unread', intervalMs: 900000 });
+      vi.mocked(execFile).mockImplementation((_cmd, args, callback) => {
+        if (args[3] === 'list') {
+          (callback as Function)(null, JSON.stringify({ messages: [{ id: 'msg1', threadId: 't1' }] }));
+        } else {
+          (callback as Function)(null, JSON.stringify({
+            id: 'msg1',
+            payload: {
+              headers: [
+                { name: 'Subject', value: 'Test Subject' },
+                { name: 'From', value: 'test@test.com' },
+              ],
+            },
+          }));
+        }
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'normal',
+        expect.stringMatching(/^=== GMAIL WATCH:/),
+      );
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'normal',
+        expect.stringContaining('Test Subject'),
+      );
+    });
+
+    it('TC-G3: silent when no messages match query', async () => {
+      const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({}));
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('TC-G4: silent when messages array is empty', async () => {
+      const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ messages: [] }));
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('TC-G5: handles gws auth error gracefully — no throw, no inbox write', async () => {
+      const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(new Error('auth error: token expired'), '');
+        return {} as any;
+      });
+
+      await expect((checker as any).checkGmailWatch()).resolves.toBeUndefined();
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('TC-G6: time gate — does not re-check before intervalMs elapses', async () => {
+      const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ messages: [] }));
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+      await (checker as any).checkGmailWatch();
+
+      expect(execFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('TC-G7: inbox message includes message count', async () => {
+      const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
+      let getCount = 0;
+      vi.mocked(execFile).mockImplementation((_cmd, args, callback) => {
+        if (args[3] === 'list') {
+          (callback as Function)(null, JSON.stringify({ messages: [{ id: 'msg1' }, { id: 'msg2' }, { id: 'msg3' }] }));
+        } else {
+          getCount += 1;
+          (callback as Function)(null, JSON.stringify({
+            id: `msg${getCount}`,
+            payload: {
+              headers: [
+                { name: 'Subject', value: `Subject ${getCount}` },
+                { name: 'From', value: `sender${getCount}@test.com` },
+              ],
+            },
+          }));
+        }
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'normal',
+        expect.stringMatching(/3.*(unread|message)/i),
+      );
     });
   });
 });
