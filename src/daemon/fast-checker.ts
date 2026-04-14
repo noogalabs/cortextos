@@ -4,7 +4,6 @@ import { join } from 'path';
 import { createHash } from 'crypto';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { checkInbox, ackInbox, sendMessage } from '../bus/message.js';
-import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
@@ -51,11 +50,6 @@ export class FastChecker {
   // Gmail watch state
   private gmailWatch?: { query: string; intervalMs: number };
   private gmailLastCheckedAt: number = 0;
-
-  // Daemon-native heartbeat gate (replaces 4h Claude cron)
-  private heartbeatLastAt: number = 0;
-  private readonly HEARTBEAT_GATE_MS = 4 * 60 * 60 * 1000; // 4h
-  private readonly FLEET_STALE_MS = 6 * 60 * 60 * 1000;    // 6h stale threshold
 
   // Usage rate-limit guard state
   private usageLastCheckedAt: number = 0;
@@ -240,9 +234,6 @@ export class FastChecker {
     // Watchdog: detect ctx-exhaustion survey + frozen stdout
     this.watchdogCheck();
 
-    // Daemon-native heartbeat: update own heartbeat + fleet stale check every 4h
-    this.checkHeartbeat();
-
     // Gmail watch: check on configured interval (default 15 min)
     await this.checkGmailWatch();
 
@@ -317,58 +308,6 @@ export class FastChecker {
         .catch(() => { /* non-critical */ });
     }
     this.agent.hardRestartSelf(reason).catch(e => this.log(`hardRestartSelf failed: ${e}`));
-  }
-
-  /**
-   * Daemon-native heartbeat gate — runs every 4 hours.
-   *
-   * Replaces the Claude heartbeat cron. Updates the agent's own heartbeat
-   * directly (no exec, no Claude wake). Then reads fleet heartbeats: if any
-   * peer agent is stale (no update in >6h), writes an inbox message so Claude
-   * investigates on its next wake. If fleet is healthy: silent (zero Claude cost).
-   *
-   * The existing 50-min watchdog setInterval handles the pure keepalive signal
-   * so the dashboard never shows this agent as dead. This 4h gate handles the
-   * fleet health audit that previously required a full Claude session.
-   */
-  private checkHeartbeat(): void {
-    const now = Date.now();
-    if (now - this.heartbeatLastAt < this.HEARTBEAT_GATE_MS) return;
-    this.heartbeatLastAt = now;
-
-    // 1. Update own heartbeat in-process (no exec needed)
-    try {
-      updateHeartbeat(this.paths, this.agent.name, 'online');
-    } catch (err) {
-      this.log(`Heartbeat self-update failed: ${err}`);
-    }
-
-    // 2. Fleet stale check — wake Claude only if action is needed
-    let staleAgents: string[] = [];
-    try {
-      const heartbeats = readAllHeartbeats(this.paths);
-      const cutoff = now - this.FLEET_STALE_MS;
-      staleAgents = heartbeats
-        .filter(hb => hb.agent !== this.agent.name && new Date(hb.last_heartbeat).getTime() < cutoff)
-        .map(hb => `${hb.agent} (last seen ${hb.last_heartbeat})`);
-    } catch (err) {
-      this.log(`Fleet heartbeat read failed: ${err}`);
-      return;
-    }
-
-    if (staleAgents.length === 0) return; // all healthy — no Claude wake
-
-    const msg = `=== FLEET HEARTBEAT ALERT ===\n` +
-      `${staleAgents.length} agent${staleAgents.length !== 1 ? 's' : ''} stale (>6h without update):\n\n` +
-      staleAgents.map(s => `- ${s}`).join('\n') +
-      `\n\nCheck status with: cortextos status`;
-
-    this.log(`Fleet stale: ${staleAgents.join(', ')} — writing inbox`);
-    try {
-      sendMessage(this.paths, 'fast-checker', this.agent.name, 'normal', msg);
-    } catch (err) {
-      this.log(`Fleet alert inbox write failed: ${err}`);
-    }
   }
 
   /**
