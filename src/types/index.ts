@@ -181,6 +181,17 @@ export interface AgentConfig {
    * continuity, and exit handling.
    */
   runtime?: 'claude-code' | 'hermes';
+  /**
+   * Slack handles whose messages the agent treats as instructions
+   * (vs passive data). Must match TeamMember.slack_handle values.
+   */
+  trusted_slack_users?: string[];
+
+  /**
+   * Maps semantic function names to Slack channel IDs for outbound routing.
+   * Example: { "maintenance": "C1234567890", "leasing": "C0987654321" }
+   */
+  slack_channels?: Record<string, string>;
 }
 
 export interface CronEntry {
@@ -442,4 +453,25 @@ export interface AgentStatus {
   sessionStart?: string;
   crashCount?: number;
   model?: string;
+}
+
+// Slack Team Member Types
+
+export type TrustLevel = 'owner' | 'manager' | 'member';
+
+export const VALID_TRUST_LEVELS: TrustLevel[] = ['owner', 'manager', 'member'];
+
+/**
+ * A human team member connected via Slack.
+ * Stored in org config or agent config under `team_members`.
+ */
+export interface TeamMember {
+  /** Display name (e.g. "Brittany Hunter") */
+  name: string;
+  /** Job role or title (e.g. "Operations Manager") */
+  role: string;
+  /** Slack handle without @ (e.g. "brittany.hunter") */
+  slack_handle: string;
+  /** Trust level — determines how the agent treats messages from this person */
+  trust_level: TrustLevel;
 }
