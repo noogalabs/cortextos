@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('child_process', () => ({ exec: vi.fn() }));
+vi.mock('child_process', () => ({ exec: vi.fn(), execFile: vi.fn() }));
+vi.mock('../../../src/bus/message.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/bus/message.js')>();
+  return { ...actual, sendMessage: vi.fn() };
+});
+
+import { execFile } from 'child_process';
+import { sendMessage } from '../../../src/bus/message.js';
+
+
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -782,4 +791,144 @@ describe('FastChecker', () => {
       expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
   });
+
+    describe('checkGmailWatch — Gmail watch', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    function createGmailChecker(gmailWatch?: { query: string; intervalMs: number }) {
+      const checker = new FastChecker(createMockAgent(), paths, '/tmp/framework', gmailWatch ? { gmailWatch } : {});
+      (checker as any).gmailLastCheckedAt = 0;
+      return checker;
+    }
+
+    it('TC-G1: silent when gmailWatch not configured', async () => {
+      const checker = createGmailChecker();
+
+      await (checker as any).checkGmailWatch();
+
+      expect(execFile).not.toHaveBeenCalled();
+    });
+
+    it('TC-G2: detects unread messages and writes inbox entry', async () => {
+      const checker = createGmailChecker({ query: 'from:test.com is:unread', intervalMs: 900000 });
+      vi.mocked(execFile).mockImplementation((_cmd, args, callback) => {
+        if (args[3] === 'list') {
+          (callback as Function)(null, JSON.stringify({ messages: [{ id: 'msg1', threadId: 't1' }] }));
+        } else {
+          (callback as Function)(null, JSON.stringify({
+            id: 'msg1',
+            payload: {
+              headers: [
+                { name: 'Subject', value: 'Test Subject' },
+                { name: 'From', value: 'test@test.com' },
+              ],
+            },
+          }));
+        }
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'normal',
+        expect.stringMatching(/^=== GMAIL WATCH:/),
+      );
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'normal',
+        expect.stringContaining('Test Subject'),
+      );
+    });
+
+    it('TC-G3: silent when no messages match query', async () => {
+      const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({}));
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('TC-G4: silent when messages array is empty', async () => {
+      const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ messages: [] }));
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('TC-G5: handles gws auth error gracefully — no throw, no inbox write', async () => {
+      const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(new Error('auth error: token expired'), '');
+        return {} as any;
+      });
+
+      await expect((checker as any).checkGmailWatch()).resolves.toBeUndefined();
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('TC-G6: time gate — does not re-check before intervalMs elapses', async () => {
+      const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ messages: [] }));
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+      await (checker as any).checkGmailWatch();
+
+      expect(execFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('TC-G7: inbox message includes message count', async () => {
+      const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
+      let getCount = 0;
+      vi.mocked(execFile).mockImplementation((_cmd, args, callback) => {
+        if (args[3] === 'list') {
+          (callback as Function)(null, JSON.stringify({ messages: [{ id: 'msg1' }, { id: 'msg2' }, { id: 'msg3' }] }));
+        } else {
+          getCount += 1;
+          (callback as Function)(null, JSON.stringify({
+            id: `msg${getCount}`,
+            payload: {
+              headers: [
+                { name: 'Subject', value: `Subject ${getCount}` },
+                { name: 'From', value: `sender${getCount}@test.com` },
+              ],
+            },
+          }));
+        }
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'normal',
+        expect.stringMatching(/3.*(unread|message)/i),
+      );
+    });
+  });
+
 });
