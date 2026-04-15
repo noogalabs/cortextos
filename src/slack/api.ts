@@ -8,6 +8,8 @@ export interface SlackMessage {
   username?: string;
   text: string;
   type: string;
+  subtype?: string;
+  bot_id?: string;
 }
 
 export class SlackAPI {

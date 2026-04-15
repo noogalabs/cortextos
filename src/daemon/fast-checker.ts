@@ -430,6 +430,8 @@ export class FastChecker {
       return;
     }
 
+    // Filter out bot's own messages to prevent self-wake loops
+    messages = messages.filter(m => m.subtype !== 'bot_message');
     if (messages.length === 0) return;
 
     const newest = messages[messages.length - 1];
