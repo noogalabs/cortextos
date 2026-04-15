@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync } from 'fs';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
@@ -47,6 +47,11 @@ export class FastChecker {
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
 
+
+  // Gmail watch state
+  private gmailWatch?: { query: string; intervalMs: number };
+  private gmailLastCheckedAt: number = 0;
+
   constructor(
     agent: AgentProcess,
     paths: BusPaths,
@@ -65,6 +70,12 @@ export class FastChecker {
     // Initialize persistent dedup
     this.dedupFilePath = join(paths.stateDir, '.message-dedup-hashes');
     this.loadDedupHashes();
+
+    // Initialize Gmail watch
+    if (options.gmailWatch) {
+      this.gmailWatch = options.gmailWatch;
+    }
+
   }
 
   /**
@@ -911,6 +922,87 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       return true; // Can't read flag — assume still active
     }
   }
+  /**
+   * Poll Gmail for unread messages matching the configured query.
+   * Uses gws CLI with OAuth credentials from ~/.config/gws/.
+   * If unread messages are found: writes an inbox message so Claude wakes.
+   * Silent when nothing matches.
+   */
+  private async checkGmailWatch(): Promise<void> {
+    if (!this.gmailWatch) return;
+    const now = Date.now();
+    if (now - this.gmailLastCheckedAt < this.gmailWatch.intervalMs) return;
+    this.gmailLastCheckedAt = now;
+
+    let listOutput = '';
+    try {
+      listOutput = await new Promise<string>((resolve, reject) => {
+        execFile('gws', ['gmail', 'users', 'messages', 'list',
+          '--params', JSON.stringify({ userId: 'me', q: this.gmailWatch!.query }),
+          '--format', 'json',
+        ], (err, stdout) => {
+          if (err) { reject(err); return; }
+          resolve(stdout);
+        });
+      });
+    } catch (err) {
+      this.log(`Gmail watch list failed: ${err}`);
+      return;
+    }
+
+    let messageIds: string[] = [];
+    try {
+      const data = JSON.parse(listOutput);
+      messageIds = (data?.messages ?? []).map((m: { id: string }) => m.id).filter(Boolean);
+    } catch {
+      this.log('Gmail watch: could not parse list response');
+      return;
+    }
+
+    if (messageIds.length === 0) return;
+
+    const summaries: string[] = [];
+    for (const id of messageIds.slice(0, 20)) {
+      try {
+        const getOutput = await new Promise<string>((resolve, reject) => {
+          execFile('gws', ['gmail', 'users', 'messages', 'get',
+            '--params', JSON.stringify({ userId: 'me', id, format: 'metadata', metadataHeaders: ['Subject', 'From'] }),
+            '--format', 'json',
+          ], (err, stdout) => {
+            if (err) { reject(err); return; }
+            resolve(stdout);
+          });
+        });
+        const msg = JSON.parse(getOutput);
+        const headers: Array<{ name: string; value: string }> = msg?.payload?.headers ?? [];
+        const subject = headers.find(h => h.name === 'Subject')?.value ?? '(no subject)';
+        const from = headers.find(h => h.name === 'From')?.value ?? '(unknown)';
+        const snippet = msg?.snippet ?? '';
+        summaries.push(`ID: ${id}\n   Subject: ${subject}\n   From: ${from}\n   Snippet: ${snippet.slice(0, 200)}`);
+      } catch {
+        summaries.push(`ID: ${id} (could not fetch details)`);
+      }
+    }
+
+    const total = messageIds.length;
+    const shown = summaries.length;
+    const header = `=== GMAIL WATCH: ${total} unread message${total !== 1 ? 's' : ''} ===\n` +
+      `Query: ${this.gmailWatch.query}\n\n`;
+    const body = summaries.map((s, i) => `${i + 1}. ${s}`).join('\n\n');
+    const footer = total > shown ? `\n\n(${total - shown} more not shown)` : '';
+    const hint = `\n\nProcess: gws gmail users messages get --params '{"userId":"me","id":"<ID>","format":"full"}' --format json` +
+      `\nMark read: gws gmail users messages modify --params '{"userId":"me","id":"<ID>"}' --body '{"removeLabelIds":["UNREAD"]}' --format json`;
+
+    const inboxText = header + body + footer + hint;
+    this.log(`Gmail watch: ${total} unread message(s) — writing inbox`);
+
+    try {
+      sendMessage(this.paths, 'fast-checker', this.agent.name, 'normal', inboxText);
+    } catch (err) {
+      this.log(`Gmail watch inbox write failed: ${err}`);
+    }
+  }
+
 }
 
 function sleep(ms: number): Promise<void> {
