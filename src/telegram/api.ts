@@ -244,6 +244,7 @@ export class TelegramAPI {
       const response = await fetch(`${this.baseUrl}/sendPhoto`, {
         method: 'POST',
         body: formData,
+        signal: AbortSignal.timeout(60000),
       });
       const result = await response.json() as any;
       if (!result.ok) {
@@ -253,6 +254,9 @@ export class TelegramAPI {
     } catch (err) {
       if (err instanceof Error && err.message.startsWith('Telegram API error')) {
         throw err;
+      }
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new Error(`Telegram API request timed out after 60s: sendPhoto`);
       }
       throw new Error(`Telegram API request failed: ${err}`);
     }
@@ -291,6 +295,7 @@ export class TelegramAPI {
       const response = await fetch(`${this.baseUrl}/sendDocument`, {
         method: 'POST',
         body: formData,
+        signal: AbortSignal.timeout(60000),
       });
       const result = await response.json() as any;
       if (!result.ok) {
@@ -300,6 +305,9 @@ export class TelegramAPI {
     } catch (err) {
       if (err instanceof Error && err.message.startsWith('Telegram API error')) {
         throw err;
+      }
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new Error(`Telegram API request timed out after 60s: sendDocument`);
       }
       throw new Error(`Telegram API request failed: ${err}`);
     }
@@ -506,7 +514,7 @@ export class TelegramAPI {
    */
   async downloadFile(filePath: string): Promise<Buffer> {
     const url = `https://api.telegram.org/file/bot${this.getToken()}/${filePath}`;
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
     if (!response.ok) {
       throw new Error(`Failed to download file: ${response.status}`);
     }
@@ -530,6 +538,7 @@ export class TelegramAPI {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
+        signal: AbortSignal.timeout(15000),
       });
       const result = await response.json() as any;
       if (!result.ok) {
@@ -539,6 +548,12 @@ export class TelegramAPI {
     } catch (err) {
       if (err instanceof Error && err.message.startsWith('Telegram API error')) {
         throw err;
+      }
+      // AbortSignal.timeout surfaces as DOMException name=TimeoutError (or AbortError).
+      // Surface as a clean retryable error so the poller loop recovers next tick
+      // instead of silently hanging on a wedged TCP connection.
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new Error(`Telegram API request timed out after 15s: ${method}`);
       }
       throw new Error(`Telegram API request failed: ${err}`);
     }
