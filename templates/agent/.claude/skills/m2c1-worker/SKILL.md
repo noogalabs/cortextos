@@ -138,10 +138,34 @@ export CTX_ROOT="$HOME/.cortextos/default"
 
 When you have questions during Phase 3 (Discovery), send them via send-message. Do NOT use AskUserQuestion.
 
+## Planning Phase (REQUIRED before any file writes)
+
+Before writing any code or creating any project files:
+
+1. Read BRAINDUMP.md thoroughly
+2. Write PLAN.md in the project root. Include:
+   - Architecture overview (what you are building, how it fits together)
+   - File list (every file you plan to create or modify, with one-line purpose)
+   - Task breakdown (ordered list of implementation steps)
+   - Risks and open questions
+3. Send PLAN.md content to <your-agent-name>:
+   ```
+   PLAN_CONTENT=$(cat PLAN.md)
+   cortextos bus send-message <your-agent-name> normal "PLAN READY FOR REVIEW
+
+$PLAN_CONTENT"
+   ```
+4. Wait for approval. Check inbox every 60 seconds:
+   ```
+   cortextos bus check-inbox
+   ```
+   Do NOT write any source files until you receive a message containing `PLAN_APPROVED`.
+5. Once approved, read .claude/skills/m2c1/orchestration-workflow.md and begin implementation.
+
 ## Start
 1. Read BRAINDUMP.md
-2. Read .claude/skills/m2c1/orchestration-workflow.md
-3. Begin Phase 0, then Phase 1
+2. Execute the Planning Phase above
+3. After PLAN_APPROVED, begin Phase 0, then Phase 1
 4. Message <your-agent-name> when PRD is ready
 5. Continue autonomously through all phases
 ```
@@ -207,6 +231,30 @@ Base your answers on:
 - The org's goals and constraints (GOALS.md, knowledge.md)
 
 If you do not know the answer, make a reasonable decision and note it. Do not block the worker with "ask the user" unless it is truly a human-only decision.
+
+
+### Reviewing the Worker's Plan (REQUIRED before worker proceeds)
+
+The worker will send a `PLAN READY FOR REVIEW` message with the full PLAN.md content before writing any files. You must review it and respond.
+
+**Review checklist:**
+- Architecture makes sense for the requirements in BRAINDUMP.md
+- File list is complete — no obvious missing pieces
+- Task order is logical — dependencies resolved before dependents
+- No scope creep — worker isn't building more than asked
+- Open questions are addressed or explicitly deferred
+
+**To approve:**
+```bash
+cortextos bus send-message <worker-name> normal 'PLAN_APPROVED. Proceed with implementation.'
+```
+
+**To request changes:**
+```bash
+cortextos bus send-message <worker-name> normal 'PLAN_REJECTED. Revise: <specific feedback>. Resend when updated.'
+```
+
+The worker will not write any source files until it receives `PLAN_APPROVED`. Do not leave it waiting — review promptly.
 
 ### Handling Stuck States
 
