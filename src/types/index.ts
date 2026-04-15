@@ -209,6 +209,19 @@ export interface AgentConfig {
     /** Poll interval in milliseconds. Default: 60000 */
     interval_ms?: number;
   };
+  /**
+   * Slack handles whose messages the agent treats as instructions
+   * (vs passive data). Must match TeamMember.slack_handle values.
+   * Example: ["brittany.hunter", "david.hunter"]
+   */
+  trusted_slack_users?: string[];
+
+  /**
+   * Maps semantic function names to Slack channel IDs for outbound routing.
+   * Agents use this to post to the right channel without hardcoding IDs.
+   * Example: { "maintenance": "C1234567890", "leasing": "C0987654321" }
+   */
+  slack_channels?: Record<string, string>;
 }
 
 export interface CronEntry {
@@ -243,6 +256,11 @@ export interface OrgContext {
    *  save-output. The instruction is injected into the boot prompt
    *  dynamically — no agent markdown files are modified. */
   require_deliverables?: boolean;
+  /**
+   * Human team members accessible to agents in this org via Slack.
+   * Agents reference this to resolve slack_handles and trust levels.
+   */
+  team_members?: TeamMember[];
 }
 
 // Telegram Types
@@ -429,6 +447,25 @@ export interface AgentInfo {
   last_heartbeat: string | null;
   current_task: string | null;
   mode: string | null;
+}
+
+export type TrustLevel = 'owner' | 'manager' | 'member';
+
+export const VALID_TRUST_LEVELS: TrustLevel[] = ['owner', 'manager', 'member'];
+
+/**
+ * A human team member connected via Slack.
+ * Stored in org config or agent config under team_members.
+ */
+export interface TeamMember {
+  /** Display name (e.g. "Brittany Hunter") */
+  name: string;
+  /** Job role or title (e.g. "Operations Manager") */
+  role: string;
+  /** Slack handle without @ (e.g. "brittany.hunter") */
+  slack_handle: string;
+  /** Trust level — determines how the agent treats messages from this person */
+  trust_level: TrustLevel;
 }
 
 // Agent Status (returned by daemon)

@@ -1,5 +1,5 @@
-import type { Priority, EventCategory, EventSeverity, ApprovalCategory } from '../types/index.js';
-import { VALID_PRIORITIES } from '../types/index.js';
+import type { Priority, EventCategory, EventSeverity, ApprovalCategory, TrustLevel } from '../types/index.js';
+import { VALID_PRIORITIES, VALID_TRUST_LEVELS } from '../types/index.js';
 
 const AGENT_NAME_REGEX = /^[a-z0-9_-]+$/;
 
@@ -95,4 +95,12 @@ export function stripControlChars(input: string): string {
     .replace(/\x1b\][^\x07]*\x07/g, '')         // OSC sequences (e.g. \e]0;title\a)
     .replace(/\x1b[^[\]]/g, '')                  // Other ESC sequences
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''); // Control chars (keep \t=0x09, \n=0x0a, \r=0x0d)
+}
+
+export function validateTrustLevel(level: string): asserts level is TrustLevel {
+  if (!VALID_TRUST_LEVELS.includes(level as TrustLevel)) {
+    throw new Error(
+      `Invalid trust level '${level}'. Must be one of: ${VALID_TRUST_LEVELS.join(', ')}`
+    );
+  }
 }
