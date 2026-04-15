@@ -7,6 +7,7 @@ import { checkInbox, ackInbox, sendMessage } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
+import { SlackAPI, type SlackMessage } from '../slack/api.js';
 import { KEYS } from '../pty/inject.js';
 import { stripControlChars } from '../utils/validate.js';
 
@@ -51,6 +52,13 @@ export class FastChecker {
   private gmailWatch?: { query: string; intervalMs: number };
   private gmailLastCheckedAt: number = 0;
 
+  // Slack watch state
+  private slackWatch?: { channel: string; intervalMs: number };
+  private slackApi?: SlackAPI;
+  private slackLastTs: string = '0';
+  private slackLastCheckedAt: number = 0;
+  private readonly SLACK_DEFAULT_INTERVAL_MS = 60 * 1000;
+
   // Usage rate-limit guard state
   private usageLastCheckedAt: number = 0;
   private usageTier: 0 | 1 | 2 = 0; // 0=normal, 1=high(≥85%), 2=critical(≥95%)
@@ -78,6 +86,7 @@ export class FastChecker {
       chatId?: string;
       allowedUserId?: number;
       gmailWatch?: { query: string; intervalMs: number };
+      slackWatch?: { channel: string; intervalMs: number; token: string };
     } = {},
   ) {
     this.agent = agent;
@@ -96,6 +105,12 @@ export class FastChecker {
     // Initialize Gmail watch
     if (options.gmailWatch) {
       this.gmailWatch = options.gmailWatch;
+    }
+
+    if (options.slackWatch) {
+      this.slackWatch = { channel: options.slackWatch.channel, intervalMs: options.slackWatch.intervalMs };
+      this.slackApi = new SlackAPI(options.slackWatch.token);
+      this.slackLastTs = (Date.now() / 1000).toFixed(6);
     }
 
     // Initialize usage tier state
@@ -236,6 +251,9 @@ export class FastChecker {
 
     // Gmail watch: check on configured interval (default 15 min)
     await this.checkGmailWatch();
+
+    // Slack watch: check on configured interval (default 60 sec)
+    await this.checkSlackWatch();
 
     // Usage rate-limit guard: check every 15 min
     await this.checkUsageTier();
@@ -395,6 +413,50 @@ export class FastChecker {
       sendMessage(this.paths, 'fast-checker', this.agent.name, 'normal', inboxText);
     } catch (err) {
       this.log(`Gmail watch inbox write failed: ${err}`);
+    }
+  }
+
+  private async checkSlackWatch(): Promise<void> {
+    if (!this.slackWatch || !this.slackApi) return;
+    const now = Date.now();
+    if (now - this.slackLastCheckedAt < this.slackWatch.intervalMs) return;
+    this.slackLastCheckedAt = now;
+
+    let messages: SlackMessage[] = [];
+    try {
+      messages = await this.slackApi.getHistory(this.slackWatch.channel, this.slackLastTs);
+    } catch (err) {
+      this.log(`Slack watch poll failed: ${err}`);
+      return;
+    }
+
+    if (messages.length === 0) return;
+
+    const newest = messages[messages.length - 1];
+    this.slackLastTs = newest.ts;
+
+    const formatted: string[] = [];
+    for (const msg of messages.slice(0, 10)) {
+      let displayName = msg.username ?? msg.user ?? 'unknown';
+      if (msg.user && !msg.username && this.slackApi) {
+        displayName = await this.slackApi.getUserName(msg.user).catch(() => msg.user ?? 'unknown');
+      }
+      formatted.push(
+        `=== SLACK from ${displayName} (channel:${this.slackWatch.channel} ts:${msg.ts}) ===\n` +
+        `${msg.text}\n` +
+        `Reply using: cortextos bus send-slack ${this.slackWatch.channel} "<reply>"`,
+      );
+    }
+
+    const remaining = messages.length - formatted.length;
+    const trailer = remaining > 0 ? `\n\n(${remaining} more messages not shown)` : '';
+    const inboxText = formatted.join('\n\n---\n\n') + trailer;
+
+    this.log(`Slack watch: ${messages.length} new message(s) in ${this.slackWatch.channel} — writing inbox`);
+    try {
+      sendMessage(this.paths, 'fast-checker', this.agent.name, 'normal', inboxText);
+    } catch (err) {
+      this.log(`Slack watch inbox write failed: ${err}`);
     }
   }
 
