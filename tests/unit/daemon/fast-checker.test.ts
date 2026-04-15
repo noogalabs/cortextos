@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('child_process', () => ({ exec: vi.fn() }));
+vi.mock('child_process', () => ({ exec: vi.fn(), execFile: vi.fn() }));
+vi.mock('../../../src/bus/message.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/bus/message.js')>();
+  return { ...actual, sendMessage: vi.fn() };
+});
+
+import { execFile } from 'child_process';
+import { sendMessage } from '../../../src/bus/message.js';
+
+
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -782,4 +791,158 @@ describe('FastChecker', () => {
       expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
   });
+
+    describe('checkUsageTier — usage rate guard', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    function createUsageChecker() {
+      const agent = createMockAgent();
+      const telegramApi = createMockTelegramApi();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi,
+        chatId: '999',
+      });
+      (checker as any).usageLastCheckedAt = 0;
+      return { checker, telegramApi };
+    }
+
+    it('TC-U1: transitions normal→high at 85%', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 85 }, seven_day: { utilization: 0 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'urgent',
+        expect.stringMatching(/85%|Tier 1/),
+      );
+      expect(telegramApi.sendMessage).toHaveBeenCalledTimes(1);
+      const persisted = JSON.parse(readFileSync(join(paths.stateDir, 'usage-tier.json'), 'utf-8'));
+      expect(persisted).toEqual(expect.objectContaining({ tier: 1 }));
+    });
+
+    it('TC-U2: transitions normal→critical at 95%', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 95 }, seven_day: { utilization: 0 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'urgent',
+        expect.stringMatching(/Critical|95%/),
+      );
+      expect(telegramApi.sendMessage).toHaveBeenCalledTimes(1);
+      const persisted = JSON.parse(readFileSync(join(paths.stateDir, 'usage-tier.json'), 'utf-8'));
+      expect(persisted).toEqual(expect.objectContaining({ tier: 2 }));
+    });
+
+    it('TC-U3: no alert when same tier (no transition)', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      (checker as any).usageTier = 1;
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 87 }, seven_day: { utilization: 0 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(telegramApi.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('TC-U4: recovery — high→normal fires alert', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      (checker as any).usageTier = 1;
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 10 }, seven_day: { utilization: 0 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'urgent',
+        expect.stringMatching(/recovered/i),
+      );
+      expect(telegramApi.sendMessage).toHaveBeenCalledTimes(1);
+      const persisted = JSON.parse(readFileSync(join(paths.stateDir, 'usage-tier.json'), 'utf-8'));
+      expect(persisted).toEqual(expect.objectContaining({ tier: 0 }));
+    });
+
+    it('TC-U5: state file persists tier across restarts (loadUsageTier)', () => {
+      writeFileSync(
+        join(paths.stateDir, 'usage-tier.json'),
+        JSON.stringify({ tier: 2, checkedAt: Date.now() }),
+      );
+
+      const checker = new FastChecker(createMockAgent(), paths, '/tmp/framework');
+
+      expect((checker as any).usageTier).toBe(2);
+    });
+
+    it('TC-U6: time gate — does not re-check within 15 minutes', async () => {
+      const { checker } = createUsageChecker();
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 85 }, seven_day: { utilization: 0 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+      await (checker as any).checkUsageTier();
+
+      expect(execFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('TC-U7: handles execFile error gracefully — no throw, no alert', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(new Error('network error'), '');
+        return {} as any;
+      });
+
+      await expect((checker as any).checkUsageTier()).resolves.toBeUndefined();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(telegramApi.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('TC-U8: uses max of five_hour and seven_day utilization', async () => {
+      const { checker, telegramApi } = createUsageChecker();
+      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+        (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 70 }, seven_day: { utilization: 90 } }));
+        return {} as any;
+      });
+
+      await (checker as any).checkUsageTier();
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'test-agent',
+        'urgent',
+        expect.stringMatching(/90%|Tier 1/),
+      );
+      expect(telegramApi.sendMessage).toHaveBeenCalledTimes(1);
+      const persisted = JSON.parse(readFileSync(join(paths.stateDir, 'usage-tier.json'), 'utf-8'));
+      expect(persisted).toEqual(expect.objectContaining({ tier: 1 }));
+    });
+  });
+
 });
