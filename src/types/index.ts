@@ -150,6 +150,18 @@ export interface AgentConfig {
     never_ask: string[];
   };
   ecosystem?: EcosystemConfig;
+  /**
+   * Slack watch: when present, the fast-checker daemon polls a Slack channel
+   * every `interval_ms` (default 60 seconds) and writes an inbox message to
+   * wake Claude if new messages appear since the last check.
+   * Requires SLACK_BOT_TOKEN in the agent's .env.
+   */
+  slack_watch?: {
+    /** Slack channel ID to monitor (e.g. "C1234567890") */
+    channel: string;
+    /** Poll interval in milliseconds. Default: 60000 (60 seconds) */
+    interval_ms?: number;
+  };
 }
 
 export interface CronEntry {

@@ -238,6 +238,29 @@ export class AgentManager {
     }
 
     const agentProcess = new AgentProcess(name, env, config, log);
+
+    // Build slack_watch option if configured
+    let slackWatchOption: { channel: string; intervalMs: number; token: string } | undefined;
+    if (config.slack_watch?.channel) {
+      let slackToken = '';
+      const agentEnvPath = join(env.agentDir, '.env');
+      if (existsSync(agentEnvPath)) {
+        const envContent = readFileSync(agentEnvPath, 'utf-8');
+        const match = envContent.match(/^SLACK_BOT_TOKEN=(.+)$/m);
+        if (match?.[1]?.trim()) slackToken = match[1].trim();
+      }
+      if (!slackToken) slackToken = process.env.SLACK_BOT_TOKEN ?? '';
+      if (slackToken) {
+        slackWatchOption = {
+          channel: config.slack_watch.channel,
+          intervalMs: config.slack_watch.interval_ms ?? 60_000,
+          token: slackToken,
+        };
+      } else {
+        log(`Slack watch configured but SLACK_BOT_TOKEN not found in .env — skipping`);
+      }
+    }
+
     const checker = new FastChecker(agentProcess, paths, this.frameworkRoot, {
       log,
       telegramApi,
