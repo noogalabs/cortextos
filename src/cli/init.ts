@@ -67,6 +67,8 @@ export const initCommand = new Command('init')
         day_mode_end: '00:00',
         default_approval_categories: ['external-comms', 'financial', 'deployment', 'data-deletion'],
         communication_style: 'direct and casual',
+        brand_name: '',
+        brand_short_name: '',
       }, null, 2) + '\n', 'utf-8');
       console.log('  Created org context.json');
     } else {
@@ -79,6 +81,8 @@ export const initCommand = new Command('init')
         if (!ctx.day_mode_end) ctx.day_mode_end = '00:00';
         if (!ctx.default_approval_categories) ctx.default_approval_categories = ['external-comms', 'financial', 'deployment', 'data-deletion'];
         if (!ctx.communication_style) ctx.communication_style = 'direct and casual';
+        if (ctx.brand_name === undefined) ctx.brand_name = '';
+        if (ctx.brand_short_name === undefined) ctx.brand_short_name = '';
         writeFileSync(contextPath, JSON.stringify(ctx, null, 2) + '\n', 'utf-8');
       } catch { /* ignore */ }
     }

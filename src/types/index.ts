@@ -190,6 +190,12 @@ export interface OrgContext {
   default_approval_categories?: string[];
   communication_style?: string;
   dashboard_url?: string;
+  /** Display name shown on dashboard (title bar, login page, sidebar header).
+   *  If unset, falls back to `name` with smart-casing, then to "cortextOS". */
+  brand_name?: string;
+  /** Short brand name for compact UI slots (favicon caption, mobile nav).
+   *  If unset, falls back to `brand_name` or `name`. */
+  brand_short_name?: string;
   /** When true, agents are instructed at startup that every task submitted
    *  for review must have at least one file deliverable attached via
    *  save-output. The instruction is injected into the boot prompt

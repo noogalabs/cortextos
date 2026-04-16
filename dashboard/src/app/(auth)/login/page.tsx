@@ -19,6 +19,7 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showSplash, setShowSplash] = useState(false);
+  const [brand, setBrand] = useState({ name: 'cortextOS', shortName: 'cortextOS' });
 
   // Redirect to setup if no users exist
   useEffect(() => {
@@ -31,6 +32,19 @@ export default function LoginPage() {
       })
       .catch(() => {});
   }, [router]);
+
+  // Load the dashboard's default brand so login header/footer reflect it.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/brand')
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (cancelled || !data) return;
+        setBrand({ name: data.name, shortName: data.shortName });
+      })
+      .catch(() => { /* keep default */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // CSRF token strategy: fetch once, hold in a ref, inject on submit.
   // React state bound with value={csrfToken} and imperative writes via
@@ -132,7 +146,7 @@ export default function LoginPage() {
           <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground text-lg font-bold">
             cO
           </div>
-          <h1 className="text-xl font-semibold tracking-tight">cortextOS</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{brand.name}</h1>
           <p className="text-sm text-muted-foreground">
             Persistent AI Agent Orchestration
           </p>
@@ -183,7 +197,7 @@ export default function LoginPage() {
         </Card>
 
         <p className="text-center text-[11px] text-muted-foreground/60">
-          cortextOS v2
+          {brand.shortName} v2
         </p>
       </div>
     </div>

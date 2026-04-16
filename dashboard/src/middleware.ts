@@ -69,9 +69,13 @@ export async function middleware(request: NextRequest) {
 
   // Allow public paths
   // Security (H7): SSE endpoints require ?token=<jwt> auth — removed from public whitelist
+  // /api/brand is intentionally public — the login page fetches it pre-auth
+  // to render the configured brand name. Returns only non-sensitive display
+  // strings (brand name, short name). See getDefaultBrand() / getOrgBrand().
   if (
     pathname.startsWith('/login') ||
     pathname.startsWith('/api/auth') ||
+    pathname === '/api/brand' ||
     pathname.startsWith('/_next') ||
     pathname === '/favicon.ico'
   ) {
