@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TelegramAPI, formatValidateError } from '../../../src/telegram/api';
 
@@ -278,9 +277,8 @@ describe('formatValidateError', () => {
       detail: 'Too Many Requests: retry after 5',
     });
     expect(msg).toMatch(/retry/i);
-=======
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { TelegramAPI } from '../../../src/telegram/api';
+  });
+});
 
 describe('TelegramAPI fetch timeout', () => {
   const originalFetch = globalThis.fetch;
@@ -317,6 +315,5 @@ describe('TelegramAPI fetch timeout', () => {
     const api = new TelegramAPI('123:TEST');
     const res = await api.getUpdates(0, 1);
     expect(res.ok).toBe(true);
->>>>>>> upstream/main
   });
 });
