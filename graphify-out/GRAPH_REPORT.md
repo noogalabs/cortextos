@@ -1,12 +1,12 @@
 # Graph Report - .  (2026-04-15)
 
 ## Corpus Check
-- 350 files · ~571,842 words
+- 350 files · ~573,195 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1377 nodes · 2570 edges · 195 communities detected
-- Extraction: 66% EXTRACTED · 34% INFERRED · 0% AMBIGUOUS · INFERRED: 883 edges (avg confidence: 0.8)
+- 1374 nodes · 2558 edges · 196 communities detected
+- Extraction: 66% EXTRACTED · 34% INFERRED · 0% AMBIGUOUS · INFERRED: 882 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
@@ -205,6 +205,7 @@
 - [[_COMMUNITY_Community 192|Community 192]]
 - [[_COMMUNITY_Community 193|Community 193]]
 - [[_COMMUNITY_Community 194|Community 194]]
+- [[_COMMUNITY_Community 195|Community 195]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `existsSync()` - 136 edges
@@ -214,11 +215,13 @@
 5. `ensureDir()` - 35 edges
 6. `FastChecker` - 34 edges
 7. `POST()` - 31 edges
-8. `AgentProcess` - 30 edges
-9. `PATCH()` - 28 edges
+8. `PATCH()` - 28 edges
+9. `AgentProcess` - 28 edges
 10. `run()` - 23 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `writeTestApproval()` --calls--> `writeFileSync()`  [INFERRED]
+  /Users/davidhunter/cortextos/tests/unit/daemon/fast-checker.test.ts → /Users/davidhunter/cortextos/tests/unit/daemon/agent-process.test.ts
 - `existsSync()` --calls--> `findOrgTemplateDir()`  [INFERRED]
   /Users/davidhunter/cortextos/tests/unit/daemon/agent-process.test.ts → /Users/davidhunter/cortextos/src/cli/init.ts
 - `existsSync()` --calls--> `findTemplateRoot()`  [INFERRED]
@@ -227,86 +230,84 @@
   /Users/davidhunter/cortextos/tests/unit/daemon/agent-process.test.ts → /Users/davidhunter/cortextos/src/cli/dashboard.ts
 - `existsSync()` --calls--> `checkAuth()`  [INFERRED]
   /Users/davidhunter/cortextos/tests/unit/daemon/agent-process.test.ts → /Users/davidhunter/cortextos/src/cli/tunnel.ts
-- `existsSync()` --calls--> `findTemplateDir()`  [INFERRED]
-  /Users/davidhunter/cortextos/tests/unit/daemon/agent-process.test.ts → /Users/davidhunter/cortextos/src/cli/add-agent.ts
 
 ## Communities
 
 ### Community 0 - "Community 0"
 Cohesion: 0.03
-Nodes (76): discoverAgents(), getAgentDetail(), getAgentIdentity(), getAgentLogFiles(), getAgentMemoryFiles(), getAgentPaths(), readFileOrEmpty(), getApprovalById() (+68 more)
+Nodes (93): copyTemplateFiles(), appendFileSync(), existsSync(), readFileSync(), statSync(), writeFileSync(), buildAgentInfo(), listAgents() (+85 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.04
-Nodes (94): existsSync(), readFileSync(), buildAgentInfo(), listAgents(), getAgentEffectiveness(), getTaskThroughput(), queue(), browseCatalog() (+86 more)
+Cohesion: 0.03
+Nodes (60): getApprovalById(), getApprovalsByStatus(), getPendingApprovals(), getPendingCount(), getResolvedApprovals(), resolveApproval(), rowToApproval(), buildPairKey() (+52 more)
 
 ### Community 2 - "Community 2"
-Cohesion: 0.05
-Nodes (53): notifyAgent(), buildApprovalKeyboard(), createApproval(), listPendingApprovals(), postApprovalToActivityChannel(), updateApproval(), atomicWriteSync(), ensureDir() (+45 more)
+Cohesion: 0.04
+Nodes (34): createAgentsMd(), createMinimalAgent(), findTemplateDir(), formatValidateError(), parseSkillFrontmatter(), scanSkillsDir(), findDashboardDir(), parseEnvFile() (+26 more)
 
 ### Community 3 - "Community 3"
 Cohesion: 0.05
-Nodes (8): SlackAPI, TelegramAPI, FastChecker, sleep(), formatDate(), processMediaMessage(), sanitizeFilename(), stripControlChars()
+Nodes (21): AgentManager, buildReplyContext(), Daemon, IPCServer, getIpcPath(), resolvePaths(), assign_carlos(), assign_tech() (+13 more)
 
 ### Community 4 - "Community 4"
 Cohesion: 0.06
-Nodes (59): already_exists(), chunk_audio(), chunk_text(), chunk_video(), cmd_collections(), cmd_delete(), cmd_ingest(), cmd_list() (+51 more)
+Nodes (54): notifyAgent(), buildApprovalKeyboard(), createApproval(), listPendingApprovals(), postApprovalToActivityChannel(), updateApproval(), atomicWriteSync(), ensureDir() (+46 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.04
-Nodes (46): appendFileSync(), writeFileSync(), discoverProjectRoot(), getEnabledAgentsPath(), parseEnvFile(), readEnabledAgents(), setupConfigFile(), writeDisableMarker() (+38 more)
+Cohesion: 0.06
+Nodes (59): already_exists(), chunk_audio(), chunk_text(), chunk_video(), cmd_collections(), cmd_delete(), cmd_ingest(), cmd_list() (+51 more)
 
 ### Community 6 - "Community 6"
 Cohesion: 0.06
-Nodes (12): AgentManager, buildReplyContext(), Daemon, IPCServer, registerTelegramCommands(), AgentsPage(), getIpcPath(), resolvePaths() (+4 more)
+Nodes (47): getEventsByAgent(), getEventsByCategory(), getEventsToday(), getMilestones(), getRecentEvents(), buildKBEnv(), ensureKBDirs(), getVenvPython() (+39 more)
 
 ### Community 7 - "Community 7"
 Cohesion: 0.06
-Nodes (45): main(), main(), extractKeywords(), main(), blockCall(), countRepetitions(), detectPingPong(), hashArgs() (+37 more)
+Nodes (8): SlackAPI, TelegramAPI, FastChecker, sleep(), formatDate(), processMediaMessage(), sanitizeFilename(), stripControlChars()
 
 ### Community 8 - "Community 8"
-Cohesion: 0.05
-Nodes (25): copyTemplateFiles(), createAgentsMd(), createMinimalAgent(), findTemplateDir(), formatValidateError(), checkDeliverableRequirement(), parseSkillFrontmatter(), scanSkillsDir() (+17 more)
+Cohesion: 0.06
+Nodes (45): main(), main(), extractKeywords(), main(), blockCall(), countRepetitions(), detectPingPong(), hashArgs() (+37 more)
 
 ### Community 9 - "Community 9"
 Cohesion: 0.08
-Nodes (17): AgentProcess, sleep(), AgentPTY, resolveModel(), consumeRecoveryNote(), deleteRecoveryNote(), findGitRoot(), getCurrentCommit() (+9 more)
+Nodes (18): AgentProcess, sleep(), AgentPTY, acquireLock(), releaseLock(), consumeRecoveryNote(), deleteRecoveryNote(), findGitRoot() (+10 more)
 
 ### Community 10 - "Community 10"
 Cohesion: 0.07
 Nodes (27): addAllowedRoot(), computeValidRoots(), ensureConfigDir(), isSystemBlocklisted(), normalizePath(), readAllowedRoots(), removeAllowedRoot(), handleAdd() (+19 more)
 
 ### Community 11 - "Community 11"
-Cohesion: 0.1
-Nodes (25): statSync(), resolveApproval(), seedAdminUser(), getApprovalDir(), getBrandName(), getEventsDir(), getHeartbeatPath(), getTaskDir() (+17 more)
-
-### Community 12 - "Community 12"
-Cohesion: 0.12
-Nodes (29): getFrameworkRoot(), getGoalsPath(), getOrgs(), getEventsByAgent(), getEventsByCategory(), getEventsToday(), getMilestones(), getRecentEvents() (+21 more)
-
-### Community 13 - "Community 13"
 Cohesion: 0.07
 Nodes (5): MockTelegramServer, loadStripAnsi(), OutputBuffer, redactSecrets(), createApi()
 
+### Community 12 - "Community 12"
+Cohesion: 0.11
+Nodes (28): seedAdminUser(), scanForSecurityIssues(), buildPrBody(), createSkillPr(), findExistingPR(), run(), extractAgentFromStatePath(), extractOrgAndAgentFromEventPath() (+20 more)
+
+### Community 13 - "Community 13"
+Cohesion: 0.19
+Nodes (21): getFrameworkRoot(), getGoalsPath(), addGoal(), deleteGoal(), fetchGoalHistory(), fetchGoals(), getGoalHistory(), getGoals() (+13 more)
+
 ### Community 14 - "Community 14"
-Cohesion: 0.14
-Nodes (22): diff_melds(), emit(), evaluate_condition_rules(), fetch_open_melds(), hours_since(), iso_now(), load_store(), main() (+14 more)
+Cohesion: 0.22
+Nodes (16): discoverAgents(), getAgentDetail(), getAgentIdentity(), getAgentLogFiles(), getAgentMemoryFiles(), getAgentPaths(), readFileOrEmpty(), getHeartbeatPath() (+8 more)
 
 ### Community 15 - "Community 15"
 Cohesion: 0.29
 Nodes (17): accountsPath(), buildRotationReason(), checkUsageApi(), getActiveAccount(), loadAccounts(), loadCache(), oauthDir(), pct() (+9 more)
 
 ### Community 16 - "Community 16"
-Cohesion: 0.21
-Nodes (11): assign_carlos(), assign_tech(), get_comments(), add_cookies(), assign_vendor(), check_logged_in(), check_slayton_duplicates(), load_cookies() (+3 more)
+Cohesion: 0.24
+Nodes (15): diff_melds(), emit(), evaluate_condition_rules(), fetch_open_melds(), hours_since(), iso_now(), load_store(), main() (+7 more)
 
 ### Community 17 - "Community 17"
-Cohesion: 0.27
-Nodes (8): applyAttachment(), clearAttachment(), handleFileSelect(), handlePaste(), handleSend(), onVisChange(), start(), stop()
+Cohesion: 0.18
+Nodes (13): getAgentEffectiveness(), getTaskThroughput(), calculateCost(), getCostByModel(), getCostEntries(), getCurrentMonthCost(), getDailyCostByModel(), getDailyCosts() (+5 more)
 
 ### Community 18 - "Community 18"
-Cohesion: 0.35
-Nodes (9): parseGoalsMd(), parseIdentityMd(), parseMarkdown(), parseSoulMd(), serializeGoalsMd(), serializeIdentityMd(), serializeMarkdown(), serializeSoulMd() (+1 more)
+Cohesion: 0.27
+Nodes (8): applyAttachment(), clearAttachment(), handleFileSelect(), handlePaste(), handleSend(), onVisChange(), start(), stop()
 
 ### Community 19 - "Community 19"
 Cohesion: 0.2
@@ -329,12 +330,12 @@ Cohesion: 0.5
 Nodes (8): ackReminder(), createReminder(), getOverdueReminders(), listReminders(), pruneReminders(), readReminders(), remindersPath(), writeReminders()
 
 ### Community 24 - "Community 24"
-Cohesion: 0.25
-Nodes (0): 
+Cohesion: 0.36
+Nodes (5): createGmailChecker(), createMockAgent(), createMockTelegramApi(), createUsageChecker(), writeTestApproval()
 
 ### Community 25 - "Community 25"
-Cohesion: 0.43
-Nodes (7): computeHealth(), getAllHeartbeats(), getHealthStatus(), getHealthSummary(), getHeartbeats(), getStaleAgents(), isAgentHealthy()
+Cohesion: 0.25
+Nodes (0): 
 
 ### Community 26 - "Community 26"
 Cohesion: 0.29
@@ -1012,6 +1013,10 @@ Nodes (0):
 Cohesion: 1.0
 Nodes (0): 
 
+### Community 195 - "Community 195"
+Cohesion: 1.0
+Nodes (0): 
+
 ## Knowledge Gaps
 - **36 isolated node(s):** `Run pm-read-melds.py --all-open. Returns (melds, exit_code).`, `Return updated store after emitting change events.`, `Emit rule events for threshold-based escalations.`, `Paginate through all open melds, output one JSON per line.`, `Cheap health check before any real read.` (+31 more)
   These have ≤1 connection - possible missing edges or undocumented components.
@@ -1175,105 +1180,105 @@ Nodes (0):
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 140`** (1 nodes): `logging.test.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 141`** (1 nodes): `dashboard-auth.spec.ts`
+- **Thin community `Community 141`** (1 nodes): `api.test.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 142`** (1 nodes): `mock-claude.js`
+- **Thin community `Community 142`** (1 nodes): `dashboard-auth.spec.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 143`** (1 nodes): `lovable-deploy.js`
+- **Thin community `Community 143`** (1 nodes): `mock-claude.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 144`** (1 nodes): `check-sms-consent.js`
+- **Thin community `Community 144`** (1 nodes): `lovable-deploy.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 145`** (1 nodes): `next-env.d.ts`
+- **Thin community `Community 145`** (1 nodes): `check-sms-consent.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 146`** (1 nodes): `next.config.ts`
+- **Thin community `Community 146`** (1 nodes): `next-env.d.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 147`** (1 nodes): `route.ts`
+- **Thin community `Community 147`** (1 nodes): `next.config.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 148`** (1 nodes): `route.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 149`** (1 nodes): `layout.tsx`
+- **Thin community `Community 149`** (1 nodes): `route.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 150`** (1 nodes): `loading.tsx`
+- **Thin community `Community 150`** (1 nodes): `layout.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 151`** (1 nodes): `page.tsx`
+- **Thin community `Community 151`** (1 nodes): `loading.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 152`** (1 nodes): `loading.tsx`
+- **Thin community `Community 152`** (1 nodes): `page.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 153`** (1 nodes): `loading.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 154`** (1 nodes): `page.tsx`
+- **Thin community `Community 154`** (1 nodes): `loading.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 155`** (1 nodes): `page.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 156`** (1 nodes): `slider.tsx`
+- **Thin community `Community 156`** (1 nodes): `page.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 157`** (1 nodes): `appearance-tab.tsx`
+- **Thin community `Community 157`** (1 nodes): `slider.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 158`** (1 nodes): `kanban-board.tsx`
+- **Thin community `Community 158`** (1 nodes): `appearance-tab.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 159`** (1 nodes): `task-card.tsx`
+- **Thin community `Community 159`** (1 nodes): `kanban-board.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 160`** (1 nodes): `event-feed.tsx`
+- **Thin community `Community 160`** (1 nodes): `task-card.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 161`** (1 nodes): `topbar.tsx`
+- **Thin community `Community 161`** (1 nodes): `event-feed.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 162`** (1 nodes): `splash-screen.tsx`
+- **Thin community `Community 162`** (1 nodes): `topbar.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 163`** (1 nodes): `channel-list.tsx`
+- **Thin community `Community 163`** (1 nodes): `splash-screen.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 164`** (1 nodes): `area-chart.tsx`
+- **Thin community `Community 164`** (1 nodes): `channel-list.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 165`** (1 nodes): `bar-chart.tsx`
+- **Thin community `Community 165`** (1 nodes): `area-chart.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 166`** (1 nodes): `logs-tab.tsx`
+- **Thin community `Community 166`** (1 nodes): `bar-chart.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 167`** (1 nodes): `agent-card.tsx`
+- **Thin community `Community 167`** (1 nodes): `logs-tab.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 168`** (1 nodes): `agents-grid.tsx`
+- **Thin community `Community 168`** (1 nodes): `agent-card.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 169`** (1 nodes): `tasks-tab.tsx`
+- **Thin community `Community 169`** (1 nodes): `agents-grid.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 170`** (1 nodes): `health-dot.tsx`
+- **Thin community `Community 170`** (1 nodes): `tasks-tab.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 171`** (1 nodes): `index.ts`
+- **Thin community `Community 171`** (1 nodes): `health-dot.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 172`** (1 nodes): `skills-grid.tsx`
+- **Thin community `Community 172`** (1 nodes): `index.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 173`** (1 nodes): `approval-history-list.tsx`
+- **Thin community `Community 173`** (1 nodes): `skills-grid.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 174`** (1 nodes): `approval-card.tsx`
+- **Thin community `Community 174`** (1 nodes): `approval-history-list.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 175`** (1 nodes): `todays-progress.tsx`
+- **Thin community `Community 175`** (1 nodes): `approval-card.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 176`** (1 nodes): `system-health.tsx`
+- **Thin community `Community 176`** (1 nodes): `todays-progress.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 177`** (1 nodes): `live-activity.tsx`
+- **Thin community `Community 177`** (1 nodes): `system-health.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 178`** (1 nodes): `agent-status-grid.tsx`
+- **Thin community `Community 178`** (1 nodes): `live-activity.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 179`** (1 nodes): `action-required.tsx`
+- **Thin community `Community 179`** (1 nodes): `agent-status-grid.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 180`** (1 nodes): `metric-cards.tsx`
+- **Thin community `Community 180`** (1 nodes): `action-required.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 181`** (1 nodes): `fleet-health.tsx`
+- **Thin community `Community 181`** (1 nodes): `metric-cards.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 182`** (1 nodes): `goal-progress.tsx`
+- **Thin community `Community 182`** (1 nodes): `fleet-health.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 183`** (1 nodes): `task-throughput.tsx`
+- **Thin community `Community 183`** (1 nodes): `goal-progress.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 184`** (1 nodes): `agent-effectiveness.tsx`
+- **Thin community `Community 184`** (1 nodes): `task-throughput.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 185`** (1 nodes): `goal-history.tsx`
+- **Thin community `Community 185`** (1 nodes): `agent-effectiveness.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 186`** (1 nodes): `goals-list.tsx`
+- **Thin community `Community 186`** (1 nodes): `goal-history.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 187`** (1 nodes): `bottleneck-section.tsx`
+- **Thin community `Community 187`** (1 nodes): `goals-list.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 188`** (1 nodes): `types.ts`
+- **Thin community `Community 188`** (1 nodes): `bottleneck-section.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 189`** (1 nodes): `markdown-parser.test.ts`
+- **Thin community `Community 189`** (1 nodes): `types.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 190`** (1 nodes): `index.ts`
+- **Thin community `Community 190`** (1 nodes): `markdown-parser.test.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 191`** (1 nodes): `index.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
@@ -1283,16 +1288,18 @@ Nodes (0):
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 194`** (1 nodes): `index.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 195`** (1 nodes): `index.ts`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `GET()` connect `Community 0` to `Community 1`, `Community 3`, `Community 4`, `Community 6`, `Community 10`, `Community 11`, `Community 12`, `Community 13`, `Community 14`, `Community 16`?**
-  _High betweenness centrality (0.159) - this node is a cross-community bridge._
-- **Why does `existsSync()` connect `Community 1` to `Community 0`, `Community 2`, `Community 3`, `Community 5`, `Community 6`, `Community 7`, `Community 8`, `Community 9`, `Community 10`, `Community 11`, `Community 12`, `Community 15`, `Community 23`?**
-  _High betweenness centrality (0.128) - this node is a cross-community bridge._
-- **Why does `readFileSync()` connect `Community 1` to `Community 0`, `Community 2`, `Community 3`, `Community 5`, `Community 6`, `Community 7`, `Community 8`, `Community 9`, `Community 10`, `Community 11`, `Community 12`, `Community 15`, `Community 23`?**
-  _High betweenness centrality (0.082) - this node is a cross-community bridge._
+- **Why does `GET()` connect `Community 1` to `Community 0`, `Community 3`, `Community 5`, `Community 6`, `Community 10`, `Community 11`, `Community 12`, `Community 13`, `Community 14`, `Community 16`, `Community 17`?**
+  _High betweenness centrality (0.222) - this node is a cross-community bridge._
+- **Why does `existsSync()` connect `Community 0` to `Community 1`, `Community 2`, `Community 3`, `Community 4`, `Community 6`, `Community 7`, `Community 8`, `Community 9`, `Community 10`, `Community 12`, `Community 13`, `Community 15`, `Community 23`?**
+  _High betweenness centrality (0.131) - this node is a cross-community bridge._
+- **Why does `readFileSync()` connect `Community 0` to `Community 1`, `Community 2`, `Community 3`, `Community 4`, `Community 6`, `Community 7`, `Community 8`, `Community 9`, `Community 10`, `Community 12`, `Community 13`, `Community 15`, `Community 23`?**
+  _High betweenness centrality (0.091) - this node is a cross-community bridge._
 - **Are the 135 inferred relationships involving `existsSync()` (e.g. with `checkDirForBashRefs()` and `readConfig()`) actually correct?**
   _`existsSync()` has 135 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 85 inferred relationships involving `GET()` (e.g. with `.handleRequest()` and `.handleGetFile()`) actually correct?**

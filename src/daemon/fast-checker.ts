@@ -3,7 +3,7 @@ import { exec, execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
-import { checkInbox, ackInbox } from '../bus/message.js';
+import { checkInbox, ackInbox, sendMessage } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
@@ -47,6 +47,7 @@ export class FastChecker {
 
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private pollCycleWatchdog: NodeJS.Timeout | null = null;
 
   // Gmail watch state
   private gmailWatch?: { query: string; intervalMs: number };
@@ -63,10 +64,20 @@ export class FastChecker {
   private usageLastCheckedAt: number = 0;
   private usageTier: 0 | 1 | 2 = 0; // 0=normal, 1=high(≥85%), 2=critical(≥95%)
   private usageTierFile: string = '';
-  private readonly USAGE_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+  private readonly USAGE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
   // Context-exhaustion + frozen-stdout watchdog state
   private bootstrappedAt: number = 0;
+  private lastPollCycleCompletedAt: number = 0;
+  private readonly POLL_CYCLE_TIMEOUT_MS = 30_000;
+  // Circuit breaker state — track recent auto-restarts and pause the
+  // watchdog if it keeps firing (upstream is down, restarting won't help)
+  private watchdogRestarts: number[] = [];
+  private watchdogCircuitBroken: boolean = false;
+  private watchdogCircuitBrokenAt: number = 0;
+  private readonly WATCHDOG_MAX_RESTARTS = 3;
+  private readonly WATCHDOG_WINDOW_MS = 15 * 60 * 1000; // 15 min
+  private readonly WATCHDOG_CIRCUIT_RESET_MS = 30 * 60 * 1000; // 30 min
   private lastHardRestartAt: number = 0;
   private stdoutLastSize: number = 0;
   private stdoutLastChangeAt: number = 0;
@@ -153,11 +164,90 @@ export class FastChecker {
       });
     }, HEARTBEAT_INTERVAL_MS);
 
+    // Poll-cycle watchdog: if pollCycle hasn't completed in 90s, force-restart
+    // the agent PTY. Runs on its own setInterval so it can't get stuck inside
+    // the poll loop. Gives the hung operation 30s (pollCycle timeout) + 60s
+    // buffer before deciding the session is truly wedged.
+    this.lastPollCycleCompletedAt = Date.now();
+    const WATCHDOG_INTERVAL_MS = 30 * 1000;
+    const STALL_THRESHOLD_MS = 90 * 1000;
+    this.pollCycleWatchdog = setInterval(() => {
+      const now = Date.now();
+      if (this.bootstrappedAt === 0) return;
+      if (now - this.bootstrappedAt < STALL_THRESHOLD_MS) return;
+
+      // Auto-reset circuit breaker after 30 min of quiet
+      if (
+        this.watchdogCircuitBroken &&
+        now - this.watchdogCircuitBrokenAt > this.WATCHDOG_CIRCUIT_RESET_MS
+      ) {
+        this.watchdogCircuitBroken = false;
+        this.watchdogRestarts = [];
+        this.log('Watchdog circuit breaker reset after 30min quiet window');
+      }
+      if (this.watchdogCircuitBroken) return;
+
+      const stallMs = now - this.lastPollCycleCompletedAt;
+      if (stallMs <= STALL_THRESHOLD_MS) return;
+
+      // Prune restart history older than the window
+      this.watchdogRestarts = this.watchdogRestarts.filter(
+        t => now - t < this.WATCHDOG_WINDOW_MS,
+      );
+
+      // Circuit break: too many restarts mean restart isn't fixing it
+      if (this.watchdogRestarts.length >= this.WATCHDOG_MAX_RESTARTS) {
+        this.watchdogCircuitBroken = true;
+        this.watchdogCircuitBrokenAt = now;
+        const winMin = this.WATCHDOG_WINDOW_MS / 60_000;
+        const resetMin = this.WATCHDOG_CIRCUIT_RESET_MS / 60_000;
+        this.log(
+          `Watchdog circuit breaker TRIPPED: ${this.watchdogRestarts.length} restarts in ${winMin}min. ` +
+            `Halting auto-restart for ${resetMin}min — likely upstream issue (Telegram/Anthropic down). ` +
+            `Check manually with: pm2 logs cortextos-daemon`,
+        );
+        if (this.telegramApi && this.chatId) {
+          const agentName = this.agent.name;
+          this.telegramApi
+            .sendMessage(
+              this.chatId,
+              `⚠️ ${agentName} watchdog tripped — ${this.watchdogRestarts.length} auto-restarts in ${winMin}min. Restart loop paused ${resetMin}min. Likely upstream issue. Manual fix: pm2 restart cortextos-daemon`,
+            )
+            .catch(() => {});
+        }
+        this.lastPollCycleCompletedAt = now;
+        return;
+      }
+
+      this.watchdogRestarts.push(now);
+      this.log(
+        `pollCycle stalled for ${Math.round(stallMs / 1000)}s — triggering hard-restart ` +
+          `(${this.watchdogRestarts.length}/${this.WATCHDOG_MAX_RESTARTS} in ${this.WATCHDOG_WINDOW_MS / 60_000}min window)`,
+      );
+      this.agent.hardRestartSelf(`pollCycle stalled for ${Math.round(stallMs / 1000)}s`).catch(err => {
+        this.log(`Force-restart error: ${err}`);
+      });
+      this.lastPollCycleCompletedAt = now;
+    }, WATCHDOG_INTERVAL_MS);
+
     while (this.running) {
       try {
         // Check for urgent signal file
         this.checkUrgentSignal();
-        await this.pollCycle();
+        // Race pollCycle against a timeout so a hung operation (e.g. stuck
+        // fetch, slow execFile) can't freeze the loop indefinitely. If the
+        // timeout fires, the underlying operation is abandoned (may still
+        // resolve in the background) and the loop continues on the next tick.
+        await Promise.race([
+          this.pollCycle(),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error(`pollCycle timeout after ${this.POLL_CYCLE_TIMEOUT_MS}ms`)),
+              this.POLL_CYCLE_TIMEOUT_MS,
+            ),
+          ),
+        ]);
+        this.lastPollCycleCompletedAt = Date.now();
       } catch (err) {
         this.log(`Poll error: ${err}`);
       }
@@ -177,6 +267,10 @@ export class FastChecker {
     if (this.heartbeatTimer !== null) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+    if (this.pollCycleWatchdog !== null) {
+      clearInterval(this.pollCycleWatchdog);
+      this.pollCycleWatchdog = null;
     }
   }
 
@@ -479,9 +573,9 @@ export class FastChecker {
     let rawJson = '';
     try {
       rawJson = await new Promise<string>((resolve, reject) => {
-        // Pass high warn thresholds to suppress the script's own Telegram alerts —
-        // we handle alerting ourselves on tier transitions only.
-        execFile('cortextos', ['bus', 'check-usage-api', '--warn-7day', '999', '--warn-5h', '999'], (err, stdout) => {
+        // Request JSON output — the CLI command doesn't accept the old shell
+        // script's --warn-* flags. Alerting is handled here on tier transitions.
+        execFile('cortextos', ['bus', 'check-usage-api', '--json'], (err, stdout) => {
           if (err) { reject(err); return; }
           resolve(stdout);
         });
@@ -494,8 +588,15 @@ export class FastChecker {
     let utilization = -1;
     try {
       const data = JSON.parse(rawJson);
-      const fiveH = typeof data?.five_hour?.utilization === 'number' ? data.five_hour.utilization : -1;
-      const sevenD = typeof data?.seven_day?.utilization === 'number' ? data.seven_day.utilization : -1;
+      // Support both formats: new CLI flat 0-1 floats (five_hour_utilization)
+      // and legacy nested percentage (five_hour.utilization). Percentages assumed
+      // if value > 1.
+      const rawFiveH = data?.five_hour_utilization ?? data?.five_hour?.utilization;
+      const rawSevenD = data?.seven_day_utilization ?? data?.seven_day?.utilization;
+      const toPct = (v: unknown): number =>
+        typeof v === 'number' ? (v <= 1 ? v * 100 : v) : -1;
+      const fiveH = toPct(rawFiveH);
+      const sevenD = toPct(rawSevenD);
       utilization = Math.max(fiveH, sevenD);
     } catch {
       this.log('Usage check: could not parse response');

@@ -709,7 +709,6 @@ export class AgentProcess {
     }
   }
 
-
   private startHealthTimer(): void {
     // no-op for now — placeholder to prevent "is not a function" crash
   }
