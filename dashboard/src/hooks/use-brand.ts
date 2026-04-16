@@ -8,6 +8,8 @@ interface Brand {
   name: string;
   /** Short name for compact slots (favicons, mobile nav, PWA title). */
   shortName: string;
+  /** 1–3 letter monogram for compact logo slots (sidebar, splash, login). */
+  initials: string;
   /** True when the brand resolved from an org (not the framework default). */
   isOrgBrand: boolean;
 }
@@ -15,6 +17,7 @@ interface Brand {
 const DEFAULT_BRAND: Brand = {
   name: 'cortextOS',
   shortName: 'cortextOS',
+  initials: 'cO',
   isOrgBrand: false,
 };
 
@@ -41,18 +44,17 @@ export function useBrand(): Brand {
     }
 
     let cancelled = false;
-    fetch(`/api/org/config?org=${encodeURIComponent(currentOrg)}`)
+    fetch(`/api/brand?org=${encodeURIComponent(currentOrg)}`)
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
         if (cancelled || !data) return;
-        const name =
-          (typeof data.brand_name === 'string' && data.brand_name.trim()) ||
-          smartCase(data.name || currentOrg) ||
-          DEFAULT_BRAND.name;
-        const shortName =
-          (typeof data.brand_short_name === 'string' && data.brand_short_name.trim()) ||
-          name;
-        setBrand({ name, shortName, isOrgBrand: true });
+        // Server computes name, shortName, initials — just pass through.
+        setBrand({
+          name: data.name ?? DEFAULT_BRAND.name,
+          shortName: data.shortName ?? DEFAULT_BRAND.shortName,
+          initials: data.initials ?? DEFAULT_BRAND.initials,
+          isOrgBrand: Boolean(data.isOrgBrand),
+        });
       })
       .catch(() => {
         // Silent fallback — never crash UI on brand lookup failure
@@ -67,12 +69,3 @@ export function useBrand(): Brand {
   return brand;
 }
 
-/** Convert "ascendops" → "AscendOps", "acme-corp" → "Acme Corp". */
-function smartCase(raw: string): string {
-  if (!raw) return '';
-  return raw
-    .split(/[\s_-]+/)
-    .filter(Boolean)
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
-}

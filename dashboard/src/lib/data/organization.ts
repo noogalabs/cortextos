@@ -18,6 +18,9 @@ export interface OrgContext {
 export interface Brand {
   name: string;
   shortName: string;
+  /** 1–3 letter monogram for compact logo slots (sidebar, splash, login).
+   *  Derived from the name — e.g. "AscendOps" → "AO", "Acme Corp" → "AC". */
+  initials: string;
   isOrgBrand: boolean;
 }
 
@@ -34,6 +37,7 @@ const DEFAULT_CONTEXT: OrgContext = {
 const FRAMEWORK_BRAND: Brand = {
   name: 'cortextOS',
   shortName: 'cortextOS',
+  initials: 'cO',
   isOrgBrand: false,
 };
 
@@ -103,6 +107,48 @@ function smartCase(raw: string): string {
 }
 
 /**
+ * Derive a 1-3 letter monogram from a brand name.
+ *
+ * Multi-word names take first letter of each word (up to 3):
+ *   "AscendOps"  → "AO"   (CamelCase treated as two words via regex below)
+ *   "Acme Corp"  → "AC"
+ *   "Joe's PM Co" → "JPC"
+ *
+ * Single lowercase-word names take first 2 chars uppercased:
+ *   "acme"       → "AC"
+ *
+ * Empty input → empty string; caller should fall back to framework default.
+ */
+export function deriveInitials(name: string): string {
+  if (!name) return '';
+  const trimmed = name.trim();
+  if (!trimmed) return '';
+
+  // Split on whitespace / hyphens / underscores first
+  const words = trimmed.split(/[\s_-]+/).filter(Boolean);
+
+  // If we got multiple words, use first letter of each (up to 3)
+  if (words.length > 1) {
+    return words
+      .slice(0, 3)
+      .map(w => w.charAt(0).toUpperCase())
+      .join('');
+  }
+
+  // Single word — try CamelCase split (e.g. "AscendOps" → ["Ascend", "Ops"])
+  const camelParts = trimmed.match(/[A-Z][a-z]*|[a-z]+/g) || [];
+  if (camelParts.length > 1) {
+    return camelParts
+      .slice(0, 3)
+      .map(p => p.charAt(0).toUpperCase())
+      .join('');
+  }
+
+  // True single word — first 2 chars uppercased
+  return trimmed.slice(0, 2).toUpperCase();
+}
+
+/**
  * Resolve the brand for a specific org.
  *
  * Priority: explicit `brand_name` → smart-cased `name` → framework default.
@@ -115,7 +161,8 @@ export function getOrgBrand(org: string): Brand {
     FRAMEWORK_BRAND.name;
   const shortName =
     (ctx.brand_short_name && ctx.brand_short_name.trim()) || name;
-  return { name, shortName, isOrgBrand: true };
+  const initials = deriveInitials(shortName) || FRAMEWORK_BRAND.initials;
+  return { name, shortName, initials, isOrgBrand: true };
 }
 
 /**
