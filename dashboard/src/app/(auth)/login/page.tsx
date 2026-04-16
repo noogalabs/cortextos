@@ -19,7 +19,7 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showSplash, setShowSplash] = useState(false);
-  const [brand, setBrand] = useState({ name: 'cortextOS', shortName: 'cortextOS' });
+  const [brand, setBrand] = useState({ name: 'cortextOS', shortName: 'cortextOS', initials: 'cO' });
 
   // Redirect to setup if no users exist
   useEffect(() => {
@@ -40,7 +40,7 @@ export default function LoginPage() {
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
         if (cancelled || !data) return;
-        setBrand({ name: data.name, shortName: data.shortName });
+        setBrand({ name: data.name, shortName: data.shortName, initials: data.initials ?? 'cO' });
       })
       .catch(() => { /* keep default */ });
     return () => { cancelled = true; };
@@ -144,7 +144,7 @@ export default function LoginPage() {
         {/* Logo */}
         <div className="text-center space-y-2">
           <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground text-lg font-bold">
-            cO
+            {brand.initials}
           </div>
           <h1 className="text-xl font-semibold tracking-tight">{brand.name}</h1>
           <p className="text-sm text-muted-foreground">

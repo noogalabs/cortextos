@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useOrg } from '@/hooks/use-org';
+import { useBrand } from '@/hooks/use-brand';
 import {
   IconLayoutDashboard,
   IconRobot,
@@ -72,6 +73,7 @@ export function Sidebar({
   onNavigate,
   onSearchClick,
 }: SidebarProps) {
+  const brand = useBrand();
   const pathname = usePathname();
   const { currentOrg } = useOrg();
 
@@ -101,9 +103,9 @@ export function Sidebar({
       {/* Logo */}
       <div className="flex h-14 items-center gap-2 px-4">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground text-xs font-bold">
-          cO
+          {brand.initials}
         </div>
-        <span className="text-sm font-semibold tracking-tight">{brandName || 'cortextOS'}</span>
+        <span className="text-sm font-semibold tracking-tight">{brand.shortName}</span>
       </div>
 
       {/* Search trigger */}

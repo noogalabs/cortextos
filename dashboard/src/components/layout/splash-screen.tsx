@@ -8,6 +8,22 @@ interface SplashScreenProps {
 
 export function SplashScreen({ onComplete }: SplashScreenProps) {
   const [phase, setPhase] = useState<'enter' | 'hold' | 'fade'>('enter');
+  const [brand, setBrand] = useState({ name: 'cortextOS', initials: 'cO' });
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/brand')
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (cancelled || !data) return;
+        setBrand({
+          name: data.name ?? 'cortextOS',
+          initials: data.initials ?? 'cO',
+        });
+      })
+      .catch(() => { /* keep default */ });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const t1 = setTimeout(() => setPhase('hold'), 100);
@@ -93,10 +109,10 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
           }}
         >
           <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground text-2xl font-bold shadow-xl shadow-primary/25">
-            cO
+            {brand.initials}
           </div>
           <div className="text-center">
-            <h1 className="text-xl font-semibold tracking-tight">cortextOS</h1>
+            <h1 className="text-xl font-semibold tracking-tight">{brand.name}</h1>
             <p className="text-xs text-muted-foreground mt-1">Agent Orchestration</p>
           </div>
         </div>
