@@ -18,6 +18,7 @@ import {
   deleteRecoveryNote,
   MIN_HEALTHY_SECONDS,
 } from './watchdog.js';
+import { readCronState, parseDurationMs } from '../bus/cron-state.js';
 
 type LogFn = (msg: string) => void;
 
@@ -821,6 +822,74 @@ export class AgentProcess {
     this.verifyCronsAfterIdle(recurringNames, generation).catch(err => {
       this.log(`Cron verification failed (non-fatal): ${err}`);
     });
+  }
+
+  /**
+   * Starts a background gap-detection loop for recurring interval-based crons.
+   * Reads cron-state.json every 10 minutes; injects a nudge if any cron has
+   * been silent for >2x its expected interval.
+   *
+   * Fire-and-forget: errors are logged but never propagated.
+   */
+  scheduleGapDetection(): void {
+    const crons = this.config.crons;
+    if (!crons || crons.length === 0) return;
+
+    const monitorable = crons.filter(
+      c => c.type !== 'once' && c.interval && !isNaN(parseDurationMs(c.interval)),
+    );
+    if (monitorable.length === 0) return;
+
+    const generation = this.lifecycleGeneration;
+
+    this.runGapDetectionLoop(monitorable, generation).catch(err => {
+      this.log(`Cron gap detection failed (non-fatal): ${err}`);
+    });
+  }
+
+  private async runGapDetectionLoop(
+    crons: Array<{ name: string; interval?: string }>,
+    generation: number,
+  ): Promise<void> {
+    const GAP_POLL_MS = 10 * 60 * 1000;
+    const GAP_MULTIPLIER = 2.0;
+
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+
+    await sleep(GAP_POLL_MS);
+
+    while (true) {
+      if (generation !== this.lifecycleGeneration || this.status !== 'running') return;
+
+      const now = Date.now();
+      const state = readCronState(stateDir);
+
+      for (const cronDef of crons) {
+        const intervalMs = parseDurationMs(cronDef.interval!);
+
+        const record = state.crons.find(r => r.name === cronDef.name);
+        if (!record) continue;
+
+        const lastFireMs = Date.parse(record.last_fire);
+        if (isNaN(lastFireMs)) continue;
+
+        const gapMs = now - lastFireMs;
+        const threshold = intervalMs * GAP_MULTIPLIER;
+
+        if (gapMs > threshold) {
+          const gapMin = Math.round(gapMs / 60_000);
+          const expectedMin = Math.round(intervalMs / 60_000);
+          const nudge = `[SYSTEM] Cron gap detected for "${cronDef.name}": last fired ${gapMin} minutes ago (expected every ${expectedMin} minutes). Run CronList to verify the cron is still active. If missing, restore it from config.json: /loop ${cronDef.interval} <cron prompt>.`;
+
+          this.log(`Gap nudge: ${cronDef.name} silent ${gapMin}min (threshold: ${Math.round(threshold / 60_000)}min)`);
+          if (this.pty && this.status === 'running') {
+            injectMessage((data) => this.pty!.write(data), nudge);
+          }
+        }
+      }
+
+      await sleep(GAP_POLL_MS);
+    }
   }
 
   private async verifyCronsAfterIdle(
