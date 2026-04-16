@@ -957,7 +957,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     const body = summaries.map((s, i) => `${i + 1}. ${s}`).join('\n\n');
     const footer = total > shown ? `\n\n(${total - shown} more not shown)` : '';
     const hint = `\n\nProcess: gws gmail users messages get --params '{"userId":"me","id":"<ID>","format":"full"}' --format json` +
-      `\nMark read: gws gmail users messages modify --params '{"userId":"me","id":"<ID>"}' --body '{"removeLabelIds":["UNREAD"]}' --format json`;
+      `\nMark read: gws gmail users messages modify --params '{"userId":"me","id":"<ID>"}' --json '{"removeLabelIds":["UNREAD"]}' --format json`;
 
     const inboxText = header + body + footer + hint;
     this.log(`Gmail watch: ${total} new unread message(s) — writing inbox`);
