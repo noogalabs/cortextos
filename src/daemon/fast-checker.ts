@@ -52,6 +52,11 @@ export class FastChecker {
   // Gmail watch state
   private gmailWatch?: { query: string; intervalMs: number };
   private gmailLastCheckedAt: number = 0;
+  private gmailLastCheckedPath: string = '';
+  // Delivered-message-ID set with 2h TTL: id → delivery timestamp (ms)
+  private gmailDeliveredIds: Map<string, number> = new Map();
+  private gmailDeliveredIdsPath: string = '';
+  private readonly GMAIL_DELIVERED_TTL_MS = 2 * 60 * 60 * 1000; // 2h
 
   // Slack watch state
   private slackWatch?: { channel: string; intervalMs: number };
@@ -116,6 +121,10 @@ export class FastChecker {
     // Initialize Gmail watch
     if (options.gmailWatch) {
       this.gmailWatch = options.gmailWatch;
+      this.gmailLastCheckedPath = join(paths.stateDir, 'gmail-last-checked.txt');
+      this.gmailDeliveredIdsPath = join(paths.stateDir, 'gmail-delivered-ids.json');
+      this.loadGmailLastCheckedAt();
+      this.loadGmailDeliveredIds();
     }
 
     if (options.slackWatch) {
@@ -438,6 +447,7 @@ export class FastChecker {
     const now = Date.now();
     if (now - this.gmailLastCheckedAt < this.gmailWatch.intervalMs) return;
     this.gmailLastCheckedAt = now;
+    this.saveGmailLastCheckedAt();
 
     // Fetch unread message list
     let listOutput = '';
@@ -467,9 +477,17 @@ export class FastChecker {
 
     if (messageIds.length === 0) return; // nothing to do
 
-    // Fetch snippet + subject for each message (metadata format only)
+    // Filter out already-delivered IDs (2h TTL dedup)
+    this.pruneGmailDeliveredIds();
+    const newIds = messageIds.filter(id => !this.gmailDeliveredIds.has(id));
+    if (newIds.length === 0) {
+      this.log('Gmail watch: all messages already delivered — skipping');
+      return;
+    }
+
+    // Fetch snippet + subject for each new message (metadata format only)
     const summaries: string[] = [];
-    for (const id of messageIds.slice(0, 20)) { // cap at 20 to avoid runaway fetches
+    for (const id of newIds.slice(0, 20)) { // cap at 20 to avoid runaway fetches
       try {
         const getOutput = await new Promise<string>((resolve, reject) => {
           execFile('gws', ['gmail', 'users', 'messages', 'get',
@@ -491,7 +509,7 @@ export class FastChecker {
       }
     }
 
-    const total = messageIds.length;
+    const total = newIds.length;
     const shown = summaries.length;
     const header = `=== GMAIL WATCH: ${total} unread message${total !== 1 ? 's' : ''} ===\n` +
       `Query: ${this.gmailWatch.query}\n\n`;
@@ -501,12 +519,71 @@ export class FastChecker {
       `\nMark read: gws gmail users messages modify --params '{"userId":"me","id":"<ID>"}' --body '{"removeLabelIds":["UNREAD"]}' --format json`;
 
     const inboxText = header + body + footer + hint;
-    this.log(`Gmail watch: ${total} unread message(s) — writing inbox`);
+    this.log(`Gmail watch: ${total} new unread message(s) — writing inbox`);
 
     try {
       sendMessage(this.paths, 'fast-checker', this.agent.name, 'normal', inboxText);
+      // Record delivered IDs
+      for (const id of newIds.slice(0, 20)) {
+        this.gmailDeliveredIds.set(id, now);
+      }
+      this.saveGmailDeliveredIds();
     } catch (err) {
       this.log(`Gmail watch inbox write failed: ${err}`);
+    }
+  }
+
+  private loadGmailLastCheckedAt(): void {
+    try {
+      if (existsSync(this.gmailLastCheckedPath)) {
+        const raw = readFileSync(this.gmailLastCheckedPath, 'utf-8').trim();
+        const epoch = parseInt(raw, 10);
+        if (!isNaN(epoch)) this.gmailLastCheckedAt = epoch;
+      }
+    } catch (err) {
+      this.log(`Gmail watch: could not load last-checked timestamp (restart dedup disabled): ${err}`);
+    }
+  }
+
+  private saveGmailLastCheckedAt(): void {
+    try {
+      writeFileSync(this.gmailLastCheckedPath, String(this.gmailLastCheckedAt) + '\n', 'utf-8');
+    } catch (err) {
+      this.log(`Gmail watch: could not persist last-checked timestamp: ${err}`);
+    }
+  }
+
+  private loadGmailDeliveredIds(): void {
+    try {
+      if (existsSync(this.gmailDeliveredIdsPath)) {
+        const raw = JSON.parse(readFileSync(this.gmailDeliveredIdsPath, 'utf-8'));
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+          for (const [id, ts] of Object.entries(raw)) {
+            if (typeof ts === 'number') this.gmailDeliveredIds.set(id, ts);
+          }
+        }
+      }
+    } catch (err) {
+      this.log(`Gmail watch: could not load delivered IDs (message dedup disabled): ${err}`);
+    }
+  }
+
+  private saveGmailDeliveredIds(): void {
+    try {
+      const obj: Record<string, number> = {};
+      for (const [id, ts] of this.gmailDeliveredIds) {
+        obj[id] = ts;
+      }
+      writeFileSync(this.gmailDeliveredIdsPath, JSON.stringify(obj) + '\n', 'utf-8');
+    } catch (err) {
+      this.log(`Gmail watch: could not persist delivered IDs: ${err}`);
+    }
+  }
+
+  private pruneGmailDeliveredIds(): void {
+    const cutoff = Date.now() - this.GMAIL_DELIVERED_TTL_MS;
+    for (const [id, ts] of this.gmailDeliveredIds) {
+      if (ts < cutoff) this.gmailDeliveredIds.delete(id);
     }
   }
 
