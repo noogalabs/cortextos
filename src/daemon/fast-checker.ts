@@ -90,6 +90,11 @@ export class FastChecker {
   private readonly BOOTSTRAP_GRACE_MS = 10 * 60 * 1000;
   private readonly HARD_RESTART_COOLDOWN_MS = 15 * 60 * 1000;
   private readonly STDOUT_FROZEN_MS = 30 * 60 * 1000;
+  // Context-threshold graceful restart state (Signal 3)
+  private ctxThresholdPct: number = 70;
+  private ctxThresholdTriggeredAt: number = 0;
+  private readonly CTX_THRESHOLD_COOLDOWN_MS = 10 * 60 * 1000;   // 10 min — no re-inject
+  private readonly CTX_THRESHOLD_FALLBACK_MS = 15 * 60 * 1000;  // 15 min — hard-restart if ignored
 
   constructor(
     agent: AgentProcess,
@@ -103,6 +108,7 @@ export class FastChecker {
       allowedUserId?: number;
       gmailWatch?: { query: string; intervalMs: number };
       slackWatch?: { channel: string; intervalMs: number; token: string };
+      ctxRestartThreshold?: number;
     } = {},
   ) {
     this.agent = agent;
@@ -113,6 +119,7 @@ export class FastChecker {
     this.telegramApi = options.telegramApi;
     this.chatId = options.chatId;
     this.allowedUserId = options.allowedUserId;
+    this.ctxThresholdPct = options.ctxRestartThreshold ?? 70;
 
     // Initialize persistent dedup
     this.dedupFilePath = join(paths.stateDir, '.message-dedup-hashes');
@@ -390,8 +397,8 @@ export class FastChecker {
       this.stdoutLastChangeAt = now;
     }
 
-    // Signal 1: scan last 20KB of stdout for the session-survey prompt.
-    // Claude Code emits this when context is full ("How is Claude doing this session?").
+    // Read tail once — shared by Signal 1 and Signal 3
+    let tail = '';
     try {
       const tailBytes = Math.min(20000, size);
       if (tailBytes > 0) {
@@ -399,14 +406,42 @@ export class FastChecker {
         const buf = Buffer.alloc(tailBytes);
         readSync(fd, buf, 0, tailBytes, size - tailBytes);
         closeSync(fd);
-        const tail = buf.toString('utf-8');
-        if (/How is Claude doing this session\?/.test(tail)) {
-          this.log('WATCHDOG: ctx-exhaustion survey prompt detected — hard-restarting');
-          this.triggerHardRestart('ctx exhaustion: session survey prompt in stdout');
-          return;
-        }
+        tail = buf.toString('utf-8');
       }
     } catch { /* non-critical */ }
+
+    // Signal 1: session-survey prompt → immediate hard restart
+    if (tail && /How is Claude doing this session\?/.test(tail)) {
+      this.log('WATCHDOG: ctx-exhaustion survey prompt detected — hard-restarting');
+      this.triggerHardRestart('ctx exhaustion: session survey prompt in stdout');
+      return;
+    }
+
+    // Signal 3: context-threshold → proactive graceful restart
+    if (tail && this.ctxThresholdPct > 0) {
+      // Strip ANSI escape codes before applying the pattern
+      const stripped = tail.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+      const pctMatch = stripped.match(/\[(?:Sonnet|Opus|Haiku)[^\]]*\][^\d]*(\d+)%/);
+      if (pctMatch) {
+        const pct = parseInt(pctMatch[1], 10);
+        if (pct >= this.ctxThresholdPct) {
+          if (this.ctxThresholdTriggeredAt === 0 ||
+              now - this.ctxThresholdTriggeredAt > this.CTX_THRESHOLD_COOLDOWN_MS) {
+            // First trigger (or cooldown expired): inject graceful restart request
+            this.ctxThresholdTriggeredAt = now;
+            const msg = `Context window at ${pct}%. Please write your session memory and observations now, then run: cortextos bus hard-restart --reason "proactive context reset at ${pct}%"`;
+            this.agent.injectMessage(msg);
+            this.log(`WATCHDOG: ctx at ${pct}% >= threshold ${this.ctxThresholdPct}% — injected graceful restart request`);
+          } else if (now - this.ctxThresholdTriggeredAt > this.CTX_THRESHOLD_FALLBACK_MS) {
+            // Agent ignored the injection for 15 min — fallback hard restart
+            const minAgo = Math.round((now - this.ctxThresholdTriggeredAt) / 60000);
+            this.log(`WATCHDOG: ctx threshold fallback — agent ignored restart request for ${minAgo}min`);
+            this.triggerHardRestart(`ctx threshold fallback: agent at ${pct}% ignored graceful restart for ${minAgo}min`);
+            return;
+          }
+        }
+      }
+    }
 
     // Signal 2: stdout frozen for 30+ min while agent is active.
     if (

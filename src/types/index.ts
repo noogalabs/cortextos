@@ -222,6 +222,11 @@ export interface AgentConfig {
    * Example: { "maintenance": "C1234567890", "leasing": "C0987654321" }
    */
   slack_channels?: Record<string, string>;
+  /**
+   * Context window percentage at which fast-checker proactively asks the
+   * agent to write memory and restart (default 70). Set to 0 to disable.
+   */
+  ctx_restart_threshold?: number;
 }
 
 export interface CronEntry {

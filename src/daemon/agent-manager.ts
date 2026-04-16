@@ -272,6 +272,7 @@ export class AgentManager {
       allowedUserId: allowedUserId ? parseInt(allowedUserId, 10) : undefined,
       gmailWatch: gmailWatchOption,
       slackWatch: slackWatchOption,
+      ctxRestartThreshold: config.ctx_restart_threshold,
     });
 
     // Send Telegram notification on crashes and session refreshes
