@@ -44,7 +44,7 @@ export async function PATCH(request: NextRequest) {
   }
 
   // Validate editable fields
-  const allowed = ['timezone', 'day_mode_start', 'day_mode_end', 'default_approval_categories', 'communication_style', 'name', 'description', 'industry', 'icp', 'value_prop', 'require_deliverables'];
+  const allowed = ['timezone', 'day_mode_start', 'day_mode_end', 'default_approval_categories', 'communication_style', 'name', 'description', 'industry', 'icp', 'value_prop', 'require_deliverables', 'brand_name', 'brand_short_name'];
   const timeRegex = /^\d{2}:\d{2}$/;
 
   if (body.day_mode_start && !timeRegex.test(body.day_mode_start as string)) {

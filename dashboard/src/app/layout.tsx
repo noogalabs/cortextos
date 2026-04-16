@@ -3,6 +3,7 @@ import { Sora, JetBrains_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SessionProvider } from "@/components/session-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { getDefaultBrand } from "@/lib/data/organization";
 import "./globals.css";
 
 const sora = Sora({
@@ -16,24 +17,21 @@ const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains",
 });
 
-// Brand-aware metadata: set ASCENDOPS_BRAND=1 in the dashboard's environment
-// (e.g. via .env.local in the dashboard directory) to show AscendOps branding.
-// Uses generateMetadata() instead of a static `metadata` export so that
-// process.env.ASCENDOPS_BRAND is evaluated at request time on the server,
-// not baked in at build time (Next.js static metadata evaluation would always
-// read an empty string if the var is set only in the runtime environment).
+// Resolved at request time so metadata reflects the currently active brand
+// without needing a dashboard rebuild when org context.json changes.
 export async function generateMetadata(): Promise<Metadata> {
-  const isAscendOps = process.env.ASCENDOPS_BRAND === "1";
+  const brand = getDefaultBrand();
+  const descriptionSuffix = brand.isOrgBrand
+    ? `${brand.name} agent orchestration dashboard`
+    : "cortextOS agent orchestration dashboard";
   return {
-    title: isAscendOps ? "AscendOps Dashboard" : "cortextOS Dashboard",
-    description: isAscendOps
-      ? "AscendOps property management AI platform"
-      : "cortextOS agent orchestration dashboard",
+    title: `${brand.name} Dashboard`,
+    description: descriptionSuffix,
     viewport: "width=device-width, initial-scale=1, viewport-fit=cover",
     appleWebApp: {
       capable: true,
       statusBarStyle: "default",
-      title: isAscendOps ? "AscendOps" : "cortextOS",
+      title: brand.shortName,
     },
   };
 }
