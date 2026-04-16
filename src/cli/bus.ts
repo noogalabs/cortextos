@@ -14,6 +14,7 @@ import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunity
 import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { createApproval, updateApproval } from '../bus/approval.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
+import { updateCronFire } from '../bus/cron-state.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { createSkillPr } from '../bus/skill-autopr.js';
@@ -159,6 +160,13 @@ busCommand
       needsApproval: opts.needsApproval ?? false,
     });
     console.log(taskId);
+    // Auto-notify assignee so the task is visible immediately (issue #78)
+    if (opts.assignee && opts.assignee !== env.agentName) {
+      const assigneePaths = resolvePaths(opts.assignee, env.instanceId, env.org);
+      const desc = opts.desc ? ` — ${opts.desc.slice(0, 120)}` : '';
+      sendMessage(assigneePaths, env.agentName, opts.assignee, 'normal',
+        `Task assigned: [${opts.priority}] ${title}${desc} (id: ${taskId})`);
+    }
   });
 
 busCommand
@@ -1687,6 +1695,18 @@ busCommand
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const pruned = pruneReminders(paths, parseInt(opts.days ?? '7', 10));
     console.log(`Pruned ${pruned} acked reminder(s)`);
+  });
+
+busCommand
+  .command('update-cron-fire')
+  .argument('<cron-name>', 'Name of the cron as defined in config.json')
+  .option('--interval <interval>', 'Expected interval, e.g. "6h", "24h", "30m"')
+  .description('Record that a named cron just fired (enables daemon gap detection for dead zones)')
+  .action((cronName: string, opts: { interval?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    updateCronFire(paths.stateDir, cronName, opts.interval);
+    console.log(`Recorded fire for cron "${cronName}"`);
   });
 
 busCommand

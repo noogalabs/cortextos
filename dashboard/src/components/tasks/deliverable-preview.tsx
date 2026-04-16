@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import DOMPurify from 'isomorphic-dompurify';
 import { Button } from '@/components/ui/button';
 import { IconX, IconFolderOpen, IconZoomIn, IconZoomOut, IconCode, IconBrowser } from '@tabler/icons-react';
 import type { TaskOutput } from '@/lib/types';
@@ -223,18 +224,28 @@ function RenderedMdPreview({
     };
   }, [html, parentPath, onFileRefClick]);
 
-  if (error) return <PreviewError message={error} />;
-  if (html === null) return <PreviewLoading />;
+  // Defense in depth: the server already sanitizes markdown-derived HTML
+  // with DOMPurify before returning it. We sanitize again on the client so
+  // that any intermediary (proxy, future change) cannot inject script or
+  // event-handler vectors into the DOM. Agent-authored markdown is NOT
+  // trusted — treat it the same as third-party user content.
+  const safeHtml = useMemo(() => {
+    if (html === null) return null;
+    return DOMPurify.sanitize(html, {
+      USE_PROFILES: { html: true },
+      FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'link', 'meta', 'base'],
+      FORBID_ATTR: ['style', 'onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'onsubmit', 'formaction'],
+    });
+  }, [html]);
 
-  // Content served by /api/media is read from local disk files within
-  // allowed roots. The media route enforces a realpath check ensuring the
-  // file is inside an allowed root, so the HTML comes from trusted
-  // agent-generated markdown rendered server-side.
+  if (error) return <PreviewError message={error} />;
+  if (safeHtml === null) return <PreviewLoading />;
+
   return (
     <div
       ref={containerRef}
       className="w-full h-full overflow-auto p-6 md-preview"
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={{ __html: safeHtml }}
     />
   );
 }

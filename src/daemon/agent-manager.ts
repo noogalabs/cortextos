@@ -302,6 +302,10 @@ export class AgentManager {
     // matches config.json. Handles both fresh and --continue restarts safely.
     agentProcess.scheduleCronVerification();
 
+    // Schedule background cron gap detection: polls cron-state.json every 10 min
+    // and nudges the agent if any cron has been silent >2x its expected interval.
+    agentProcess.scheduleGapDetection();
+
     // Start fast checker in background
     checker.start().catch(err => {
       console.error(`[${name}] Fast checker error:`, err);
@@ -366,7 +370,10 @@ export class AgentManager {
             // BUG-046: Convert absolute paths to relative (from agent working dir).
             // Claude Code strips absolute paths from pasted user input, so the
             // agent never sees them. Relative paths survive injection.
-            const toRel = (p: string | undefined) => p ? relative(agentDir, p) : '';
+            // BUG-049: Use the agent's actual launch cwd (config.working_directory
+            // if set, else agentDir) so the path resolves when Read() is invoked.
+            const launchDir = config?.working_directory || agentDir;
+            const toRel = (p: string | undefined) => p ? relative(launchDir, p) : '';
             const relImagePath = toRel(media.image_path);
             const relFilePath = toRel(media.file_path);
 

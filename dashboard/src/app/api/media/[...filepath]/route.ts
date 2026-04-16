@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { marked } from 'marked';
+import DOMPurify from 'isomorphic-dompurify';
 import { getCTXRoot, getFrameworkRoot, getAllowedRootsConfigPath } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
@@ -164,10 +165,20 @@ export async function GET(
   const ext = path.extname(realFullPath).toLowerCase();
   const renderMd = _request.nextUrl.searchParams.get('render') === 'true';
 
-  // Markdown render mode: convert to HTML fragment for the preview panel
+  // Markdown render mode: convert to HTML fragment for the preview panel.
+  // Agent-generated markdown can contain raw inline HTML (e.g. <script>,
+  // onerror handlers, javascript: URIs). We sanitize the marked output with
+  // DOMPurify before returning it so the client can safely inject it via
+  // dangerouslySetInnerHTML. FORBID_TAGS covers the dangerous vectors that
+  // the default DOMPurify config doesn't already strip on some configs.
   if (renderMd && ext === '.md') {
     const mdContent = fs.readFileSync(realFullPath, 'utf-8');
-    const htmlBody = marked.parse(mdContent) as string;
+    const rawHtml = marked.parse(mdContent) as string;
+    const htmlBody = DOMPurify.sanitize(rawHtml, {
+      USE_PROFILES: { html: true },
+      FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'link', 'meta', 'base'],
+      FORBID_ATTR: ['style', 'onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'onsubmit', 'formaction'],
+    });
     return new Response(htmlBody, {
       status: 200,
       headers: {
