@@ -1,12 +1,13 @@
-import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync } from 'fs';
-import { execFile } from 'child_process';
+import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync, openSync, readSync, closeSync } from 'fs';
+import { exec, execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
-import { checkInbox, ackInbox } from '../bus/message.js';
+import { checkInbox, ackInbox, sendMessage } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
+import { SlackAPI, type SlackMessage } from '../slack/api.js';
 import { KEYS } from '../pty/inject.js';
 import { stripControlChars } from '../utils/validate.js';
 
@@ -46,12 +47,69 @@ export class FastChecker {
 
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private pollCycleWatchdog: NodeJS.Timeout | null = null;
+
+  // Gmail watch state
+  private gmailWatch?: { query: string; intervalMs: number };
+  private gmailLastCheckedAt: number = 0;
+  private gmailLastCheckedPath: string = '';
+  // Delivered-message-ID set with 2h TTL: id → delivery timestamp (ms)
+  private gmailDeliveredIds: Map<string, number> = new Map();
+  private gmailDeliveredIdsPath: string = '';
+  private readonly GMAIL_DELIVERED_TTL_MS = 2 * 60 * 60 * 1000; // 2h
+
+  // Slack watch state
+  private slackWatch?: { channel: string; intervalMs: number };
+  private slackApi?: SlackAPI;
+  private slackLastTs: string = '0';
+  private slackLastCheckedAt: number = 0;
+  private readonly SLACK_DEFAULT_INTERVAL_MS = 60 * 1000;
+
+  // Usage rate-limit guard state
+  private usageLastCheckedAt: number = 0;
+  private usageTier: 0 | 1 | 2 = 0; // 0=normal, 1=high(≥85%), 2=critical(≥95%)
+  private usageTierFile: string = '';
+  private readonly USAGE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
+  // Context-exhaustion + frozen-stdout watchdog state
+  private bootstrappedAt: number = 0;
+  private lastPollCycleCompletedAt: number = 0;
+  private readonly POLL_CYCLE_TIMEOUT_MS = 30_000;
+  // Circuit breaker state — track recent auto-restarts and pause the
+  // watchdog if it keeps firing (upstream is down, restarting won't help)
+  private watchdogRestarts: number[] = [];
+  private watchdogCircuitBroken: boolean = false;
+  private watchdogCircuitBrokenAt: number = 0;
+  private readonly WATCHDOG_MAX_RESTARTS = 3;
+  private readonly WATCHDOG_WINDOW_MS = 15 * 60 * 1000; // 15 min
+  private readonly WATCHDOG_CIRCUIT_RESET_MS = 30 * 60 * 1000; // 30 min
+  private lastHardRestartAt: number = 0;
+  private stdoutLastSize: number = 0;
+  private stdoutLastChangeAt: number = 0;
+  private watchdogTriggered: boolean = false;
+  private readonly BOOTSTRAP_GRACE_MS = 10 * 60 * 1000;
+  private readonly HARD_RESTART_COOLDOWN_MS = 15 * 60 * 1000;
+  private readonly STDOUT_FROZEN_MS = 30 * 60 * 1000;
+  // Context-threshold graceful restart state (Signal 3)
+  private ctxThresholdPct: number = 70;
+  private ctxThresholdTriggeredAt: number = 0;
+  private readonly CTX_THRESHOLD_COOLDOWN_MS = 10 * 60 * 1000;   // 10 min — no re-inject
+  private readonly CTX_THRESHOLD_FALLBACK_MS = 15 * 60 * 1000;  // 15 min — hard-restart if ignored
 
   constructor(
     agent: AgentProcess,
     paths: BusPaths,
     frameworkRoot: string,
-    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number } = {},
+    options: {
+      pollInterval?: number;
+      log?: LogFn;
+      telegramApi?: TelegramAPI;
+      chatId?: string;
+      allowedUserId?: number;
+      gmailWatch?: { query: string; intervalMs: number };
+      slackWatch?: { channel: string; intervalMs: number; token: string };
+      ctxRestartThreshold?: number;
+    } = {},
   ) {
     this.agent = agent;
     this.paths = paths;
@@ -61,10 +119,30 @@ export class FastChecker {
     this.telegramApi = options.telegramApi;
     this.chatId = options.chatId;
     this.allowedUserId = options.allowedUserId;
+    this.ctxThresholdPct = options.ctxRestartThreshold ?? 70;
 
     // Initialize persistent dedup
     this.dedupFilePath = join(paths.stateDir, '.message-dedup-hashes');
     this.loadDedupHashes();
+
+    // Initialize Gmail watch
+    if (options.gmailWatch) {
+      this.gmailWatch = options.gmailWatch;
+      this.gmailLastCheckedPath = join(paths.stateDir, 'gmail-last-checked.txt');
+      this.gmailDeliveredIdsPath = join(paths.stateDir, 'gmail-delivered-ids.json');
+      this.loadGmailLastCheckedAt();
+      this.loadGmailDeliveredIds();
+    }
+
+    if (options.slackWatch) {
+      this.slackWatch = { channel: options.slackWatch.channel, intervalMs: options.slackWatch.intervalMs };
+      this.slackApi = new SlackAPI(options.slackWatch.token);
+      this.slackLastTs = (Date.now() / 1000).toFixed(6);
+    }
+
+    // Initialize usage tier state
+    this.usageTierFile = join(paths.stateDir, 'usage-tier.json');
+    this.loadUsageTier();
   }
 
   /**
@@ -89,22 +167,103 @@ export class FastChecker {
     // Wait for bootstrap
     await this.waitForBootstrap();
     this.log('Bootstrap complete. Beginning poll loop.');
+    this.bootstrappedAt = Date.now();
+    this.stdoutLastChangeAt = Date.now();
 
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;
     this.heartbeatTimer = setInterval(() => {
       const ts = new Date().toISOString();
-      execFile('cortextos', ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`], (err) => {
+      exec(`cortextos bus update-heartbeat "[watchdog] ${agentName} alive — idle session ${ts}"`, (err) => {
         if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
       });
     }, HEARTBEAT_INTERVAL_MS);
+
+    // Poll-cycle watchdog: if pollCycle hasn't completed in 90s, force-restart
+    // the agent PTY. Runs on its own setInterval so it can't get stuck inside
+    // the poll loop. Gives the hung operation 30s (pollCycle timeout) + 60s
+    // buffer before deciding the session is truly wedged.
+    this.lastPollCycleCompletedAt = Date.now();
+    const WATCHDOG_INTERVAL_MS = 30 * 1000;
+    const STALL_THRESHOLD_MS = 90 * 1000;
+    this.pollCycleWatchdog = setInterval(() => {
+      const now = Date.now();
+      if (this.bootstrappedAt === 0) return;
+      if (now - this.bootstrappedAt < STALL_THRESHOLD_MS) return;
+
+      // Auto-reset circuit breaker after 30 min of quiet
+      if (
+        this.watchdogCircuitBroken &&
+        now - this.watchdogCircuitBrokenAt > this.WATCHDOG_CIRCUIT_RESET_MS
+      ) {
+        this.watchdogCircuitBroken = false;
+        this.watchdogRestarts = [];
+        this.log('Watchdog circuit breaker reset after 30min quiet window');
+      }
+      if (this.watchdogCircuitBroken) return;
+
+      const stallMs = now - this.lastPollCycleCompletedAt;
+      if (stallMs <= STALL_THRESHOLD_MS) return;
+
+      // Prune restart history older than the window
+      this.watchdogRestarts = this.watchdogRestarts.filter(
+        t => now - t < this.WATCHDOG_WINDOW_MS,
+      );
+
+      // Circuit break: too many restarts mean restart isn't fixing it
+      if (this.watchdogRestarts.length >= this.WATCHDOG_MAX_RESTARTS) {
+        this.watchdogCircuitBroken = true;
+        this.watchdogCircuitBrokenAt = now;
+        const winMin = this.WATCHDOG_WINDOW_MS / 60_000;
+        const resetMin = this.WATCHDOG_CIRCUIT_RESET_MS / 60_000;
+        this.log(
+          `Watchdog circuit breaker TRIPPED: ${this.watchdogRestarts.length} restarts in ${winMin}min. ` +
+            `Halting auto-restart for ${resetMin}min — likely upstream issue (Telegram/Anthropic down). ` +
+            `Check manually with: pm2 logs cortextos-daemon`,
+        );
+        if (this.telegramApi && this.chatId) {
+          const agentName = this.agent.name;
+          this.telegramApi
+            .sendMessage(
+              this.chatId,
+              `⚠️ ${agentName} watchdog tripped — ${this.watchdogRestarts.length} auto-restarts in ${winMin}min. Restart loop paused ${resetMin}min. Likely upstream issue. Manual fix: pm2 restart cortextos-daemon`,
+            )
+            .catch(() => {});
+        }
+        this.lastPollCycleCompletedAt = now;
+        return;
+      }
+
+      this.watchdogRestarts.push(now);
+      this.log(
+        `pollCycle stalled for ${Math.round(stallMs / 1000)}s — triggering hard-restart ` +
+          `(${this.watchdogRestarts.length}/${this.WATCHDOG_MAX_RESTARTS} in ${this.WATCHDOG_WINDOW_MS / 60_000}min window)`,
+      );
+      this.agent.hardRestartSelf(`pollCycle stalled for ${Math.round(stallMs / 1000)}s`).catch(err => {
+        this.log(`Force-restart error: ${err}`);
+      });
+      this.lastPollCycleCompletedAt = now;
+    }, WATCHDOG_INTERVAL_MS);
 
     while (this.running) {
       try {
         // Check for urgent signal file
         this.checkUrgentSignal();
-        await this.pollCycle();
+        // Race pollCycle against a timeout so a hung operation (e.g. stuck
+        // fetch, slow execFile) can't freeze the loop indefinitely. If the
+        // timeout fires, the underlying operation is abandoned (may still
+        // resolve in the background) and the loop continues on the next tick.
+        await Promise.race([
+          this.pollCycle(),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error(`pollCycle timeout after ${this.POLL_CYCLE_TIMEOUT_MS}ms`)),
+              this.POLL_CYCLE_TIMEOUT_MS,
+            ),
+          ),
+        ]);
+        this.lastPollCycleCompletedAt = Date.now();
       } catch (err) {
         this.log(`Poll error: ${err}`);
       }
@@ -124,6 +283,10 @@ export class FastChecker {
     if (this.heartbeatTimer !== null) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+    if (this.pollCycleWatchdog !== null) {
+      clearInterval(this.pollCycleWatchdog);
+      this.pollCycleWatchdog = null;
     }
   }
 
@@ -191,6 +354,423 @@ export class FastChecker {
     // Typing indicator: send while Claude is actively working
     if (this.chatId && this.telegramApi && this.isAgentActive()) {
       await this.sendTyping(this.telegramApi, this.chatId);
+    }
+
+    // Watchdog: detect ctx-exhaustion survey + frozen stdout
+    this.watchdogCheck();
+
+    // Gmail watch: check on configured interval (default 15 min)
+    await this.checkGmailWatch();
+
+    // Slack watch: check on configured interval (default 60 sec)
+    await this.checkSlackWatch();
+
+    // Usage rate-limit guard: check every 15 min
+    await this.checkUsageTier();
+  }
+
+  /**
+   * Detect stuck agent and trigger hard-restart.
+   * Ported from CRM fast-checker.sh (FROZEN_RESTART + context-threshold logic).
+   *
+   * Two signals:
+   *   1. Claude Code's "How is Claude doing this session?" survey prompt — fires
+   *      when context is exhausted and the session needs to end. If it appears
+   *      in stdout, the agent is cooked.
+   *   2. stdout log unchanged for 30+ min while the agent is "active" (has a
+   *      pending message and no idle flag) — passively frozen.
+   */
+  private watchdogCheck(): void {
+    if (this.watchdogTriggered) return;
+    const now = Date.now();
+    if (this.bootstrappedAt === 0 || now - this.bootstrappedAt < this.BOOTSTRAP_GRACE_MS) return;
+    if (this.lastHardRestartAt > 0 && now - this.lastHardRestartAt < this.HARD_RESTART_COOLDOWN_MS) return;
+
+    const stdoutPath = join(this.paths.logDir, 'stdout.log');
+    if (!existsSync(stdoutPath)) return;
+
+    let size: number;
+    try { size = statSync(stdoutPath).size; } catch { return; }
+
+    if (size !== this.stdoutLastSize) {
+      this.stdoutLastSize = size;
+      this.stdoutLastChangeAt = now;
+    }
+
+    // Read tail once — shared by Signal 1 and Signal 3
+    let tail = '';
+    try {
+      const tailBytes = Math.min(20000, size);
+      if (tailBytes > 0) {
+        const fd = openSync(stdoutPath, 'r');
+        const buf = Buffer.alloc(tailBytes);
+        readSync(fd, buf, 0, tailBytes, size - tailBytes);
+        closeSync(fd);
+        tail = buf.toString('utf-8');
+      }
+    } catch { /* non-critical */ }
+
+    // Signal 1: session-survey prompt → immediate hard restart
+    if (tail && /How is Claude doing this session\?/.test(tail)) {
+      this.log('WATCHDOG: ctx-exhaustion survey prompt detected — hard-restarting');
+      this.triggerHardRestart('ctx exhaustion: session survey prompt in stdout');
+      return;
+    }
+
+    // Signal 3: context-threshold → proactive graceful restart
+    if (tail && this.ctxThresholdPct > 0) {
+      // Strip ANSI escape codes before applying the pattern
+      const stripped = tail.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+      const pctMatch = stripped.match(/\[(?:Sonnet|Opus|Haiku)[^\]]*\][^\d]*(\d+)%/);
+      if (pctMatch) {
+        const pct = parseInt(pctMatch[1], 10);
+        if (pct >= this.ctxThresholdPct) {
+          if (this.ctxThresholdTriggeredAt === 0 ||
+              now - this.ctxThresholdTriggeredAt > this.CTX_THRESHOLD_COOLDOWN_MS) {
+            // First trigger (or cooldown expired): inject graceful restart request
+            this.ctxThresholdTriggeredAt = now;
+            const msg = `Context window at ${pct}%. Please write your session memory and observations now, then run: cortextos bus hard-restart --reason "proactive context reset at ${pct}%"`;
+            this.agent.injectMessage(msg);
+            this.log(`WATCHDOG: ctx at ${pct}% >= threshold ${this.ctxThresholdPct}% — injected graceful restart request`);
+          } else if (now - this.ctxThresholdTriggeredAt > this.CTX_THRESHOLD_FALLBACK_MS) {
+            // Agent ignored the injection for 15 min — fallback hard restart
+            const minAgo = Math.round((now - this.ctxThresholdTriggeredAt) / 60000);
+            this.log(`WATCHDOG: ctx threshold fallback — agent ignored restart request for ${minAgo}min`);
+            this.triggerHardRestart(`ctx threshold fallback: agent at ${pct}% ignored graceful restart for ${minAgo}min`);
+            return;
+          }
+        }
+      }
+    }
+
+    // Signal 2: stdout frozen for 30+ min while agent is active.
+    if (
+      this.lastMessageInjectedAt > 0 &&
+      now - this.stdoutLastChangeAt > this.STDOUT_FROZEN_MS &&
+      this.isAgentActive()
+    ) {
+      const stalledSec = Math.round((now - this.stdoutLastChangeAt) / 1000);
+      this.log(`WATCHDOG: stdout frozen for ${stalledSec}s while active — hard-restarting`);
+      this.triggerHardRestart(`frozen: stdout unchanged ${stalledSec}s while active`);
+    }
+  }
+
+  private triggerHardRestart(reason: string): void {
+    this.watchdogTriggered = true;
+    this.lastHardRestartAt = Date.now();
+    if (this.telegramApi && this.chatId) {
+      this.telegramApi
+        .sendMessage(this.chatId, `Got stuck (${reason}). Hard-restarting now.`)
+        .catch(() => { /* non-critical */ });
+    }
+    this.agent.hardRestartSelf(reason).catch(e => this.log(`hardRestartSelf failed: ${e}`));
+  }
+
+  /**
+   * Poll Gmail for unread messages matching the configured query.
+   *
+   * Runs on the configured interval (default 15 min). Uses the `gws` CLI
+   * (https://github.com/google-workspace-utilities/gws) which reads OAuth
+   * credentials from ~/.config/gws/. Requires `gws` to be authenticated.
+   *
+   * If unread messages are found: writes an inbox message so Claude wakes
+   * and processes them. If nothing matches: does nothing (zero Claude cost).
+   * Claude is responsible for marking messages read after processing.
+   */
+  private async checkGmailWatch(): Promise<void> {
+    if (!this.gmailWatch) return;
+    const now = Date.now();
+    if (now - this.gmailLastCheckedAt < this.gmailWatch.intervalMs) return;
+    this.gmailLastCheckedAt = now;
+    this.saveGmailLastCheckedAt();
+
+    // Fetch unread message list
+    let listOutput = '';
+    try {
+      listOutput = await new Promise<string>((resolve, reject) => {
+        execFile('gws', ['gmail', 'users', 'messages', 'list',
+          '--params', JSON.stringify({ userId: 'me', q: this.gmailWatch!.query }),
+          '--format', 'json',
+        ], (err, stdout) => {
+          if (err) { reject(err); return; }
+          resolve(stdout);
+        });
+      });
+    } catch (err) {
+      this.log(`Gmail watch list failed: ${err}`);
+      return;
+    }
+
+    let messageIds: string[] = [];
+    try {
+      const data = JSON.parse(listOutput);
+      messageIds = (data?.messages ?? []).map((m: { id: string }) => m.id).filter(Boolean);
+    } catch {
+      this.log('Gmail watch: could not parse list response');
+      return;
+    }
+
+    if (messageIds.length === 0) return; // nothing to do
+
+    // Filter out already-delivered IDs (2h TTL dedup)
+    this.pruneGmailDeliveredIds();
+    const newIds = messageIds.filter(id => !this.gmailDeliveredIds.has(id));
+    if (newIds.length === 0) {
+      this.log('Gmail watch: all messages already delivered — skipping');
+      return;
+    }
+
+    // Fetch snippet + subject for each new message (metadata format only)
+    const summaries: string[] = [];
+    for (const id of newIds.slice(0, 20)) { // cap at 20 to avoid runaway fetches
+      try {
+        const getOutput = await new Promise<string>((resolve, reject) => {
+          execFile('gws', ['gmail', 'users', 'messages', 'get',
+            '--params', JSON.stringify({ userId: 'me', id, format: 'metadata', metadataHeaders: ['Subject', 'From'] }),
+            '--format', 'json',
+          ], (err, stdout) => {
+            if (err) { reject(err); return; }
+            resolve(stdout);
+          });
+        });
+        const msg = JSON.parse(getOutput);
+        const headers: Array<{ name: string; value: string }> = msg?.payload?.headers ?? [];
+        const subject = headers.find(h => h.name === 'Subject')?.value ?? '(no subject)';
+        const from = headers.find(h => h.name === 'From')?.value ?? '(unknown)';
+        const snippet = msg?.snippet ?? '';
+        summaries.push(`ID: ${id}\n   Subject: ${subject}\n   From: ${from}\n   Snippet: ${snippet.slice(0, 200)}`);
+      } catch {
+        summaries.push(`ID: ${id} (could not fetch details)`);
+      }
+    }
+
+    const total = newIds.length;
+    const shown = summaries.length;
+    const header = `=== GMAIL WATCH: ${total} unread message${total !== 1 ? 's' : ''} ===\n` +
+      `Query: ${this.gmailWatch.query}\n\n`;
+    const body = summaries.map((s, i) => `${i + 1}. ${s}`).join('\n\n');
+    const footer = total > shown ? `\n\n(${total - shown} more not shown)` : '';
+    const hint = `\n\nProcess: gws gmail users messages get --params '{"userId":"me","id":"<ID>","format":"full"}' --format json` +
+      `\nMark read: gws gmail users messages modify --params '{"userId":"me","id":"<ID>"}' --json '{"removeLabelIds":["UNREAD"]}' --format json`;
+
+    const inboxText = header + body + footer + hint;
+    this.log(`Gmail watch: ${total} new unread message(s) — writing inbox`);
+
+    try {
+      sendMessage(this.paths, 'fast-checker', this.agent.name, 'normal', inboxText);
+      // Record delivered IDs
+      for (const id of newIds.slice(0, 20)) {
+        this.gmailDeliveredIds.set(id, now);
+      }
+      this.saveGmailDeliveredIds();
+    } catch (err) {
+      this.log(`Gmail watch inbox write failed: ${err}`);
+    }
+  }
+
+  private loadGmailLastCheckedAt(): void {
+    try {
+      if (existsSync(this.gmailLastCheckedPath)) {
+        const raw = readFileSync(this.gmailLastCheckedPath, 'utf-8').trim();
+        const epoch = parseInt(raw, 10);
+        if (!isNaN(epoch)) this.gmailLastCheckedAt = epoch;
+      }
+    } catch (err) {
+      this.log(`Gmail watch: could not load last-checked timestamp (restart dedup disabled): ${err}`);
+    }
+  }
+
+  private saveGmailLastCheckedAt(): void {
+    try {
+      writeFileSync(this.gmailLastCheckedPath, String(this.gmailLastCheckedAt) + '\n', 'utf-8');
+    } catch (err) {
+      this.log(`Gmail watch: could not persist last-checked timestamp: ${err}`);
+    }
+  }
+
+  private loadGmailDeliveredIds(): void {
+    try {
+      if (existsSync(this.gmailDeliveredIdsPath)) {
+        const raw = JSON.parse(readFileSync(this.gmailDeliveredIdsPath, 'utf-8'));
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+          for (const [id, ts] of Object.entries(raw)) {
+            if (typeof ts === 'number') this.gmailDeliveredIds.set(id, ts);
+          }
+        }
+      }
+    } catch (err) {
+      this.log(`Gmail watch: could not load delivered IDs (message dedup disabled): ${err}`);
+    }
+  }
+
+  private saveGmailDeliveredIds(): void {
+    try {
+      const obj: Record<string, number> = {};
+      for (const [id, ts] of this.gmailDeliveredIds) {
+        obj[id] = ts;
+      }
+      writeFileSync(this.gmailDeliveredIdsPath, JSON.stringify(obj) + '\n', 'utf-8');
+    } catch (err) {
+      this.log(`Gmail watch: could not persist delivered IDs: ${err}`);
+    }
+  }
+
+  private pruneGmailDeliveredIds(): void {
+    const cutoff = Date.now() - this.GMAIL_DELIVERED_TTL_MS;
+    for (const [id, ts] of this.gmailDeliveredIds) {
+      if (ts < cutoff) this.gmailDeliveredIds.delete(id);
+    }
+  }
+
+  private async checkSlackWatch(): Promise<void> {
+    if (!this.slackWatch || !this.slackApi) return;
+    const now = Date.now();
+    if (now - this.slackLastCheckedAt < this.slackWatch.intervalMs) return;
+    this.slackLastCheckedAt = now;
+
+    let messages: SlackMessage[] = [];
+    try {
+      messages = await this.slackApi.getHistory(this.slackWatch.channel, this.slackLastTs);
+    } catch (err) {
+      this.log(`Slack watch poll failed: ${err}`);
+      return;
+    }
+
+    // Filter out bot's own messages to prevent self-wake loops
+    messages = messages.filter(m => m.subtype !== 'bot_message');
+    if (messages.length === 0) return;
+
+    const newest = messages[messages.length - 1];
+    this.slackLastTs = newest.ts;
+
+    const formatted: string[] = [];
+    for (const msg of messages.slice(0, 10)) {
+      let displayName = msg.username ?? msg.user ?? 'unknown';
+      if (msg.user && !msg.username && this.slackApi) {
+        displayName = await this.slackApi.getUserName(msg.user).catch(() => msg.user ?? 'unknown');
+      }
+      formatted.push(
+        `=== SLACK from ${displayName} (channel:${this.slackWatch.channel} ts:${msg.ts}) ===\n` +
+        `${msg.text}\n` +
+        `Reply using: cortextos bus send-slack ${this.slackWatch.channel} "<reply>"`,
+      );
+    }
+
+    const remaining = messages.length - formatted.length;
+    const trailer = remaining > 0 ? `\n\n(${remaining} more messages not shown)` : '';
+    const inboxText = formatted.join('\n\n---\n\n') + trailer;
+
+    this.log(`Slack watch: ${messages.length} new message(s) in ${this.slackWatch.channel} — writing inbox`);
+    try {
+      sendMessage(this.paths, 'fast-checker', this.agent.name, 'normal', inboxText);
+    } catch (err) {
+      this.log(`Slack watch inbox write failed: ${err}`);
+    }
+  }
+
+  /**
+   * Check Claude Max API utilization and send tier-transition alerts.
+   *
+   * Runs every 15 minutes. Calls `cortextos bus check-usage-api` and reads
+   * the JSON output. Computes tier (0=normal, 1=high≥85%, 2=critical≥95%).
+   * On tier change: sends a Telegram alert directly (no Claude wake) and
+   * writes an inbox message so Claude acts on it next time it is awake.
+   * Tier state persists across restarts in usage-tier.json.
+   */
+  private async checkUsageTier(): Promise<void> {
+    const now = Date.now();
+    if (now - this.usageLastCheckedAt < this.USAGE_CHECK_INTERVAL_MS) return;
+    this.usageLastCheckedAt = now;
+
+    let rawJson = '';
+    try {
+      rawJson = await new Promise<string>((resolve, reject) => {
+        // Request JSON output — the CLI command doesn't accept the old shell
+        // script's --warn-* flags. Alerting is handled here on tier transitions.
+        execFile('cortextos', ['bus', 'check-usage-api', '--json'], (err, stdout) => {
+          if (err) { reject(err); return; }
+          resolve(stdout);
+        });
+      });
+    } catch (err) {
+      this.log(`Usage check failed: ${err}`);
+      return;
+    }
+
+    let utilization = -1;
+    try {
+      const data = JSON.parse(rawJson);
+      // Support both formats: new CLI flat 0-1 floats (five_hour_utilization)
+      // and legacy nested percentage (five_hour.utilization). Percentages assumed
+      // if value > 1.
+      const rawFiveH = data?.five_hour_utilization ?? data?.five_hour?.utilization;
+      const rawSevenD = data?.seven_day_utilization ?? data?.seven_day?.utilization;
+      const toPct = (v: unknown): number =>
+        typeof v === 'number' ? (v <= 1 ? v * 100 : v) : -1;
+      const fiveH = toPct(rawFiveH);
+      const sevenD = toPct(rawSevenD);
+      utilization = Math.max(fiveH, sevenD);
+    } catch {
+      this.log('Usage check: could not parse response');
+      return;
+    }
+
+    if (utilization < 0) return;
+
+    const newTier: 0 | 1 | 2 = utilization >= 95 ? 2 : utilization >= 85 ? 1 : 0;
+    const prevTier = this.usageTier;
+
+    if (newTier === prevTier) return; // no transition — stay quiet
+
+    this.usageTier = newTier;
+    this.saveUsageTier();
+
+    const pct = Math.round(utilization);
+    const msg = newTier === 0
+      ? `Rate limit recovered. Utilization at ${pct}%. Resuming normal operations.`
+      : newTier === 1
+        ? `Rate limit at ${pct}%. Tier 1 wind-down: finish current task, no new autonomous work.`
+        : `Rate limit at ${pct}%. Critical threshold reached. Going dark — do not start new work. Will notify on reset.`;
+
+    this.log(`Usage tier transition: ${prevTier} → ${newTier} (${pct}%)`);
+
+    // 1. Send Telegram alert directly (no Claude wake needed)
+    if (this.telegramApi && this.chatId) {
+      this.telegramApi.sendMessage(this.chatId, msg).catch(() => { /* non-critical */ });
+    }
+
+    // 2. Write inbox message so Claude acts on it next time it is awake
+    try {
+      sendMessage(this.paths, 'fast-checker', this.agent.name, 'urgent', msg);
+    } catch (err) {
+      this.log(`Usage tier inbox write failed: ${err}`);
+    }
+  }
+
+  /**
+   * Load usage tier from persistent file.
+   */
+  private loadUsageTier(): void {
+    try {
+      if (existsSync(this.usageTierFile)) {
+        const data = JSON.parse(readFileSync(this.usageTierFile, 'utf-8'));
+        if (data.tier === 0 || data.tier === 1 || data.tier === 2) {
+          this.usageTier = data.tier;
+        }
+      }
+    } catch {
+      this.usageTier = 0;
+    }
+  }
+
+  /**
+   * Persist current usage tier to file.
+   */
+  private saveUsageTier(): void {
+    try {
+      writeFileSync(this.usageTierFile, JSON.stringify({ tier: this.usageTier, checkedAt: Date.now() }) + '\n', 'utf-8');
+    } catch {
+      // Non-critical
     }
   }
 

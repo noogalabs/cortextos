@@ -59,15 +59,6 @@ export interface Task {
   result?: string;
   /** Linked deliverables (files saved via `cortextos bus save-output`). */
   outputs?: TaskOutput[];
-  /**
-   * Dependency DAG edges (beads-inspired). Optional so existing task
-   * files remain valid with these fields absent. `blocked_by` lists
-   * task IDs that must reach `completed` before this task can
-   * progress; `blocks` is the reverse view, maintained symmetrically
-   * at create-time so queries in either direction are cheap.
-   */
-  blocks?: string[];
-  blocked_by?: string[];
 }
 
 // Event Types
@@ -158,6 +149,24 @@ export interface AgentConfig {
   max_session_seconds?: number;
   max_crashes_per_day?: number;
   model?: string;
+  /**
+   * Cost tier for model routing: 'haiku' | 'sonnet' | 'opus'.
+   * Ignored when `model` is set (explicit model takes precedence).
+   * Resolved to a concrete model ID via model_tiers (or DEFAULT_MODEL_TIERS).
+   */
+  tier?: 'haiku' | 'sonnet' | 'opus';
+  /**
+   * Per-agent overrides for the tier→model ID mapping.
+   * Merges on top of DEFAULT_MODEL_TIERS — only specify the tiers you want to override.
+   */
+  model_tiers?: { haiku?: string; sonnet?: string; opus?: string };
+  /**
+   * How long to pause (seconds) when an Anthropic rate-limit exit is detected,
+   * before restarting the agent. Defaults to 18000 (5 hours) — the standard
+   * Anthropic rolling rate-limit window. Rate-limit pauses do NOT count toward
+   * max_crashes_per_day and do NOT trigger the git watchdog.
+   */
+  rate_limit_pause_seconds?: number;
   working_directory?: string;
   enabled?: boolean;
   crons?: CronEntry[];
@@ -165,11 +174,59 @@ export interface AgentConfig {
   day_mode_start?: string;
   day_mode_end?: string;
   communication_style?: string;
+  /**
+   * Display name for the business or team operating this agent.
+   * When set, the dashboard sidebar and title show this name instead of "cortextOS".
+   * Typically set by the onboarding wizard from the user's company name.
+   */
+  brand_name?: string;
   approval_rules?: {
     always_ask: string[];
     never_ask: string[];
   };
   ecosystem?: EcosystemConfig;
+  /**
+   * Gmail watch: when present, the fast-checker daemon polls Gmail every
+   * `interval_ms` (default 15 min) using the `gws` CLI and writes an inbox
+   * message to wake Claude if unread messages match the query.
+   * Requires `gws` to be authenticated (see ~/.config/gws/).
+   */
+  gmail_watch?: {
+    /** Gmail API query string (e.g. "from:example.com is:unread") */
+    query: string;
+    /** Poll interval in milliseconds. Default: 900000 (15 minutes) */
+    interval_ms?: number;
+  };
+  /**
+   * Slack watch: when present, the fast-checker daemon polls a Slack channel
+   * every interval_ms (default 60 seconds) and writes an inbox message to
+   * wake Claude if new messages appear since the last check.
+   * Requires SLACK_BOT_TOKEN in the agent .env.
+   */
+  slack_watch?: {
+    /** Slack channel ID to monitor (e.g. 'C1234567890') */
+    channel: string;
+    /** Poll interval in milliseconds. Default: 60000 */
+    interval_ms?: number;
+  };
+  /**
+   * Slack handles whose messages the agent treats as instructions
+   * (vs passive data). Must match TeamMember.slack_handle values.
+   * Example: ["brittany.hunter", "david.hunter"]
+   */
+  trusted_slack_users?: string[];
+
+  /**
+   * Maps semantic function names to Slack channel IDs for outbound routing.
+   * Agents use this to post to the right channel without hardcoding IDs.
+   * Example: { "maintenance": "C1234567890", "leasing": "C0987654321" }
+   */
+  slack_channels?: Record<string, string>;
+  /**
+   * Context window percentage at which fast-checker proactively asks the
+   * agent to write memory and restart (default 70). Set to 0 to disable.
+   */
+  ctx_restart_threshold?: number;
 }
 
 export interface CronEntry {
@@ -199,11 +256,22 @@ export interface OrgContext {
   default_approval_categories?: string[];
   communication_style?: string;
   dashboard_url?: string;
+  /** Display name shown on dashboard (title bar, login page, sidebar header).
+   *  If unset, falls back to `name` with smart-casing, then to "cortextOS". */
+  brand_name?: string;
+  /** Short brand name for compact UI slots (favicon caption, mobile nav).
+   *  If unset, falls back to `brand_name` or `name`. */
+  brand_short_name?: string;
   /** When true, agents are instructed at startup that every task submitted
    *  for review must have at least one file deliverable attached via
    *  save-output. The instruction is injected into the boot prompt
    *  dynamically — no agent markdown files are modified. */
   require_deliverables?: boolean;
+  /**
+   * Human team members accessible to agents in this org via Slack.
+   * Agents reference this to resolve slack_handles and trust levels.
+   */
+  team_members?: TeamMember[];
 }
 
 // Telegram Types
@@ -392,11 +460,30 @@ export interface AgentInfo {
   mode: string | null;
 }
 
+export type TrustLevel = 'owner' | 'manager' | 'member';
+
+export const VALID_TRUST_LEVELS: TrustLevel[] = ['owner', 'manager', 'member'];
+
+/**
+ * A human team member connected via Slack.
+ * Stored in org config or agent config under team_members.
+ */
+export interface TeamMember {
+  /** Display name (e.g. "Brittany Hunter") */
+  name: string;
+  /** Job role or title (e.g. "Operations Manager") */
+  role: string;
+  /** Slack handle without @ (e.g. "brittany.hunter") */
+  slack_handle: string;
+  /** Trust level — determines how the agent treats messages from this person */
+  trust_level: TrustLevel;
+}
+
 // Agent Status (returned by daemon)
 
 export interface AgentStatus {
   name: string;
-  status: 'running' | 'stopped' | 'crashed' | 'starting' | 'halted';
+  status: 'running' | 'stopped' | 'crashed' | 'starting' | 'halted' | 'rate-limited';
   pid?: number;
   uptime?: number; // seconds
   lastHeartbeat?: string;
