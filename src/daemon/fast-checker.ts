@@ -491,7 +491,7 @@ export class FastChecker {
         execFile('gws', ['gmail', 'users', 'messages', 'list',
           '--params', JSON.stringify({ userId: 'me', q: this.gmailWatch!.query }),
           '--format', 'json',
-        ], (err, stdout) => {
+        ], { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
           if (err) { reject(err); return; }
           resolve(stdout);
         });
@@ -528,7 +528,7 @@ export class FastChecker {
           execFile('gws', ['gmail', 'users', 'messages', 'get',
             '--params', JSON.stringify({ userId: 'me', id, format: 'metadata', metadataHeaders: ['Subject', 'From'] }),
             '--format', 'json',
-          ], (err, stdout) => {
+          ], { timeout: 10_000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
             if (err) { reject(err); return; }
             resolve(stdout);
           });
@@ -687,7 +687,7 @@ export class FastChecker {
       rawJson = await new Promise<string>((resolve, reject) => {
         // Request JSON output — the CLI command doesn't accept the old shell
         // script's --warn-* flags. Alerting is handled here on tier transitions.
-        execFile('cortextos', ['bus', 'check-usage-api', '--json'], (err, stdout) => {
+        execFile('cortextos', ['bus', 'check-usage-api', '--json'], { timeout: 10_000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
           if (err) { reject(err); return; }
           resolve(stdout);
         });

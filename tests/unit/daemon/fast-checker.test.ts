@@ -818,7 +818,7 @@ describe('FastChecker', () => {
 
     it('TC-U1: transitions normal→high at 85%', async () => {
       const { checker, telegramApi } = createUsageChecker();
-      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, _args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 85 }, seven_day: { utilization: 0 } }));
         return {} as any;
       });
@@ -840,7 +840,7 @@ describe('FastChecker', () => {
 
     it('TC-U2: transitions normal→critical at 95%', async () => {
       const { checker, telegramApi } = createUsageChecker();
-      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, _args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 95 }, seven_day: { utilization: 0 } }));
         return {} as any;
       });
@@ -862,7 +862,7 @@ describe('FastChecker', () => {
     it('TC-U3: no alert when same tier (no transition)', async () => {
       const { checker, telegramApi } = createUsageChecker();
       (checker as any).usageTier = 1;
-      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, _args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 87 }, seven_day: { utilization: 0 } }));
         return {} as any;
       });
@@ -876,7 +876,7 @@ describe('FastChecker', () => {
     it('TC-U4: recovery — high→normal fires alert', async () => {
       const { checker, telegramApi } = createUsageChecker();
       (checker as any).usageTier = 1;
-      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, _args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 10 }, seven_day: { utilization: 0 } }));
         return {} as any;
       });
@@ -908,7 +908,7 @@ describe('FastChecker', () => {
 
     it('TC-U6: time gate — does not re-check within 15 minutes', async () => {
       const { checker } = createUsageChecker();
-      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, _args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 85 }, seven_day: { utilization: 0 } }));
         return {} as any;
       });
@@ -921,7 +921,7 @@ describe('FastChecker', () => {
 
     it('TC-U7: handles execFile error gracefully — no throw, no alert', async () => {
       const { checker, telegramApi } = createUsageChecker();
-      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, _args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         (callback as Function)(new Error('network error'), '');
         return {} as any;
       });
@@ -933,7 +933,7 @@ describe('FastChecker', () => {
 
     it('TC-U8: uses max of five_hour and seven_day utilization', async () => {
       const { checker, telegramApi } = createUsageChecker();
-      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, _args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         (callback as Function)(null, JSON.stringify({ five_hour: { utilization: 70 }, seven_day: { utilization: 90 } }));
         return {} as any;
       });
@@ -974,7 +974,7 @@ describe('FastChecker', () => {
 
     it('TC-G2: detects unread messages and writes inbox entry', async () => {
       const checker = createGmailChecker({ query: 'from:test.com is:unread', intervalMs: 900000 });
-      vi.mocked(execFile).mockImplementation((_cmd, args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         if (args[3] === 'list') {
           (callback as Function)(null, JSON.stringify({ messages: [{ id: 'msg1', threadId: 't1' }] }));
         } else {
@@ -1012,7 +1012,7 @@ describe('FastChecker', () => {
 
     it('TC-G3: silent when no messages match query', async () => {
       const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
-      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, _args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         (callback as Function)(null, JSON.stringify({}));
         return {} as any;
       });
@@ -1024,7 +1024,7 @@ describe('FastChecker', () => {
 
     it('TC-G4: silent when messages array is empty', async () => {
       const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
-      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, _args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         (callback as Function)(null, JSON.stringify({ messages: [] }));
         return {} as any;
       });
@@ -1036,7 +1036,7 @@ describe('FastChecker', () => {
 
     it('TC-G5: handles gws auth error gracefully — no throw, no inbox write', async () => {
       const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
-      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, _args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         (callback as Function)(new Error('auth error: token expired'), '');
         return {} as any;
       });
@@ -1047,7 +1047,7 @@ describe('FastChecker', () => {
 
     it('TC-G6: time gate — does not re-check before intervalMs elapses', async () => {
       const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
-      vi.mocked(execFile).mockImplementation((_cmd, _args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, _args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         (callback as Function)(null, JSON.stringify({ messages: [] }));
         return {} as any;
       });
@@ -1061,7 +1061,7 @@ describe('FastChecker', () => {
     it('TC-G7: inbox message includes message count', async () => {
       const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
       let getCount = 0;
-      vi.mocked(execFile).mockImplementation((_cmd, args, callback) => {
+      vi.mocked(execFile).mockImplementation((_cmd, args, _optsOrCb, maybeCb?) => { const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
         if (args[3] === 'list') {
           (callback as Function)(null, JSON.stringify({ messages: [{ id: 'msg1' }, { id: 'msg2' }, { id: 'msg3' }] }));
         } else {
