@@ -443,7 +443,33 @@ export class AgentProcess {
 
     try {
       const files = require('fs').readdirSync(convDir);
-      return files.some((f: string) => f.endsWith('.jsonl'));
+      const hasConversation = files.some((f: string) => f.endsWith('.jsonl'));
+      if (!hasConversation) return false;
+
+      // Check if the previous session died at full context or hit a billing gate.
+      // Read the tail of the most recent .jsonl — if it contains fatal API errors,
+      // resuming with --continue will just hit the same wall. Force fresh instead.
+      const jsonlFiles = files.filter((f: string) => f.endsWith('.jsonl')).sort();
+      const lastJsonl = jsonlFiles[jsonlFiles.length - 1];
+      if (lastJsonl) {
+        try {
+          const convPath = join(convDir, lastJsonl);
+          const stat = statSync(convPath);
+          const tailSize = Math.min(10_000, stat.size);
+          const buf = Buffer.alloc(tailSize);
+          const fd = require('fs').openSync(convPath, 'r');
+          require('fs').readSync(fd, buf, 0, tailSize, Math.max(0, stat.size - tailSize));
+          require('fs').closeSync(fd);
+          const tail = buf.toString('utf-8');
+          if (/Extra usage is required for 1M context/.test(tail) ||
+              /context window is full/.test(tail)) {
+            this.log('shouldContinue: previous session hit context/billing limit — forcing fresh start');
+            return false;
+          }
+        } catch { /* best effort — fall through to continue */ }
+      }
+
+      return true;
     } catch {
       return false;
     }
