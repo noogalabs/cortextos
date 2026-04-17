@@ -170,6 +170,7 @@ export interface AgentConfig {
     never_ask: string[];
   };
   ecosystem?: EcosystemConfig;
+  ctx_restart_threshold?: number;
 }
 
 export interface CronEntry {

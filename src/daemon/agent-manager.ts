@@ -243,6 +243,7 @@ export class AgentManager {
       telegramApi,
       chatId,
       allowedUserId: allowedUserId ? parseInt(allowedUserId, 10) : undefined,
+      ctxRestartThreshold: config?.ctx_restart_threshold,
     });
 
     // Send Telegram notification on crashes and session refreshes

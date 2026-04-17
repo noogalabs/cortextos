@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
@@ -47,11 +47,33 @@ export class FastChecker {
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
 
+  // Context-exhaustion + frozen-stdout watchdog state
+  private bootstrappedAt: number = 0;
+  private lastHardRestartAt: number = 0;
+  private stdoutLastSize: number = 0;
+  private stdoutLastChangeAt: number = 0;
+  private watchdogTriggered: boolean = false;
+  private readonly BOOTSTRAP_GRACE_MS = 10 * 60 * 1000;
+  private readonly HARD_RESTART_COOLDOWN_MS = 15 * 60 * 1000;
+  private readonly STDOUT_FROZEN_MS = 30 * 60 * 1000;
+  // Context-threshold graceful restart state
+  private ctxThresholdPct: number = 0;
+  private ctxThresholdTriggeredAt: number = 0;
+  private readonly CTX_THRESHOLD_COOLDOWN_MS = 10 * 60 * 1000;
+  private readonly CTX_THRESHOLD_FALLBACK_MS = 15 * 60 * 1000;
+
   constructor(
     agent: AgentProcess,
     paths: BusPaths,
     frameworkRoot: string,
-    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number } = {},
+    options: {
+      pollInterval?: number;
+      log?: LogFn;
+      telegramApi?: TelegramAPI;
+      chatId?: string;
+      allowedUserId?: number;
+      ctxRestartThreshold?: number;
+    } = {},
   ) {
     this.agent = agent;
     this.paths = paths;
@@ -61,6 +83,7 @@ export class FastChecker {
     this.telegramApi = options.telegramApi;
     this.chatId = options.chatId;
     this.allowedUserId = options.allowedUserId;
+    this.ctxThresholdPct = options.ctxRestartThreshold ?? 0;
 
     // Initialize persistent dedup
     this.dedupFilePath = join(paths.stateDir, '.message-dedup-hashes');
@@ -89,6 +112,8 @@ export class FastChecker {
     // Wait for bootstrap
     await this.waitForBootstrap();
     this.log('Bootstrap complete. Beginning poll loop.');
+    this.bootstrappedAt = Date.now();
+    this.stdoutLastChangeAt = Date.now();
 
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
@@ -192,6 +217,98 @@ export class FastChecker {
     if (this.chatId && this.telegramApi && this.isAgentActive()) {
       await this.sendTyping(this.telegramApi, this.chatId);
     }
+
+    this.watchdogCheck();
+  }
+
+  /**
+   * Detect stuck or context-exhausted agent and trigger restart.
+   *
+   * Three signals checked on every poll cycle:
+   *   1. Claude Code's end-of-session survey prompt in stdout — context fully
+   *      exhausted, hard-restart immediately.
+   *   2. stdout unchanged for 30+ min while agent is active — passively frozen,
+   *      hard-restart.
+   *   3. Context % at or above ctxRestartThreshold — inject a graceful restart
+   *      request; fall back to hard-restart if agent ignores it for 15 min.
+   *      Signal 3 is skipped when ctxRestartThreshold is 0 (default/disabled).
+   */
+  private watchdogCheck(): void {
+    if (this.watchdogTriggered) return;
+    const now = Date.now();
+    if (this.bootstrappedAt === 0 || now - this.bootstrappedAt < this.BOOTSTRAP_GRACE_MS) return;
+    if (this.lastHardRestartAt > 0 && now - this.lastHardRestartAt < this.HARD_RESTART_COOLDOWN_MS) return;
+
+    const stdoutPath = join(this.paths.logDir, 'stdout.log');
+    if (!existsSync(stdoutPath)) return;
+
+    let size: number;
+    try { size = statSync(stdoutPath).size; } catch { return; }
+
+    if (size !== this.stdoutLastSize) {
+      this.stdoutLastSize = size;
+      this.stdoutLastChangeAt = now;
+    }
+
+    // Read tail once — shared by Signal 1 and Signal 3
+    let tail = '';
+    try {
+      const tailBytes = Math.min(20000, size);
+      if (tailBytes > 0) {
+        const fd = openSync(stdoutPath, 'r');
+        const buf = Buffer.alloc(tailBytes);
+        readSync(fd, buf, 0, tailBytes, size - tailBytes);
+        closeSync(fd);
+        tail = buf.toString('utf-8');
+      }
+    } catch { /* non-critical */ }
+
+    // Signal 1: end-of-session survey → immediate hard restart
+    if (tail && /How is Claude doing this session\?/.test(tail)) {
+      this.log('WATCHDOG: ctx-exhaustion survey detected — hard-restarting');
+      this.triggerHardRestart('ctx exhaustion: session survey in stdout');
+      return;
+    }
+
+    // Signal 3: context-threshold → proactive graceful restart
+    if (tail && this.ctxThresholdPct > 0) {
+      const stripped = tail.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+      const pctMatch = stripped.match(/\[(?:Sonnet|Opus|Haiku)[^\]]*\][^\d]*(\d+)%/);
+      if (pctMatch) {
+        const pct = parseInt(pctMatch[1], 10);
+        if (pct >= this.ctxThresholdPct) {
+          if (this.ctxThresholdTriggeredAt === 0 ||
+              now - this.ctxThresholdTriggeredAt > this.CTX_THRESHOLD_COOLDOWN_MS) {
+            this.ctxThresholdTriggeredAt = now;
+            const msg = `Context window at ${pct}%. Please wrap up your current task, save notes to memory, then run: cortextos bus hard-restart --reason "ctx reset at ${pct}%"`;
+            this.agent.injectMessage(msg);
+            this.log(`WATCHDOG: ctx at ${pct}% >= threshold ${this.ctxThresholdPct}% — injected graceful restart request`);
+          } else if (now - this.ctxThresholdTriggeredAt > this.CTX_THRESHOLD_FALLBACK_MS) {
+            const minAgo = Math.round((now - this.ctxThresholdTriggeredAt) / 60000);
+            this.log(`WATCHDOG: ctx threshold fallback — agent ignored restart for ${minAgo}min`);
+            this.triggerHardRestart(`ctx threshold fallback: at ${pct}%, ignored graceful restart for ${minAgo}min`);
+            return;
+          }
+        }
+      }
+    }
+
+    // Signal 2: stdout frozen for 30+ min while agent is active
+    if (
+      this.lastMessageInjectedAt > 0 &&
+      now - this.stdoutLastChangeAt > this.STDOUT_FROZEN_MS &&
+      this.isAgentActive()
+    ) {
+      const stalledSec = Math.round((now - this.stdoutLastChangeAt) / 1000);
+      this.log(`WATCHDOG: stdout frozen ${stalledSec}s while active — hard-restarting`);
+      this.triggerHardRestart(`frozen: stdout unchanged ${stalledSec}s while active`);
+    }
+  }
+
+  private triggerHardRestart(reason: string): void {
+    this.watchdogTriggered = true;
+    this.lastHardRestartAt = Date.now();
+    this.agent.hardRestartSelf(reason).catch(err => this.log(`Hard-restart error: ${err}`));
   }
 
   /**
