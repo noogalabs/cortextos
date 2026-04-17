@@ -66,10 +66,10 @@ export class FastChecker {
   private readonly SLACK_DEFAULT_INTERVAL_MS = 60 * 1000;
 
   // Usage rate-limit guard state
-  private usageLastCheckedAt: number = 0;
+  private usageLastCheckedAt: number = Date.now(); // skip check on startup; first run at 30-min mark
   private usageTier: 0 | 1 | 2 = 0; // 0=normal, 1=high(≥85%), 2=critical(≥95%)
   private usageTierFile: string = '';
-  private readonly USAGE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+  private readonly USAGE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 
   // Context-exhaustion + frozen-stdout watchdog state
   private bootstrappedAt: number = 0;
@@ -441,6 +441,13 @@ export class FastChecker {
           }
         }
       }
+    }
+
+    // Signal 4: 1M context billing gate — API refuses all calls, agent is dead
+    if (tail && /Extra usage is required for 1M context/.test(tail)) {
+      this.log('WATCHDOG: 1M context billing gate detected — agent cannot make API calls, hard-restarting');
+      this.triggerHardRestart('1M context billing gate: extra usage required — session unrecoverable');
+      return;
     }
 
     // Signal 2: stdout frozen for 30+ min while agent is active.
