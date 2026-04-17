@@ -945,8 +945,8 @@ busCommand
     if (!slackToken) slackToken = process.env.SLACK_BOT_TOKEN ?? '';
 
     if (!slackToken) {
-      console.error('Error: SLACK_BOT_TOKEN not set. Set it in your agent .env file or as SLACK_BOT_TOKEN env var.');
-      process.exit(1);
+      console.error('Warning: SLACK_BOT_TOKEN not set. Skipping Slack message. Set it in your agent .env file or as SLACK_BOT_TOKEN env var.');
+      process.exit(0);
     }
 
     const { SlackAPI } = await import('../slack/api.js');
@@ -991,8 +991,8 @@ busCommand
     }
 
     if (!botToken) {
-      console.error('Error: BOT_TOKEN not set. Set it in your agent .env file or as an environment variable.');
-      process.exit(1);
+      console.error('Warning: BOT_TOKEN not set. Skipping Telegram message. Set it in your agent .env file to enable Telegram.');
+      process.exit(0);
     }
 
     const api = new TelegramAPI(botToken);
@@ -1275,7 +1275,7 @@ busCommand
       }
     }
     if (!botToken) botToken = process.env.BOT_TOKEN || '';
-    if (!botToken) { console.error('Error: BOT_TOKEN not set'); process.exit(1); }
+    if (!botToken) { console.error('Warning: BOT_TOKEN not set. Skipping edit-telegram.'); process.exit(0); }
 
     const api = new TelegramAPI(botToken);
     let markup: object | undefined;
@@ -1311,7 +1311,7 @@ busCommand
       }
     }
     if (!botToken) botToken = process.env.BOT_TOKEN || '';
-    if (!botToken) { console.error('Error: BOT_TOKEN not set'); process.exit(1); }
+    if (!botToken) { console.error('Warning: BOT_TOKEN not set. Skipping answer-callback.'); process.exit(0); }
 
     const api = new TelegramAPI(botToken);
     try {
