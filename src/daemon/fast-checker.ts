@@ -807,6 +807,7 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
     frameworkRoot: string,
     replyToText?: string,
     lastSentText?: string,
+    recentHistory?: string,
   ): string {
     let replyCx = '';
     if (replyToText) {
@@ -818,6 +819,11 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
       lastSentCtx = `[Your last message: "${lastSentText.slice(0, 500)}"]\n`;
     }
 
+    let historyCx = '';
+    if (recentHistory) {
+      historyCx = `[Recent conversation:]\n${recentHistory}\n`;
+    }
+
     // Use [USER: ...] wrapper to prevent prompt injection via crafted display names
     // Slash commands (text starting with /) are NOT wrapped in backticks so Claude Code
     // can recognize and invoke them via the Skill tool (e.g. /loop, /commit, /restart).
@@ -826,8 +832,39 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
       ? text.trim()
       : `\`\`\`\n${text}\n\`\`\``;
     return `=== TELEGRAM from [USER: ${from}] (chat_id:${chatId}) ===
-${replyCx}${body}
+${replyCx}${historyCx}${body}
 ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
+
+`;
+  }
+
+  /**
+   * Format a Telegram message_reaction update for PTY injection.
+   * Reactions are emoji additions/removals on existing messages — they
+   * surface to the agent so it can follow up on positive acknowledgements
+   * or clarify after a negative reaction.
+   *
+   * `newReaction` is the current reaction state (an empty list means the
+   * user REMOVED their reaction). `oldReaction` lets the formatter
+   * distinguish "added X" from "removed Y". Custom emoji (type=custom_emoji)
+   * render as [custom_emoji] since we don't resolve the custom_emoji_id.
+   */
+  static formatTelegramReaction(
+    from: string,
+    chatId: string | number,
+    messageId: number,
+    oldReaction: Array<{ type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }>,
+    newReaction: Array<{ type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }>,
+  ): string {
+    const render = (list: typeof newReaction): string =>
+      list.length === 0
+        ? '(none)'
+        : list.map((r) => (r.type === 'emoji' ? r.emoji : '[custom_emoji]')).join(' ');
+
+    const removed = newReaction.length === 0 && oldReaction.length > 0;
+    const label = removed ? `removed ${render(oldReaction)}` : render(newReaction);
+
+    return `=== REACTION from [USER: ${from}] (chat_id:${chatId}) on message ${messageId}: ${label} ===
 
 `;
   }

@@ -8,7 +8,7 @@ import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
-import { logInboundMessage, cacheLastSent, logOutboundMessage } from '../telegram/logging.js';
+import { logInboundMessage, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
@@ -412,6 +412,7 @@ export class AgentManager {
         // Build reply context from the replied-to message.
         const replyToText = buildReplyContext(msg.reply_to_message);
 
+        const recentHistory = buildRecentHistory(this.ctxRoot, name, effectiveChatId, 6) ?? undefined;
         const formatted = FastChecker.formatTelegramTextMessage(
           from,
           effectiveChatId,
@@ -419,6 +420,7 @@ export class AgentManager {
           this.frameworkRoot,
           replyToText,
           lastSent ?? undefined,
+          recentHistory,
         );
 
         if (checker.isDuplicate(formatted)) {
@@ -434,6 +436,33 @@ export class AgentManager {
         checker.handleCallback(query).catch(err => {
           log(`Callback handling error: ${err}`);
         });
+      });
+
+      poller.onReaction((reaction) => {
+        // ALLOWED_USER gate: same rule as message handler. If configured,
+        // ignore reactions from other users.
+        if (allowedUserId) {
+          const allowedId = parseInt(allowedUserId, 10);
+          if (reaction.user?.id !== allowedId) {
+            log('Ignoring reaction from unauthorized user (allowed_user gate)');
+            return;
+          }
+        }
+
+        const from = stripControlChars(reaction.user?.first_name || reaction.user?.username || 'Unknown');
+        const reactionChatId = reaction.chat?.id ?? chatId ?? '';
+        const formatted = FastChecker.formatTelegramReaction(
+          from,
+          reactionChatId,
+          reaction.message_id,
+          reaction.old_reaction ?? [],
+          reaction.new_reaction ?? [],
+        );
+        if (checker.isDuplicate(formatted)) {
+          log('Duplicate Telegram reaction suppressed');
+          return;
+        }
+        checker.queueTelegramMessage(formatted);
       });
 
       poller.start().catch(err => {
