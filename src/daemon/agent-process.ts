@@ -622,7 +622,7 @@ export class AgentProcess {
     if (!crons || crons.length === 0) return;
 
     const recurringNames = crons
-      .filter(c => c.type !== 'once')
+      .filter(c => c.type !== 'once' && c.type !== 'disabled')
       .map(c => c.name);
     if (recurringNames.length === 0) return;
 
@@ -647,7 +647,7 @@ export class AgentProcess {
 
     // Only monitor recurring crons with a parseable interval (skip cron expressions)
     const monitorable = crons.filter(
-      c => c.type !== 'once' && c.interval && !isNaN(parseDurationMs(c.interval)),
+      c => c.type !== 'once' && c.type !== 'disabled' && c.interval && !isNaN(parseDurationMs(c.interval)),
     );
     if (monitorable.length === 0) return;
 
