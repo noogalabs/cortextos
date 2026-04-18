@@ -102,6 +102,7 @@ export class FastChecker {
   private ctxWarningFiredAt: number = 0;    // dedup: 15min cooldown between warnings
   private ctxHandoffFiredAt: number = 0;    // fires once per session (0 = not yet)
   private ctxHandoffDeadlineAt: number = 0; // timestamp after which force-restart fires
+  private ctxLastSessionId: string | null = null; // detects new session → clears stale deadline
   private ctxCircuitRestarts: number[] = []; // timestamps of recent context-triggered restarts
   private ctxCircuitBrokenAt: number | null = null; // when circuit tripped (null = healthy)
 
@@ -1513,6 +1514,20 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       if (age > 10 * 60_000) return; // stale file — skip
       pct = typeof data.used_percentage === 'number' ? data.used_percentage : null;
       exceeds200k = Boolean(data.exceeds_200k_tokens);
+
+      // Detect new session: if session_id changed, clear stale per-session ctx state.
+      // This handles the case where the agent self-restarts (voluntary handoff) and the
+      // 5-min deadline timer would otherwise fire on the fresh low-context session.
+      const incomingSessionId = typeof data.session_id === 'string' ? data.session_id : null;
+      if (incomingSessionId && incomingSessionId !== this.ctxLastSessionId) {
+        if (this.ctxLastSessionId !== null) {
+          this.ctxHandoffFiredAt = 0;
+          this.ctxHandoffDeadlineAt = 0;
+          this.ctxWarningFiredAt = 0;
+          this.log(`New session detected (${incomingSessionId.slice(0, 8)}…) — per-session ctx state reset`);
+        }
+        this.ctxLastSessionId = incomingSessionId;
+      }
     } catch { return; }
 
     // Check PTY output for hard API overflow errors (always act regardless of threshold config)
