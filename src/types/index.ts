@@ -249,7 +249,7 @@ export interface CronEntry {
   prompt: string;
   /** "recurring" (default) restores on every session start.
    *  "once" restores only if fire_at is still in the future; deleted after firing. */
-  type?: 'recurring' | 'once';
+  type?: 'recurring' | 'once' | 'disabled';
 }
 
 export interface OrgContext {
