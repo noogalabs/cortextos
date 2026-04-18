@@ -194,50 +194,21 @@ export interface AgentConfig {
     never_ask: string[];
   };
   ecosystem?: EcosystemConfig;
-  /**
-   * Gmail watch: when present, the fast-checker daemon polls Gmail every
-   * `interval_ms` (default 15 min) using the `gws` CLI and writes an inbox
-   * message to wake Claude if unread messages match the query.
-   * Requires `gws` to be authenticated (see ~/.config/gws/).
-   */
   gmail_watch?: {
-    /** Gmail API query string (e.g. "from:example.com is:unread") */
     query: string;
-    /** Poll interval in milliseconds. Default: 900000 (15 minutes) */
     interval_ms?: number;
-    /** Gmail label ID to apply after delivery, preventing re-delivery across daemon restarts */
     processed_label_id?: string;
   };
-  /**
-   * Slack watch: when present, the fast-checker daemon polls a Slack channel
-   * every interval_ms (default 60 seconds) and writes an inbox message to
-   * wake Claude if new messages appear since the last check.
-   * Requires SLACK_BOT_TOKEN in the agent .env.
-   */
   slack_watch?: {
-    /** Slack channel ID to monitor (e.g. 'C1234567890') */
     channel: string;
-    /** Poll interval in milliseconds. Default: 60000 */
     interval_ms?: number;
   };
-  /**
-   * Slack handles whose messages the agent treats as instructions
-   * (vs passive data). Must match TeamMember.slack_handle values.
-   * Example: ["brittany.hunter", "david.hunter"]
-   */
   trusted_slack_users?: string[];
-
-  /**
-   * Maps semantic function names to Slack channel IDs for outbound routing.
-   * Agents use this to post to the right channel without hardcoding IDs.
-   * Example: { "maintenance": "C1234567890", "leasing": "C0987654321" }
-   */
   slack_channels?: Record<string, string>;
-  /**
-   * Context window percentage at which fast-checker proactively asks the
-   * agent to write memory and restart (default 70). Set to 0 to disable.
-   */
-  ctx_restart_threshold?: number;
+  /** Context window % at which to warn agent + user. Default: 70. Absent = observe-only. */
+  ctx_warning_threshold?: number;
+  /** Context window % at which to inject handoff prompt and hard-restart. Default: 80. */
+  ctx_handoff_threshold?: number;
 }
 
 export interface CronEntry {
