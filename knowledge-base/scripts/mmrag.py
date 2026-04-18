@@ -941,7 +941,8 @@ def ingest_file(client, config, collection, file_path):
 
     # Skip common non-content files
     skip_names = {".ds_store", "thumbs.db", ".gitignore", ".gitkeep", "package-lock.json",
-                  "yarn.lock", "pnpm-lock.yaml", ".eslintcache"}
+                  "yarn.lock", "pnpm-lock.yaml", ".eslintcache",
+                  "lockbox-codes.md"}
     if file_path.name.lower() in skip_names:
         return 0
 
@@ -949,7 +950,8 @@ def ingest_file(client, config, collection, file_path):
     skip_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".env",
                  ".next", ".nuxt", "dist", "build", ".cache", ".turbo",
                  "vendor", ".terraform", ".angular", ".svelte-kit", ".output",
-                 "coverage", ".nyc_output", ".pytest_cache", ".mypy_cache"}
+                 "coverage", ".nyc_output", ".pytest_cache", ".mypy_cache",
+                 ".obsidian", "secure-local"}
     parts = set(file_path.parts)
     if parts & skip_dirs:
         return 0
@@ -990,6 +992,21 @@ def ingest_file(client, config, collection, file_path):
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
+def _shared_allowlist_check(file_path: Path, collection_name: str, config: dict) -> bool:
+    """Return True if file is allowed into this collection. Shared collections enforce an allowlist."""
+    if not collection_name.startswith("shared"):
+        return True  # agent-private collections have no allowlist restriction
+    allowlist = config.get("shared_ingest_allowlist")
+    if not allowlist:
+        return True  # no allowlist configured — open (legacy behaviour)
+    resolved = str(file_path.resolve())
+    for allowed in allowlist:
+        if resolved == allowed or resolved.startswith(allowed.rstrip("/") + "/"):
+            return True
+    print(f"  BLOCKED (not in shared allowlist): {file_path}")
+    return False
+
+
 def cmd_ingest(args):
     global args_force, _tracker
     args_force = getattr(args, 'force', False)
@@ -1014,6 +1031,9 @@ def cmd_ingest(args):
                 files = sorted(f for f in p.rglob("*") if f.is_file() and not f.name.startswith("."))
                 print(f"Ingesting directory: {p} ({len(files)} files)")
                 for f in files:
+                    if not _shared_allowlist_check(f, collection_name, config):
+                        skipped += 1
+                        continue
                     print(f"  Processing: {f.relative_to(p)}")
                     try:
                         count = ingest_file(client, config, collection, f)
@@ -1026,15 +1046,18 @@ def cmd_ingest(args):
                         print(f"    ERROR: {e}")
                         errors += 1
             elif p.is_file():
-                print(f"Ingesting: {p.name}")
-                try:
-                    count = ingest_file(client, config, collection, p)
-                    total += count
-                    if count > 0:
-                        print(f"  Added {count} chunk(s)")
-                except Exception as e:
-                    print(f"  ERROR: {e}")
-                    errors += 1
+                if not _shared_allowlist_check(p, collection_name, config):
+                    print(f"Blocked: {p.name} not in shared allowlist")
+                else:
+                    print(f"Ingesting: {p.name}")
+                    try:
+                        count = ingest_file(client, config, collection, p)
+                        total += count
+                        if count > 0:
+                            print(f"  Added {count} chunk(s)")
+                    except Exception as e:
+                        print(f"  ERROR: {e}")
+                        errors += 1
             else:
                 print(f"NOT FOUND: {p}")
     finally:
