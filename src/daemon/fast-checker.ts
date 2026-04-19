@@ -50,7 +50,7 @@ export class FastChecker {
   private pollCycleWatchdog: NodeJS.Timeout | null = null;
 
   // Gmail watch state
-  private gmailWatch?: { query: string; intervalMs: number };
+  private gmailWatch?: { query: string; intervalMs: number; processedLabelId?: string };
   private gmailLastCheckedAt: number = 0;
   private gmailLastCheckedPath: string = '';
   // Delivered-message-ID set with 2h TTL: id → delivery timestamp (ms)
@@ -106,7 +106,7 @@ export class FastChecker {
       telegramApi?: TelegramAPI;
       chatId?: string;
       allowedUserId?: number;
-      gmailWatch?: { query: string; intervalMs: number };
+      gmailWatch?: { query: string; intervalMs: number; processedLabelId?: string };
       slackWatch?: { channel: string; intervalMs: number; token: string };
       ctxRestartThreshold?: number;
     } = {},
@@ -425,19 +425,20 @@ export class FastChecker {
       if (pctMatch) {
         const pct = parseInt(pctMatch[1], 10);
         if (pct >= this.ctxThresholdPct) {
-          if (this.ctxThresholdTriggeredAt === 0 ||
-              now - this.ctxThresholdTriggeredAt > this.CTX_THRESHOLD_COOLDOWN_MS) {
-            // First trigger (or cooldown expired): inject graceful restart request
-            this.ctxThresholdTriggeredAt = now;
-            const msg = `Context window at ${pct}%. Please write your session memory and observations now, then run: cortextos bus hard-restart --reason "proactive context reset at ${pct}%"`;
-            this.agent.injectMessage(msg);
-            this.log(`WATCHDOG: ctx at ${pct}% >= threshold ${this.ctxThresholdPct}% — injected graceful restart request`);
-          } else if (now - this.ctxThresholdTriggeredAt > this.CTX_THRESHOLD_FALLBACK_MS) {
+          if (this.ctxThresholdTriggeredAt > 0 &&
+              now - this.ctxThresholdTriggeredAt > this.CTX_THRESHOLD_FALLBACK_MS) {
             // Agent ignored the injection for 15 min — fallback hard restart
             const minAgo = Math.round((now - this.ctxThresholdTriggeredAt) / 60000);
             this.log(`WATCHDOG: ctx threshold fallback — agent ignored restart request for ${minAgo}min`);
             this.triggerHardRestart(`ctx threshold fallback: agent at ${pct}% ignored graceful restart for ${minAgo}min`);
             return;
+          } else if (this.ctxThresholdTriggeredAt === 0 ||
+              now - this.ctxThresholdTriggeredAt > this.CTX_THRESHOLD_COOLDOWN_MS) {
+            // First trigger (or cooldown expired): inject graceful restart request
+            this.ctxThresholdTriggeredAt = now;
+            const msg = `Context window at ${pct}%. Please write your session memory and observations now, then run: cortextos bus hard-restart --reason "proactive context reset at ${pct}%" and then run /exit to close this session.`;
+            this.agent.injectMessage(msg);
+            this.log(`WATCHDOG: ctx at ${pct}% >= threshold ${this.ctxThresholdPct}% — injected graceful restart request`);
           }
         }
       }
@@ -572,6 +573,22 @@ export class FastChecker {
       this.saveGmailDeliveredIds();
     } catch (err) {
       this.log(`Gmail watch inbox write failed: ${err}`);
+    }
+
+    // Apply processed label so emails are excluded from future polls even after daemon restart.
+    // In-memory dedup has a 2h TTL — without a persistent label the same emails re-deliver on restart.
+    if (this.gmailWatch?.processedLabelId) {
+      const labelId = this.gmailWatch.processedLabelId;
+      for (const id of newIds.slice(0, 20)) {
+        execFile('gws', [
+          'gmail', 'users', 'messages', 'modify',
+          '--params', JSON.stringify({ userId: 'me', id }),
+          '--json', JSON.stringify({ addLabelIds: [labelId] }),
+          '--format', 'json',
+        ], { timeout: 10_000 }, (err) => {
+          if (err) this.log(`Gmail watch: could not apply label ${labelId} to ${id}: ${err}`);
+        });
+      }
     }
   }
 

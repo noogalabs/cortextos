@@ -205,6 +205,8 @@ export interface AgentConfig {
     query: string;
     /** Poll interval in milliseconds. Default: 900000 (15 minutes) */
     interval_ms?: number;
+    /** Gmail label ID to apply after delivery, preventing re-delivery across daemon restarts */
+    processed_label_id?: string;
   };
   /**
    * Slack watch: when present, the fast-checker daemon polls a Slack channel

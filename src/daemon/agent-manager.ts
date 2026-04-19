@@ -241,7 +241,11 @@ export class AgentManager {
 
     // Build gmail_watch option if configured
     const gmailWatchOption = config.gmail_watch?.query
-      ? { query: config.gmail_watch.query, intervalMs: config.gmail_watch.interval_ms ?? 15 * 60 * 1000 }
+      ? {
+          query: config.gmail_watch.query,
+          intervalMs: config.gmail_watch.interval_ms ?? 15 * 60 * 1000,
+          processedLabelId: config.gmail_watch.processed_label_id,
+        }
       : undefined;
 
     let slackWatchOption: { channel: string; intervalMs: number; token: string } | undefined;
