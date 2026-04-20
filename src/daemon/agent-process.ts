@@ -321,7 +321,7 @@ export class AgentProcess {
       return false;
     }
 
-    injectMessage((data) => this.pty!.write(data), content);
+    injectMessage((data) => this.pty?.write(data), content);
     return true;
   }
 
@@ -929,7 +929,7 @@ export class AgentProcess {
 
           this.log(`Gap nudge: ${cronDef.name} silent ${gapMin}min (threshold: ${Math.round(threshold / 60_000)}min)`);
           if (this.pty && this.status === 'running') {
-            injectMessage((data) => this.pty!.write(data), nudge);
+            injectMessage((data) => this.pty?.write(data), nudge);
             // Stagger: wait between nudges so the agent can process each one
             // before the next arrives. Without this, N simultaneous stale crons
             // fire N back-to-back injections, spiking context and triggering
@@ -1005,7 +1005,7 @@ export class AgentProcess {
 
     this.log(`Injecting cron verification (expecting: ${cronList})`);
     if (this.pty) {
-      injectMessage((data) => this.pty!.write(data), verifyPrompt);
+      injectMessage((data) => this.pty?.write(data), verifyPrompt);
     }
   }
 }
