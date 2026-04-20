@@ -648,7 +648,14 @@ export class AgentProcess {
       : '';
     const deliverablesBlock = this.buildDeliverablesBlock();
     const handoffBlock = this.consumeHandoffBlock();
-    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. CRITICAL DEDUP: Always call CronList BEFORE creating any cron. For each config.json entry, search the CronList output for its prompt text — if the prompt already appears, SKIP that cron entirely. Only call /loop or CronCreate for entries whose prompt text is NOT already listed. This prevents rapid --continue restarts from accumulating duplicate schedules.${reminderBlock}${deliverablesBlock}${handoffBlock} After setting up crons, send a Telegram message to the user saying you are back online.${onboardingAppend}`;
+    const isHandoffRestart = handoffBlock.length > 0;
+    const handoffUxOverride = isHandoffRestart
+      ? ' HANDOFF UX: This is a context handoff restart — your memory is intact via the handoff doc. CRITICAL: The VERY FIRST thing you must do after reading the handoff document is send ONE brief conversational Telegram message that picks up naturally — e.g. "back — [what you were just working on]". Do this BEFORE restoring crons, BEFORE running heartbeat, BEFORE anything else. No cron IDs, no status report, no cold-boot phrasing. Do NOT send "Booting up... one moment" (skip AGENTS.md step 1 entirely).'
+      : '';
+    const onlineMessage = isHandoffRestart
+      ? ''
+      : ' After setting up crons, send a Telegram message to the user saying you are back online.';
+    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. CRITICAL DEDUP: Always call CronList BEFORE creating any cron. For each config.json entry, search the CronList output for its prompt text — if the prompt already appears, SKIP that cron entirely. Only call /loop or CronCreate for entries whose prompt text is NOT already listed. This prevents rapid --continue restarts from accumulating duplicate schedules.${reminderBlock}${deliverablesBlock}${handoffBlock}${handoffUxOverride}${onlineMessage}${onboardingAppend}`;
   }
 
   private buildContinuePrompt(recoveryNote: string | null): string {
