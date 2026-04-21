@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -659,7 +659,7 @@ export class AgentProcess {
     const onlineMessage = isHandoffRestart
       ? ''
       : ' After setting up crons, send a Telegram message to the user saying you are back online.';
-    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. CRITICAL DEDUP: Always call CronList BEFORE creating any cron. For each config.json entry, search the CronList output for its prompt text — if the prompt already appears, SKIP that cron entirely. Only call /loop or CronCreate for entries whose prompt text is NOT already listed. This prevents rapid --continue restarts from accumulating duplicate schedules.${reminderBlock}${deliverablesBlock}${handoffBlock}${handoffUxOverride}${onlineMessage}${onboardingAppend}`;
+    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. CRITICAL DEDUP: Always call CronList BEFORE creating any cron. For each config.json entry, search the CronList output for its prompt text — if the prompt already appears, SKIP that cron entirely. Only call /loop or CronCreate for entries whose prompt text is NOT already listed. This prevents rapid --continue restarts from accumulating duplicate schedules.${reminderBlock}${deliverablesBlock}${handoffBlock}${handoffUxOverride}${onlineMessage}${onboardingAppend}${recoveryBlock}${rateLimitBlock}`;
   }
 
   private buildContinuePrompt(recoveryNote: string | null): string {
@@ -714,6 +714,27 @@ export class AgentProcess {
       const ctx = JSON.parse(readFileSync(contextPath, 'utf-8'));
       if (!ctx.require_deliverables) return '';
       return ' DELIVERABLE STANDARD: Every task you submit for review MUST have at least one file deliverable attached via the save-output bus command. A task with zero file deliverables will be sent back. Attach files with: cortextos bus save-output <task-id> <file-path> --label "<descriptive label>". Labels must be human-readable at a glance: describe WHAT it is plus enough context to understand at a glance. Good: "Traffic Growth Plan — 10 channels, 30-day launch sequence". Bad: "traffic-growth-plan.md" or "output-1". Notes are for context only, never file paths or URLs.';
+    } catch {
+      return '';
+    }
+  }
+
+  getAgentDir(): string {
+    return this.env.agentDir;
+  }
+
+  getConfig(): AgentConfig {
+    return this.config;
+  }
+
+  private consumeHandoffBlock(): string {
+    const markerPath = join(this.env.ctxRoot, 'state', this.name, '.handoff-doc-path');
+    if (!existsSync(markerPath)) return '';
+    try {
+      const docPath = readFileSync(markerPath, 'utf-8').trim();
+      unlinkSync(markerPath);
+      if (!docPath || !existsSync(docPath)) return '';
+      return ` CONTEXT HANDOFF: Before restoring crons or checking inbox, read the handoff document at ${docPath} to resume your prior session state.`;
     } catch {
       return '';
     }
