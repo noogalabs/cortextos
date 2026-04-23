@@ -984,7 +984,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       // If context exhausts naturally before the agent acts, .force-fresh is already set,
       // preventing a --continue restart that would loop at the same high context level.
       try {
-        writeFileSync(join(this.paths.stateDir, '.force-fresh'), '');
+        writeFileSync(join(this.paths.stateDir, '.force-fresh'), 'tier2-prearm\n', 'utf-8');
       } catch { /* non-fatal */ }
     }
   }
