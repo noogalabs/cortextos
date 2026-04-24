@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync, openSync, readSync, closeSync } from 'fs';
-import { exec, execFile } from 'child_process';
+import { execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
@@ -192,9 +192,14 @@ export class FastChecker {
     const agentName = this.agent.name;
     this.heartbeatTimer = setInterval(() => {
       const ts = new Date().toISOString();
-      exec(`cortextos bus update-heartbeat "[watchdog] ${agentName} alive — idle session ${ts}"`, (err) => {
-        if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
-      });
+      execFile(
+        'cortextos',
+        ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`],
+        { timeout: 10_000 },
+        (err) => {
+          if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
+        },
+      );
     }, HEARTBEAT_INTERVAL_MS);
 
     // Poll-cycle watchdog: if pollCycle hasn't completed in 90s, force-restart
@@ -316,6 +321,17 @@ export class FastChecker {
       this.wakeResolve();
       this.wakeResolve = null;
     }
+  }
+
+  resetWatchdogState(): void {
+    this.watchdogTriggered = false;
+    this.ctxThresholdTriggeredAt = 0;
+    this.bootstrappedAt = Date.now();
+    this.stdoutLastChangeAt = Date.now();
+    this.stdoutLastSize = 0;
+    this.lastHardRestartAt = 0;
+    this.lastPollCycleCompletedAt = Date.now();
+    this.log('Watchdog state reset (agent transitioned to running)');
   }
 
   /**
