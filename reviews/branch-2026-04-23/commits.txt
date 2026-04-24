@@ -1,0 +1,13 @@
+519f0ff Merge fix/task-id-collision into main
+9001f29 fix(task): widen random suffix from 3 to 6 digits to prevent ID collisions
+3ec7873 Merge fix/gap-detector-restart-bounds into main
+c209b8a fix(gap-detector): bound gap by session start + suppress repeat alerts
+eb119a9 fix(telegram): validate BOT_TOKEN and CHAT_ID against Telegram API before enable + setup writes .env (#235)
+b85cb69 fix(daemon): extend gap detection to cron-expression crons (#169) (#184)
+5f1943e fix(telegram): switch to HTML parse mode — eliminates silent content drops (#181)
+b6e4515 fix(daemon): use CronCreate directly on boot to skip /loop cloud-prompt (#210)
+0fa9aab fix(daemon): four code-review bugs — watchdog reset, health timer, dead code, force-fresh reason
+a38ef7a fix(bus): hard-restart now sends IPC restart-agent to terminate the session (#217)
+378f282 merge: upstream/main — 2 commits (daemon PTY null-write fix + crash visibility, test timestamp fix)
+a803002 fix(daemon): guard worker PTY null-write + add crash visibility (#223)
+3420b5b fix(test): use relative timestamps in channels route test (#226)
