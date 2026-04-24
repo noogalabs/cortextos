@@ -789,8 +789,10 @@ describe('FastChecker', () => {
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       checker.start();
       await vi.advanceTimersByTimeAsync(50 * 60 * 1000);
-      expect(exec).toHaveBeenCalledWith(
-        expect.stringContaining('[watchdog] my-agent alive — idle session'),
+      expect(execFile).toHaveBeenCalledWith(
+        'cortextos',
+        expect.arrayContaining(['bus', 'update-heartbeat', expect.stringContaining('[watchdog] my-agent alive — idle session')]),
+        expect.objectContaining({ timeout: 10_000 }),
         expect.any(Function),
       );
       checker.stop();
@@ -798,8 +800,8 @@ describe('FastChecker', () => {
     });
 
     it('clears timer on stop — no further exec calls after stop', async () => {
-      const { exec } = await import('child_process');
-      const execMock = exec as ReturnType<typeof vi.fn>;
+      const { execFile } = await import('child_process');
+      const execMock = execFile as ReturnType<typeof vi.fn>;
       const agent = createMockAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       checker.start();
