@@ -775,6 +775,7 @@ describe('FastChecker', () => {
       expect(execFile).toHaveBeenCalledWith(
         'cortextos',
         expect.arrayContaining(['bus', 'update-heartbeat', expect.stringContaining('[watchdog] my-agent alive — idle session')]),
+        expect.objectContaining({ timeout: 10_000 }),
         expect.any(Function),
       );
       checker.stop();

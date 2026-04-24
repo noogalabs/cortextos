@@ -160,13 +160,10 @@ export class FastChecker {
   }
 
   resetWatchdogState(): void {
-    this.watchdogTriggered = false;
-    this.ctxThresholdTriggeredAt = 0;
-    this.bootstrappedAt = Date.now();
-    this.stdoutLastChangeAt = Date.now();
-    this.stdoutLastSize = 0;
-    this.lastHardRestartAt = 0;
-    this.lastPollCycleCompletedAt = Date.now();
+    this.ctxHandoffFiredAt = 0;
+    this.ctxHandoffDeadlineAt = 0;
+    this.ctxWarningFiredAt = 0;
+    this.stdoutLogSize = -1;
     this.log('Watchdog state reset (agent transitioned to running)');
   }
 
