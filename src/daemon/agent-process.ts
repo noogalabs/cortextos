@@ -19,7 +19,7 @@ import {
   deleteRecoveryNote,
   MIN_HEALTHY_SECONDS,
 } from './watchdog.js';
-import { readCronState, parseDurationMs } from '../bus/cron-state.js';
+import { readCronState, parseDurationMs, cronExpressionMinIntervalMs } from '../bus/cron-state.js';
 
 type LogFn = (msg: string) => void;
 
@@ -905,9 +905,13 @@ export class AgentProcess {
     const crons = this.config.crons;
     if (!crons || crons.length === 0) return;
 
-    const monitorable = crons.filter(
-      c => c.type !== 'once' && c.type !== 'disabled' && c.interval && !isNaN(parseDurationMs(c.interval)),
-    );
+    // Monitor recurring crons with either a parseable interval or a cron expression
+    const monitorable = crons.filter(c => {
+      if (c.type === 'once' || c.type === 'disabled') return false;
+      if (c.interval && !isNaN(parseDurationMs(c.interval))) return true;
+      if (c.cron) return true;
+      return false;
+    });
     if (monitorable.length === 0) return;
 
     const generation = this.lifecycleGeneration;
@@ -919,7 +923,7 @@ export class AgentProcess {
   }
 
   private async runGapDetectionLoop(
-    crons: Array<{ name: string; interval?: string }>,
+    crons: Array<{ name: string; interval?: string; cron?: string }>,
     generation: number,
     loopStartedAt: number,
   ): Promise<void> {
@@ -942,15 +946,13 @@ export class AgentProcess {
       const state = readCronState(stateDir);
 
       for (const cronDef of crons) {
-        const intervalMs = parseDurationMs(cronDef.interval!);
+        const intervalMs = cronDef.interval
+          ? parseDurationMs(cronDef.interval)
+          : cronExpressionMinIntervalMs(cronDef.cron!);
 
         const record = state.crons.find(r => r.name === cronDef.name);
         let lastFireMs: number;
         if (!record) {
-          // No fire record yet (cold start or daemon restart before first cron fire).
-          // Treat the loop start time as the implicit last fire. This means gap
-          // detection will nudge if the cron hasn't fired within 2x its interval
-          // AFTER the daemon restarted — preventing dead zones on cold starts.
           lastFireMs = loopStartedAt;
         } else {
           const recordedFireMs = Date.parse(record.last_fire);
@@ -972,7 +974,10 @@ export class AgentProcess {
 
           const gapMin = Math.round(gapMs / 60_000);
           const expectedMin = Math.round(intervalMs / 60_000);
-          const nudge = `[SYSTEM] Cron gap detected for "${cronDef.name}": last fired ${gapMin} minutes ago (expected every ${expectedMin} minutes). Run CronList to verify the cron is still active. If missing, restore it from config.json: /loop ${cronDef.interval} <cron prompt>.`;
+          const restoreHint = cronDef.interval
+            ? `If missing, restore it from config.json: /loop ${cronDef.interval} <cron prompt>.`
+            : `If missing, restore it from config.json using the cron expression in your config.`;
+          const nudge = `[SYSTEM] Cron gap detected for "${cronDef.name}": last fired ${gapMin} minutes ago (expected every ${expectedMin} minutes). Run CronList to verify the cron is still active. ${restoreHint}`;
 
           this.log(`Gap nudge: ${cronDef.name} silent ${gapMin}min (threshold: ${Math.round(threshold / 60_000)}min)`);
           if (this.pty && this.status === 'running') {
