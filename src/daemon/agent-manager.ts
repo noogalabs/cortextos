@@ -259,6 +259,9 @@ export class AgentManager {
         } else if (status.status === 'running' && prevStatus === 'crashed') {
           tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`).catch(() => {});
         }
+        if (status.status === 'running') {
+          checker.resetWatchdogState();
+        }
         prevStatus = status.status;
       });
     }

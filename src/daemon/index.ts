@@ -131,7 +131,7 @@ function getOperatorChatCreds(frameworkRoot: string): { chatId: string; botToken
           const chatMatch = content.match(/^CHAT_ID=(.+)$/m);
           if (!tokenMatch || !chatMatch) continue;
           const botToken = tokenMatch[1].trim();
-          const chatId = envChat || chatMatch[1].trim();
+          const chatId = chatMatch[1].trim();
           if (/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
             return { chatId, botToken };
           }
