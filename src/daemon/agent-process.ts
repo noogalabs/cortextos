@@ -928,6 +928,11 @@ export class AgentProcess {
 
     const stateDir = join(this.env.ctxRoot, 'state', this.name);
 
+    // Tracks the last time we sent a gap alert per cron, to suppress repeat firings
+    // on every poll cycle while the gap condition remains true.
+    const gapAlertedAt = new Map<string, number>();
+
+    // Initial wait — give the agent time to boot and register crons before first check
     await sleep(GAP_POLL_MS);
 
     while (true) {
@@ -948,20 +953,30 @@ export class AgentProcess {
           // AFTER the daemon restarted — preventing dead zones on cold starts.
           lastFireMs = loopStartedAt;
         } else {
-          lastFireMs = Date.parse(record.last_fire);
-          if (isNaN(lastFireMs)) continue;
+          const recordedFireMs = Date.parse(record.last_fire);
+          if (isNaN(recordedFireMs)) continue;
+          // Bound by session start: if the daemon restarted, don't measure the gap
+          // from a pre-restart fire time — that causes false alerts on every restart.
+          lastFireMs = Math.max(recordedFireMs, loopStartedAt);
         }
 
         const gapMs = now - lastFireMs;
         const threshold = intervalMs * GAP_MULTIPLIER;
 
         if (gapMs > threshold) {
+          const lastAlerted = gapAlertedAt.get(cronDef.name) ?? 0;
+          // Suppress repeat alerts until one full cron interval has elapsed since
+          // the last alert. Without this, every 10-min poll cycle fires a new
+          // injection while the gap condition stays true (up to 4x per 40 min).
+          if (now - lastAlerted < intervalMs) continue;
+
           const gapMin = Math.round(gapMs / 60_000);
           const expectedMin = Math.round(intervalMs / 60_000);
           const nudge = `[SYSTEM] Cron gap detected for "${cronDef.name}": last fired ${gapMin} minutes ago (expected every ${expectedMin} minutes). Run CronList to verify the cron is still active. If missing, restore it from config.json: /loop ${cronDef.interval} <cron prompt>.`;
 
           this.log(`Gap nudge: ${cronDef.name} silent ${gapMin}min (threshold: ${Math.round(threshold / 60_000)}min)`);
           if (this.pty && this.status === 'running') {
+            gapAlertedAt.set(cronDef.name, now);
             injectMessage((data) => this.pty?.write(data), nudge);
             // Stagger: wait between nudges so the agent can process each one
             // before the next arrives. Without this, N simultaneous stale crons
