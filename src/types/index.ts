@@ -209,6 +209,8 @@ export interface AgentConfig {
   ctx_warning_threshold?: number;
   /** Context window % at which to inject handoff prompt and hard-restart. Default: 80. */
   ctx_handoff_threshold?: number;
+  /** Context window % at which to trigger graceful restart (Signal 3). Default: 70. */
+  ctx_restart_threshold?: number;
   /**
    * Agent runtime. Defaults to 'claude-code' when absent.
    * 'hermes' selects the HermesPTY spawn path (Python persistent REPL,

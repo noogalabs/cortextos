@@ -57,5 +57,5 @@ export async function logEpisode(
     opts.tags && opts.tags.length > 0 ? opts.tags : null,
   ];
   const result = await neonQuery(sql, params, opts.frameworkRoot, opts.org);
-  return result.rows[0] as EpisodeRow;
+  return result.rows[0] as unknown as EpisodeRow;
 }
