@@ -1,6 +1,6 @@
 ![npm version](https://img.shields.io/npm/v/cortextos) ![License](https://img.shields.io/badge/license-MIT-green) ![Node](https://img.shields.io/badge/node-20%2B-brightgreen) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
-# cortextOS
+# AscendOps
 
 **Persistent 24/7 Claude Code agents you control from Telegram or your phone.**
 
@@ -29,7 +29,7 @@ Boss:    Done. "morning-inbox" cron set — runs daily at 08:00.
 
 - **Persistent agents** — Claude Code runs 24/7 in PTY sessions, auto-restarting on crash or after 71-hour context rotation.
 - **Multi-agent orchestration** — Orchestrator, Analyst, and specialist agents coordinate via a shared file bus. Tasks, blockers, and approvals flow automatically.
-- **Telegram + iOS control** — Send commands, approve actions, and get reports from anywhere. Native iOS app coming soon.
+- **Telegram + iOS control** — Send commands, approve actions, and get reports from anywhere.
 - **Web dashboard** — Full-featured Next.js UI for tasks, approvals, experiments, analytics, and agent fleet health.
 - **Autoresearch (theta wave)** — Agents run autonomous experiments overnight, evaluate results, and surface findings for your review.
 
@@ -39,7 +39,7 @@ Boss:    Done. "morning-inbox" cron set — runs daily at 08:00.
 
 ```mermaid
 flowchart TD
-    U["User (Telegram / iOS)"] --> CLI["cortextOS Daemon (Node.js)"]
+    U["User (Telegram / iOS)"] --> CLI["AscendOps Daemon (Node.js)"]
     CLI --> O["Orchestrator agent"]
     CLI --> A["Analyst agent"]
     CLI --> W["Specialist agents"]
@@ -59,8 +59,8 @@ flowchart TD
 # 1. Install PM2 globally if you don't have it
 npm install -g pm2
 
-# 2. Install cortextOS
-curl -fsSL https://raw.githubusercontent.com/grandamenium/cortextos/main/install.mjs | node
+# 2. Install AscendOps
+curl -fsSL https://raw.githubusercontent.com/noogalabs/ascendops/main/install.mjs | node
 
 # 3. Open the project in Claude Code and run guided onboarding
 claude ~/cortextos
@@ -131,10 +131,14 @@ cortextos dashboard          # Start web dashboard (--port 3000)
 
 ## Security
 
-cortextOS has undergone a dedicated security hardening sprint covering prompt injection resistance, guardrail enforcement, and approval gate integrity. Agents require explicit human approval before any external action (email, deploy, delete, financial). The guardrails system is self-improving: agents log near-misses and extend GUARDRAILS.md each session.
+AscendOps has undergone a dedicated security hardening sprint covering prompt injection resistance, guardrail enforcement, and approval gate integrity. Agents require explicit human approval before any external action (email, deploy, delete, financial). The guardrails system is self-improving: agents log near-misses and extend GUARDRAILS.md each session.
 
 ---
 
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+---
+
+*AscendOps is built on [cortextos](https://github.com/grandamenium/cortextos) by grandamenium. Core framework, PTY runtime, and bus architecture by James. AscendOps adds property management integrations, agent templates, and operational tooling for real estate teams.*
