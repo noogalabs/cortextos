@@ -1,0 +1,117 @@
+---
+name: self-evaluation-triage
+effort: low
+description: "After every meld decision, capture what was decided and why (trajectory). Weekly: scan all trajectories for override patterns, surface refinement candidates to Dane."
+triggers: ["self evaluation", "reflect", "override review", "accuracy review", "refinement candidates", "post-meld review", "decision review"]
+---
+
+# Self-Evaluation Triage
+
+Two-part skill:
+1. **Post-meld capture** — immediately after every meld decision, record the trajectory
+2. **Weekly reflection scan** — every Monday, find override patterns and surface fixes
+
+---
+
+## Part 1: Post-Meld Trajectory Capture
+
+Run immediately after every completed meld decision (after approval is created or a log-event fires).
+
+### What to Capture
+
+```bash
+cortextos bus log-event quality triage_trajectory info \
+  --meta "{
+    \"meld_id\": \"<meld_id>\",
+    \"meld_type\": \"<plumbing|hvac|electrical|handyman|pest|other>\",
+    \"urgency_assigned\": \"emergency|high|normal|low\",
+    \"vendor_recommended\": \"<vendor name or in-house>\",
+    \"decision_summary\": \"<one sentence: what was recommended and why>\",
+    \"outcome\": \"pending|resolved|overridden|cancelled\",
+    \"override_detail\": \"<what David changed, or null if outcome=resolved>\"
+  }"
+```
+
+**outcome** starts as `pending`. Update it when:
+- Meld closes with vendor completing work → `resolved`
+- David changes the vendor or urgency → `overridden` (fill override_detail)
+- Meld cancelled by resident or David → `cancelled`
+
+### When to Update Outcome
+
+Check outcomes during morning-report cron. For any trajectory with `outcome=pending` where the meld is now closed in PM:
+
+```bash
+# Check meld status
+python3 scripts/pm-get-comments.py <meld_id>
+```
+
+If closed/completed: update outcome via:
+```bash
+cortextos bus log-event quality triage_outcome_update info \
+  --meta "{\"meld_id\": \"<meld_id>\", \"outcome\": \"resolved|overridden|cancelled\", \"override_detail\": \"<or null>\"}"
+```
+
+---
+
+## Part 2: Weekly Reflection Scan
+
+Runs every Monday at 06:00 ET (add to config.json cron if not present). Also triggers on demand via `/reflect` or Dane message.
+
+### Step 1 — Pull All Trajectories
+
+```bash
+cortextos bus list-events --type quality --subtype triage_trajectory --since 7d --format json
+```
+
+### Step 2 — Identify Override Patterns
+
+For each overridden trajectory:
+- What was Blue's recommendation?
+- What did David change?
+- Is this the 2nd or 3rd time David made the same correction?
+
+Patterns to flag:
+| Pattern | Threshold | Action |
+|---------|-----------|--------|
+| Same vendor swapped out | 2+ times same swap | Refinement candidate: update vendor preference in MEMORY.md |
+| Urgency downgraded by David | 3+ times same meld type | Refinement candidate: recalibrate urgency rule for that type |
+| Urgency upgraded by David | 2+ times | Refinement candidate: tighten habitability or safety keyword list |
+| Scope underestimated | 2+ times same pattern | Refinement candidate: update planning-decompose common patterns |
+
+### Step 3 — Surface Refinement Candidates to Dane
+
+```bash
+cortextos bus send-message dane normal "Weekly triage reflection — Blue. Decisions last 7 days: <total>. Overrides: <count>. Patterns: <list each pattern found>. Refinement candidates: <list proposed changes>. No action needed from you unless a change requires approval."
+```
+
+If no overrides in the past 7 days: send a brief confirmation only:
+```bash
+cortextos bus send-message dane normal "Weekly triage reflection — Blue. 0 overrides in last 7 days. No refinement candidates."
+```
+
+---
+
+## Confidence Calibration
+
+Track confidence ratings from the copilot threshold log against actual outcomes:
+
+- `high` confidence + `resolved` outcome → calibrated correctly
+- `high` confidence + `overridden` outcome → overconfidence: review the meld type for blind spots
+- `low` confidence + `resolved` outcome → calibrated correctly (appropriate uncertainty)
+- `medium` confidence + `overridden` 3+ times same type → recalibrate: that type should be `low`
+
+Include a calibration summary in the weekly Dane message when 10+ trajectories have resolved outcomes.
+
+---
+
+## Guardrails
+
+- Never update an outcome to `resolved` without checking PM for actual meld closure
+- Never send a refinement candidate that bypasses an existing guardrail
+- Reflection scan is observation only — no rule changes happen automatically
+- If override pattern involves tenant safety (habitability upgrades), surface to Dane immediately, don't wait for Monday
+
+---
+
+*Pairs with skill-auto-discovery (both run on Monday morning). Post-meld capture pairs with the copilot threshold log in pm-meld-triage.*

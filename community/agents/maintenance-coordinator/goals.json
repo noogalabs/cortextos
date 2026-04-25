@@ -1,0 +1,7 @@
+{
+  "agent": "{{agent_name}}",
+  "focus": "Triage all open work orders and ensure every resident has a clear next step within 24 hours.",
+  "goals": [],
+  "bottleneck": null,
+  "updated": "{{current_timestamp}}"
+}

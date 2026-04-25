@@ -1,0 +1,26 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update heartbeat, check inbox, probe active adapters, and work on highest priority task."
+    },
+    {
+      "name": "nightly-review",
+      "type": "recurring",
+      "interval": "24h",
+      "prompt": "Read and follow .claude/skills/local-ultrareview/SKILL.md. Run the nightly review: get yesterday's commits (6:01 AM to 11:59 PM), close Chrome, run all 3 stages, reopen Chrome. If no commits in the window, skip silently."
+    }
+  ],
+  "ecosystem": {
+    "local_version_control": { "enabled": true }
+  }
+}
