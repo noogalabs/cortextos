@@ -1231,4 +1231,41 @@ describe('FastChecker', () => {
       expect(text).not.toContain('bot msg');
     });
   });
+
+  describe('resetWatchdogState — field coverage', () => {
+    it('zeroes every per-session field including the circuit-breaker triple', () => {
+      const checker = new FastChecker(createMockAgent(), paths, '/tmp/framework') as any;
+
+      checker.ctxHandoffFiredAt = 111;
+      checker.ctxHandoffDeadlineAt = 222;
+      checker.ctxWarningFiredAt = 333;
+      checker.stdoutLogSize = 999;
+      checker.watchdogTriggered = true;
+      checker.ctxThresholdTriggeredAt = 444;
+      checker.stdoutLastChangeAt = 0;
+      checker.stdoutLastSize = 555;
+      checker.lastHardRestartAt = 666;
+      checker.watchdogCircuitBroken = true;
+      checker.watchdogRestarts = [Date.now() - 1000, Date.now() - 500];
+      checker.watchdogCircuitBrokenAt = Date.now() - 100;
+
+      const beforeNow = Date.now();
+      checker.resetWatchdogState();
+      const afterNow = Date.now();
+
+      expect(checker.ctxHandoffFiredAt).toBe(0);
+      expect(checker.ctxHandoffDeadlineAt).toBe(0);
+      expect(checker.ctxWarningFiredAt).toBe(0);
+      expect(checker.stdoutLogSize).toBe(-1);
+      expect(checker.watchdogTriggered).toBe(false);
+      expect(checker.ctxThresholdTriggeredAt).toBe(0);
+      expect(checker.stdoutLastChangeAt).toBeGreaterThanOrEqual(beforeNow);
+      expect(checker.stdoutLastChangeAt).toBeLessThanOrEqual(afterNow);
+      expect(checker.stdoutLastSize).toBe(0);
+      expect(checker.lastHardRestartAt).toBe(0);
+      expect(checker.watchdogCircuitBroken).toBe(false);
+      expect(checker.watchdogRestarts).toEqual([]);
+      expect(checker.watchdogCircuitBrokenAt).toBe(0);
+    });
+  });
 });

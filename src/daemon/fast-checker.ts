@@ -31,6 +31,14 @@ export class FastChecker {
   private outboundLogSize: number = 0;
   // Track stdout log size to detect when agent is actively producing output
   private stdoutLogSize: number = -1;
+  private watchdogTriggered: boolean = false;
+  private ctxThresholdTriggeredAt: number = 0;
+  private stdoutLastChangeAt: number = Date.now();
+  private stdoutLastSize: number = 0;
+  private lastHardRestartAt: number = 0;
+  private watchdogCircuitBroken: boolean = false;
+  private watchdogRestarts: number[] = [];
+  private watchdogCircuitBrokenAt: number = 0;
   private frameworkRoot: string;
   private telegramApi?: TelegramAPI;
   private chatId?: string;
@@ -197,7 +205,13 @@ export class FastChecker {
         ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`],
         { timeout: 10_000 },
         (err) => {
-          if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
+          if (!err) return;
+          const e = err as NodeJS.ErrnoException & { killed?: boolean };
+          if (e.killed) {
+            this.log(`Heartbeat watchdog timed out (10s) — cortextos CLI did not return`);
+          } else {
+            this.log(`Heartbeat watchdog error: ${err.message}`);
+          }
         },
       );
     }, HEARTBEAT_INTERVAL_MS);
@@ -1674,6 +1688,24 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     // sessionRefresh() does stop() + start(); shouldContinue() will return false
     // because .force-fresh was just written, giving us a clean fresh session.
     this.agent.sessionRefresh().catch(err => this.log(`Context restart failed: ${err}`));
+  }
+
+  /** @internal */
+  resetWatchdogState(): void {
+    const now = Date.now();
+    this.ctxHandoffFiredAt = 0;
+    this.ctxHandoffDeadlineAt = 0;
+    this.ctxWarningFiredAt = 0;
+    this.stdoutLogSize = -1;
+    this.watchdogTriggered = false;
+    this.ctxThresholdTriggeredAt = 0;
+    this.stdoutLastChangeAt = now;
+    this.stdoutLastSize = 0;
+    this.lastHardRestartAt = 0;
+    this.watchdogCircuitBroken = false;
+    this.watchdogRestarts = [];
+    this.watchdogCircuitBrokenAt = 0;
+    this.log('Watchdog state reset for new session');
   }
 
   /**

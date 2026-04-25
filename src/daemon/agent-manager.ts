@@ -279,26 +279,26 @@ export class AgentManager {
       ctxRestartThreshold: config.ctx_restart_threshold,
     });
 
-    // Send Telegram notification on crashes and session refreshes
-    if (telegramApi && chatId) {
-      const tgApi = telegramApi;
-      const tgChatId = chatId;
-      let prevStatus: string | null = null;
-      agentProcess.onStatusChanged((status) => {
+    // Reset watchdog session state on actual transitions back to running.
+    let prevStatusForReset: string | null = null;
+    agentProcess.onStatusChanged((status) => {
+      if (status.status === 'running' && prevStatusForReset !== 'running') {
+        checker.resetWatchdogState();
+      }
+      if (telegramApi && chatId) {
+        const tgApi = telegramApi;
+        const tgChatId = chatId;
         if (status.status === 'crashed') {
           const crashNum = status.crashCount ?? '?';
           tgApi.sendMessage(tgChatId, `Agent ${name} crashed (crash #${crashNum}) — auto-restarting`).catch(() => {});
         } else if (status.status === 'halted') {
           tgApi.sendMessage(tgChatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`).catch(() => {});
-        } else if (status.status === 'running' && prevStatus === 'crashed') {
+        } else if (status.status === 'running' && prevStatusForReset === 'crashed') {
           tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`).catch(() => {});
         }
-        if (status.status === 'running') {
-          checker.resetWatchdogState();
-        }
-        prevStatus = status.status;
-      });
-    }
+      }
+      prevStatusForReset = status.status;
+    });
 
     this.agents.set(name, { process: agentProcess, checker });
 
