@@ -141,4 +141,4 @@ MIT — see [LICENSE](./LICENSE).
 
 ---
 
-*AscendOps is built on [cortextos](https://github.com/grandamenium/cortextos) by grandamenium. Core framework, PTY runtime, and bus architecture by James. AscendOps adds property management integrations, agent templates, and operational tooling for real estate teams.*
+*AscendOps is built on [cortextos](https://github.com/grandamenium/cortextos) by grandamenium. Core framework, PTY runtime, and bus architecture by James. AscendOps adds property management integrations, agent templates, and operational tooling for property management teams.*
