@@ -109,6 +109,24 @@ Always include `msg_id` as reply_to (auto-ACKs the original). Un-ACK'd messages 
 
 ---
 
+## Orchestrator Heartbeat Summary
+
+On every 4h heartbeat cycle, send your orchestrator a brief status summary. Three lines is enough:
+
+```bash
+cortextos bus send-message <orchestrator> normal 'Heartbeat:
+- Completed: <what finished since last heartbeat>
+- Blocked: <anything waiting on external input>
+- Waiting: <tasks in queue or pending approval>'
+```
+
+**Rules:**
+- Send this every heartbeat cycle, not just when something changes
+- Do NOT route routine task details through the orchestrator to the user — the user contacts you directly
+- Only escalate to the orchestrator when you need a decision, a handoff, or are genuinely blocked
+
+---
+
 ## Crons
 
 Defined in `config.json` under `crons` array. Set up once per session via `/loop`.
