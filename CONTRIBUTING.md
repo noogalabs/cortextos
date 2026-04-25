@@ -1,6 +1,6 @@
-# Contributing to cortextOS
+# Contributing to AscendOps
 
-Thank you for contributing a skill or agent template to the cortextOS community catalog. This guide covers everything you need to submit a contribution.
+Thank you for contributing a skill or agent template to the AscendOps community catalog. This guide covers everything you need to submit a contribution.
 
 ## What Can Be Contributed
 
@@ -186,4 +186,4 @@ Once approved, `review_status` will be set to `"approved"` and the item will app
 
 ## Questions
 
-Open a GitHub issue or message the cortextOS community channel.
+Open a GitHub issue or message the AscendOps community channel.

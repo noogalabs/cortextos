@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * cortextOS cross-platform installer
+ * AscendOps cross-platform installer
  *
- * Mac/Linux:   curl -fsSL https://raw.githubusercontent.com/grandamenium/cortextos/main/install.mjs | node
- * Windows:     node -e "$(irm https://raw.githubusercontent.com/grandamenium/cortextos/main/install.mjs)"
+ * Mac/Linux:   curl -fsSL https://raw.githubusercontent.com/noogalabs/ascendops/main/install.mjs | node
+ * Windows:     node -e "$(irm https://raw.githubusercontent.com/noogalabs/ascendops/main/install.mjs)"
  * Local test:  node install.mjs
  */
 
@@ -73,7 +73,7 @@ function tryInstall(label, installFn) {
 }
 
 console.log('');
-console.log(`${BOLD}cortextOS installer${R}`);
+console.log(`${BOLD}AscendOps installer${R}`);
 console.log('Persistent 24/7 Claude Code agents with Telegram control');
 console.log('');
 
@@ -401,7 +401,7 @@ if (existsSync(INSTALL_DIR)) {
     fail(`${INSTALL_DIR} exists but is not a git repo. Remove it or set CORTEXTOS_DIR to a different path.`);
   }
 } else {
-  log(`Cloning cortextOS (branch: ${REPO_BRANCH}) to ${INSTALL_DIR}...`);
+  log(`Cloning AscendOps (branch: ${REPO_BRANCH}) to ${INSTALL_DIR}...`);
   runVisible(`git clone --branch ${REPO_BRANCH} ${REPO_URL} ${JSON.stringify(INSTALL_DIR)}`);
   ok('Cloned');
 
@@ -409,7 +409,7 @@ if (existsSync(INSTALL_DIR)) {
   log('Configuring git remotes...');
   try {
     run('git remote rename origin upstream', { cwd: INSTALL_DIR });
-    ok('"upstream" remote configured (tracks canonical cortextOS)');
+    ok('"upstream" remote configured (tracks canonical cortextos)');
   } catch {
     warn('Could not configure upstream remote — run manually: git remote rename origin upstream');
   }
@@ -514,7 +514,7 @@ try {
 // ─── Done ─────────────────────────────────────────────────────────────────────
 
 console.log('');
-console.log(`${G}${BOLD}cortextOS installed successfully!${R}`);
+console.log(`${G}${BOLD}AscendOps installed successfully!${R}`);
 console.log('');
 
 if (!commandExists('claude')) {
