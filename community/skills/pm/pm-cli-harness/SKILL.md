@@ -1,95 +1,106 @@
 ---
-name: pm-cli-harness
-effort: low
-description: "How to install and operate snapcli-pm for Property Meld. Covers tool hierarchy, install, and non-obvious operational rules. Run 'pm --help' or 'pm work-orders --help' for the live command list."
-triggers: ["pm work-orders", "pm cli", "snapcli pm", "pm command", "work order cli", "assign tech cli", "schedule appointment cli", "pm merge", "pm complete", "pm cancel", "pm schedule", "pm tenants"]
+name: propertymeld
+description: "CLI for Property Meld work order management. snapcli (pm) is the primary tool for all PM operations — use it first. Nexus API is secondary (reads + maintenance_notes). Manual UI is last resort only if snapcli itself is broken."
+triggers: ["property meld", "work order", "meld", "pm work-orders", "pm assign-tech", "meld triage"]
 ---
 
-# Property Meld CLI (snapcli-pm)
+# Property Meld CLI
 
-## Install
+## Tool Hierarchy — Follow This Order
 
-**Step 1 — Install the CLI:**
+1. **snapcli (`pm`)** — primary tool for ALL PM operations. Plain HTTP with captured session cookies. No Playwright, no browser. Use this first.
+2. **Nexus API** (`pm-read-melds.py`, OAuth2 client credentials) — secondary. Good for bulk meld reads and `maintenance_notes` writes. Blocked on assignment/merge/chat write operations.
+3. **Manual PM UI** — last resort only if snapcli is broken (expired cookies, site layout change). Do NOT fall back here just because Nexus API returns 404.
+
+## Setup
+
 ```bash
-pip install "git+https://github.com/noogalabs/snapcli.git#subdirectory=adapters/pm"
+pip install -e ~/projects/cli-anything-propertymeld/
+# Required env vars (from agent .env):
+#   PM_CREDS_PATH (default: ~/.claude/credentials/property-meld.json)
+#   PM_CLIENT_ID, PM_CLIENT_SECRET  (Nexus API fallback only)
 ```
 
-**Step 2 — Install session recapture dependencies:**
+## Commands
 
-macOS:
+### Work Orders
 ```bash
-# No extra installs needed — uses built-in osascript + Chrome
+pm work-orders list --status open --json          # List open work orders
+pm work-orders list --status pending --json       # Pending completion
+pm work-orders list --limit 50 --json             # More results
+pm work-orders get <meld_id> --json               # Single work order detail
+pm work-orders comments <meld_id> --json          # Get comments/notes
+pm work-orders send-message <meld_id> "<text>" --json  # Post message/comment
+pm work-orders clone --meld-id <meld_id> --json   # Clone a meld
+pm work-orders merge --meld-id <src> --into <dst> --json  # Merge src into dst (same unit required)
+pm work-orders complete --meld-id <id> --json     # Mark complete (meld must be PENDING_COMPLETION)
+pm work-orders complete --meld-id <id> --notes "text" --json  # Complete with notes
+pm work-orders cancel --meld-id <id> --json       # Cancel meld
+pm work-orders cancel --meld-id <id> --reason "text" --json   # Cancel with reason
+pm work-orders schedule --meld-id <id> --dtstart 2026-04-27T14:00:00-04:00 --hours 2 --json  # Set appointment window
 ```
 
-Linux / cloud (Railway, VPS, Docker):
+### Tenants
 ```bash
-pip install playwright
-playwright install chromium
+pm tenants list --json                            # All tenants (up to 100)
+pm tenants list --search "Christy" --json         # Filter by name, email, or phone
+pm tenants list --search "(423) 400" --json       # Search by phone substring
+pm tenants get <tenant_id> --json                 # Single tenant detail
 ```
 
-**Step 3 — Set required env vars** (add to agent `.env`):
-```
-PM_CREDS_PATH=~/.snapcli/property-meld.json   # session cookies
-PM_WEB_EMAIL=your@email.com                    # PM login — for recapture only
-PM_WEB_PASSWORD=yourpassword                   # PM login — for recapture only
-PM_CLIENT_ID=...                               # Nexus API — reads only
-PM_CLIENT_SECRET=...
-```
-
-**Step 4 — Capture initial session cookies:**
+### Properties & Vendors
 ```bash
-# macOS:
-python3 scripts/pm-recapture-session.py
-
-# Linux / cloud:
-python3 scripts/pm-recapture-session-playwright.py
+pm properties list --json                         # All properties
+pm vendors list --json                            # All vendors
 ```
 
-**Step 5 — Verify:**
+### Tech Assignment (in-house)
 ```bash
-pm probe --json   # should return {"ok": true}
+pm assign-tech --work-order-id <id> --tech Carlos --json
 ```
 
-For all available commands:
+### External Vendor Assignment
+No dedicated CLI command yet. Use http_backend directly:
+```python
+import sys; sys.path.insert(0, '/Users/davidhunter/projects/cli-anything-propertymeld')
+from cli_anything.propertymeld import http_backend
+creds = http_backend._load_creds()
+cookie_hdr = http_backend._cookie_header(creds)
+csrf_token = http_backend._get_csrf_token(cookie_hdr)
+# Get vendor object from vendors list, set type="Vendor"
+vendor_obj = {..., "type": "Vendor", "composite_id": f"1-{vendor_id}"}
+http_backend._http_patch(f"melds/{meld_id}/assign-maintenance/", {"maintenance": [vendor_obj]}, cookie_hdr, csrf_token)
+# Result: status changes to PENDING_VENDOR with vendor_assignment_request
+```
+
+### Health Check
 ```bash
-pm --help
-pm work-orders --help
-pm tenants --help
+pm probe --json                                   # Verify credentials
 ```
 
----
+## Backend Notes
 
-## Tool Hierarchy — Always Follow This Order
+| Command | Backend | Auth |
+|---------|---------|------|
+| work-orders list/get | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| work-orders comments | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| work-orders send-message | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| work-orders clone | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| work-orders merge | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| work-orders complete | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| work-orders cancel | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| work-orders schedule | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| assign-tech (in-house) | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| assign vendor (external) | snapcli http_backend directly | PM_CREDS_PATH cookies |
+| tenants list/get | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| properties/vendors list | Nexus API | PM_CLIENT_ID/SECRET |
+| maintenance_notes PATCH | Nexus API | PM_CLIENT_ID/SECRET |
 
-1. **`pm` (snapcli)** — primary for ALL operations. Plain HTTP, no browser. Use this first.
-2. **Nexus API** (OAuth2, `PM_CLIENT_ID/SECRET`) — secondary. Good for bulk reads and `maintenance_notes`. Cannot write assignments, schedules, or chat.
-3. **PM browser UI** — only if snapcli is broken (expired cookies). Do not fall back here just because Nexus returns 404.
+## Notes
+- `complete` requires meld to be in PENDING_COMPLETION status. Applies to work by any in-house tech (Carlos, Casey, Silvano, or any future in-house assignment).
+- `merge` requires both melds to be at the same unit. Source meld gets MANAGER_CANCELED with "(Merged)" prefix.
+- `tenants list --search` does client-side filtering (server does not support name/email query params).
 
----
-
-## Non-Obvious Rules (not in --help)
-
-**schedule**
-- `--dtstart` must include timezone: `2026-04-27T14:00:00-04:00` not `2026-04-27T14:00:00`
-- In-house tech must be assigned first — PM creates the appointment object at assignment time
-- `--hours` defaults to 2.0, matching the PM UI default
-
-**merge**
-- Both melds must be at the same property unit or the API rejects with "Destination Meld not found"
-- Source meld gets `MANAGER_CANCELED` status with "(Merged)" prefix appended to title
-
-**complete**
-- Meld must be in `PENDING_COMPLETION` status or the request returns 403
-- Applies to any in-house tech (not vendor-specific)
-
-**cancel**
-- `--reason` sets `manager_cancellation_reason` — include it for audit trail
-
-**tenants list --search**
-- Server has no filter params — search is client-side across name, email, and phone
-- Fetches up to 200 records per page before filtering
-
-**health check**
-```bash
-pm probe --json   # returns {"ok": true} if session is valid
-```
+## Known Gaps (no API or snapcli path)
+- Chat message deletion/editing — browser UI only
+- Tenant create/update — tenants/{id} PUT is supported by server but not yet wired as a CLI command
