@@ -54,10 +54,12 @@ export class FastChecker {
   private gmailWatch?: { query: string; intervalMs: number; processedLabelId?: string };
   private gmailLastCheckedAt: number = 0;
   private gmailLastCheckedPath: string = '';
-  // Delivered-message-ID set with 2h TTL: id → delivery timestamp (ms)
+  // Delivered-message-ID set with 30d TTL: id → delivery timestamp (ms).
+  // Label-based exclusion is the primary dedup mechanism when configured;
+  // this TTL is a safety net for queries that do not use processedLabelId.
   private gmailDeliveredIds: Map<string, number> = new Map();
   private gmailDeliveredIdsPath: string = '';
-  private readonly GMAIL_DELIVERED_TTL_MS = 2 * 60 * 60 * 1000; // 2h
+  private readonly GMAIL_DELIVERED_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30d
 
   // Slack watch state
   private slackWatch?: { channel: string; intervalMs: number };
@@ -522,13 +524,17 @@ export class FastChecker {
     if (now - this.gmailLastCheckedAt < this.gmailWatch.intervalMs) return;
     this.gmailLastCheckedAt = now;
     this.saveGmailLastCheckedAt();
+    const baseQuery = this.gmailWatch.query;
+    const effectiveQuery = (this.gmailWatch.processedLabelId && !baseQuery.includes(`-label:${this.gmailWatch.processedLabelId}`))
+      ? `${baseQuery} -label:${this.gmailWatch.processedLabelId}`
+      : baseQuery;
 
     // Fetch unread message list
     let listOutput = '';
     try {
       listOutput = await new Promise<string>((resolve, reject) => {
         execFile('gws', ['gmail', 'users', 'messages', 'list',
-          '--params', JSON.stringify({ userId: 'me', q: this.gmailWatch!.query }),
+          '--params', JSON.stringify({ userId: 'me', q: effectiveQuery }),
           '--format', 'json',
         ], { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
           if (err) { reject(err); return; }
@@ -551,7 +557,7 @@ export class FastChecker {
 
     if (messageIds.length === 0) return; // nothing to do
 
-    // Filter out already-delivered IDs (2h TTL dedup)
+    // Filter out already-delivered IDs (30d TTL safety-net dedup)
     this.pruneGmailDeliveredIds();
     const newIds = messageIds.filter(id => !this.gmailDeliveredIds.has(id));
     if (newIds.length === 0) {
@@ -586,7 +592,7 @@ export class FastChecker {
     const total = newIds.length;
     const shown = summaries.length;
     const header = `=== GMAIL WATCH: ${total} unread message${total !== 1 ? 's' : ''} ===\n` +
-      `Query: ${this.gmailWatch.query}\n\n`;
+      `Query: ${effectiveQuery}\n\n`;
     const body = summaries.map((s, i) => `${i + 1}. ${s}`).join('\n\n');
     const footer = total > shown ? `\n\n(${total - shown} more not shown)` : '';
     const hint = `\n\nProcess: gws gmail users messages get --params '{"userId":"me","id":"<ID>","format":"full"}' --format json` +
@@ -598,7 +604,7 @@ export class FastChecker {
     try {
       sendMessage(this.paths, 'fast-checker', this.agent.name, 'normal', inboxText);
       // Record delivered IDs
-      for (const id of newIds.slice(0, 20)) {
+      for (const id of newIds) {
         this.gmailDeliveredIds.set(id, now);
       }
       this.saveGmailDeliveredIds();
@@ -607,18 +613,28 @@ export class FastChecker {
     }
 
     // Apply processed label so emails are excluded from future polls even after daemon restart.
-    // In-memory dedup has a 2h TTL — without a persistent label the same emails re-deliver on restart.
+    // In-memory dedup is only a safety net — without a persistent label the same emails can re-deliver.
     if (this.gmailWatch?.processedLabelId) {
       const labelId = this.gmailWatch.processedLabelId;
       for (const id of newIds.slice(0, 20)) {
-        execFile('gws', [
-          'gmail', 'users', 'messages', 'modify',
-          '--params', JSON.stringify({ userId: 'me', id }),
-          '--json', JSON.stringify({ addLabelIds: [labelId] }),
-          '--format', 'json',
-        ], { timeout: 10_000 }, (err) => {
-          if (err) this.log(`Gmail watch: could not apply label ${labelId} to ${id}: ${err}`);
-        });
+        try {
+          await new Promise<void>((resolve, reject) => {
+            execFile('gws', [
+              'gmail', 'users', 'messages', 'modify',
+              '--params', JSON.stringify({ userId: 'me', id }),
+              '--json', JSON.stringify({ addLabelIds: [labelId] }),
+              '--format', 'json',
+            ], { timeout: 10_000 }, (err) => {
+              if (err) {
+                reject(err);
+                return;
+              }
+              resolve();
+            });
+          });
+        } catch (err) {
+          this.log(`Gmail watch: could not apply label ${labelId} to ${id}: ${err}`);
+        }
       }
     }
   }

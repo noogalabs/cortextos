@@ -1009,7 +1009,7 @@ describe('FastChecker', () => {
       vi.clearAllMocks();
     });
 
-    function createGmailChecker(gmailWatch?: { query: string; intervalMs: number }) {
+    function createGmailChecker(gmailWatch?: { query: string; intervalMs: number; processedLabelId?: string }) {
       const checker = new FastChecker(createMockAgent(), paths, '/tmp/framework', gmailWatch ? { gmailWatch } : {});
       (checker as any).gmailLastCheckedAt = 0;
       return checker;
@@ -1140,6 +1140,60 @@ describe('FastChecker', () => {
         'normal',
         expect.stringMatching(/3.*(unread|message)/i),
       );
+    });
+
+    it('TC-G9: augments list query with processed label exclusion when configured', async () => {
+      const checker = createGmailChecker({ query: 'from:test.com is:unread', intervalMs: 900000, processedLabelId: 'Label_74' });
+      vi.mocked(execFile).mockImplementation((_cmd, args, _optsOrCb, maybeCb?) => {
+        const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
+        if (args[3] === 'list') {
+          (callback as Function)(null, JSON.stringify({ messages: [] }));
+        } else {
+          (callback as Function)(null, JSON.stringify({}));
+        }
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+
+      expect(execFile).toHaveBeenCalledWith(
+        'gws',
+        expect.arrayContaining([
+          'list',
+          '--params',
+          JSON.stringify({ userId: 'me', q: 'from:test.com is:unread -label:Label_74' }),
+        ]),
+        expect.any(Object),
+        expect.any(Function),
+      );
+    });
+
+    it('TC-G10: records all new message IDs in delivered map even when more than 20 match', async () => {
+      const checker = createGmailChecker({ query: 'is:unread', intervalMs: 900000 });
+      const messages = Array.from({ length: 25 }, (_, i) => ({ id: `msg${i + 1}` }));
+      vi.mocked(execFile).mockImplementation((_cmd, args, _optsOrCb, maybeCb?) => {
+        const callback = typeof _optsOrCb === 'function' ? _optsOrCb : maybeCb;
+        if (args[3] === 'list') {
+          (callback as Function)(null, JSON.stringify({ messages }));
+        } else {
+          const paramsIndex = args.indexOf('--params');
+          const params = JSON.parse(String(args[paramsIndex + 1]));
+          (callback as Function)(null, JSON.stringify({
+            id: params.id,
+            payload: {
+              headers: [
+                { name: 'Subject', value: `Subject ${params.id}` },
+                { name: 'From', value: 'sender@test.com' },
+              ],
+            },
+          }));
+        }
+        return {} as any;
+      });
+
+      await (checker as any).checkGmailWatch();
+
+      expect((checker as any).gmailDeliveredIds.size).toBe(25);
     });
   });
 
