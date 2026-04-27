@@ -22,6 +22,37 @@ pip install -e ~/projects/cli-anything-propertymeld/
 #   PM_CLIENT_ID, PM_CLIENT_SECRET  (Nexus API fallback only)
 ```
 
+## Session Capture — When Cookies Expire
+
+Property Meld uses Google Sign-In via Safari. When `pm` returns 401/403 or the session is otherwise stale, recapture from Safari's binary cookie store. **Do NOT use SafariDriver/Selenium/Playwright login automation** — Google's sign-in flow breaks under automation.
+
+**Method:** `snapcli.capture.safari` parses Safari's binary cookie file directly (no automation, no login flow).
+
+```python
+import sys
+sys.path.insert(0, '/Users/davidhunter/projects/cli-anything-snapcli')
+from snapcli.capture.safari import capture
+from pathlib import Path
+
+capture(
+    "propertymeld.com",
+    str(Path.home() / ".claude/credentials/property-meld.json"),
+    cookie_file=str(Path.home() / "Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"),
+)
+```
+
+**Prerequisites:**
+- David must already be logged into propertymeld.com in Safari (the parser only reads, it does not log in)
+- Safari cookie store path: `~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies`
+- Output: ~14 cookies including the `sessionid` cookie
+
+**Verify after capture:**
+```bash
+pm work-orders list --status open --limit 1 --json   # Should return real data, not 401
+```
+
+If the parser returns "0 cookies for propertymeld.com", David needs to log in to PM in Safari first, then re-run the capture.
+
 ## Commands
 
 ### Work Orders
