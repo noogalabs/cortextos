@@ -69,7 +69,9 @@ pm work-orders complete --meld-id <id> --json     # Mark complete (meld must be 
 pm work-orders complete --meld-id <id> --notes "text" --json  # Complete with notes
 pm work-orders cancel --meld-id <id> --json       # Cancel meld
 pm work-orders cancel --meld-id <id> --reason "text" --json   # Cancel with reason
-pm work-orders schedule --meld-id <id> --dtstart 2026-04-27T14:00:00-04:00 --hours 2 --json  # Set appointment (dtstart must include timezone, e.g. -04:00 for ET)
+pm work-orders schedule --meld-id <id> --dtstart 2026-04-27T14:00:00-04:00 --hours 2 --json  # Schedule in-house tech (must include timezone)
+pm work-orders schedule-vendor --meld-id <id> --vendor-id <vid> --dtstart 2026-04-27T14:00:00-04:00 --hours 2 --json  # Schedule vendor
+pm work-orders assign-vendor --meld-id <id> --vendor-id <id> --json  # Assign vendor
 ```
 
 ### Tenants
@@ -100,6 +102,51 @@ pm work-orders assign-vendor --meld-id 12345 --vendor-id 67890 --account 2 --jso
 ```
 Result: status changes to PENDING_VENDOR with vendor_assignment_request
 
+### Projects
+```bash
+pm projects list --json                           # List all projects
+pm projects list --meld-id 12345 --json           # List projects for a meld
+pm projects get <project_id> --json               # Get project details
+pm projects create --name "Electrical Rewire" --description "Kitchen and bathrooms" --json
+pm projects update <project_id> --name "..." --status active|archived --json
+pm projects delete <project_id> --json            # Archive a project
+```
+
+### Invoices
+```bash
+pm invoices list --json                           # List all invoices
+pm invoices list --meld-id 12345 --json           # List invoices for a meld
+pm invoices list --status issued --json           # Filter by status
+pm invoices get <invoice_id> --json               # Get invoice details
+pm invoices create --meld-id 12345 --invoice-number "INV-001" --amount 1500.00 --description "Labor and materials" --json
+pm invoices create --meld-id 12345 --invoice-number "INV-001" --amount 1500.00 --due-date 2026-05-15 --json
+pm invoices update <invoice_id> --status issued --json  # Mark as issued
+pm invoices link <invoice_id> --meld-id 12345 --json    # Link invoice to a meld
+```
+
+### Receipts
+```bash
+pm receipts list --json                           # List all receipts
+pm receipts list --meld-id 12345 --json           # List receipts for a meld
+pm receipts get <receipt_id> --json               # Get receipt details
+pm receipts upload --meld-id 12345 --file /path/to/receipt.pdf --json
+pm receipts upload --meld-id 12345 --file receipt.jpg --description "Material invoice" --json
+pm receipts upload --meld-id 12345 --file receipt.pdf --invoice-id 678 --json  # Link to invoice
+pm receipts link <receipt_id> --invoice-id 678 --json  # Link existing receipt to invoice
+```
+
+### Vendor Invitations
+```bash
+pm vendor-invites send --meld-id 12345 --vendor-id 999 --json
+pm vendor-invites send --meld-id 12345 --vendor-id 999 --message "Please quote for full bathroom remodel" --json
+pm vendor-invites list --json                      # List all invitations
+pm vendor-invites list --meld-id 12345 --json     # List invitations for a meld
+pm vendor-invites list --status pending --json    # Filter by status
+pm vendor-invites get <invitation_id> --json      # Get invitation details
+pm vendor-invites resend <invitation_id> --json   # Resend an invitation
+pm vendor-invites cancel <invitation_id> --json   # Cancel an invitation
+```
+
 ### Health Check
 ```bash
 pm probe --json                                   # Verify credentials
@@ -109,17 +156,15 @@ pm probe --json                                   # Verify credentials
 
 | Command | Backend | Auth |
 |---------|---------|------|
-| work-orders list/get | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
-| work-orders comments | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
-| work-orders send-message | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
-| work-orders clone | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
-| work-orders merge | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
-| work-orders complete | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
-| work-orders cancel | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
-| work-orders schedule | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
-| work-orders assign-vendor | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| work-orders list/get/comments/send-message | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| work-orders clone/merge/complete/cancel | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| work-orders schedule/assign-vendor | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
 | assign-tech (in-house) | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
 | tenants list/get | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| projects list/get/create/update/delete | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| invoices list/get/create/update/link | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| receipts list/get/upload/link | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| vendor-invites send/list/get/resend/cancel | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
 | properties/vendors list | Nexus API | PM_CLIENT_ID/SECRET |
 | maintenance_notes PATCH | Nexus API | PM_CLIENT_ID/SECRET |
 
