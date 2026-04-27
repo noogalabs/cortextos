@@ -61,15 +61,11 @@ pm assign-tech --work-order-id <id> --tech Carlos --json
 ```
 
 ### External Vendor Assignment
-Use the wrapper script (validates inputs, handles errors):
 ```bash
-PM_LIB_PATH=~/projects/cli-anything-propertymeld \
-  python3 ~/.claude/skills/pm-cli-harness/scripts/pm-assign-vendor.py <meld_id> <vendor_id> [account_prefix]
-
-# Example:
-python3 ~/.claude/skills/pm-cli-harness/scripts/pm-assign-vendor.py 12345 67890
+pm work-orders assign-vendor --meld-id <id> --vendor-id <id> --json
+pm work-orders assign-vendor --meld-id 12345 --vendor-id 67890 --json
 # Optional account prefix (default "1"):
-python3 ~/.claude/skills/pm-cli-harness/scripts/pm-assign-vendor.py 12345 67890 2
+pm work-orders assign-vendor --meld-id 12345 --vendor-id 67890 --account 2 --json
 ```
 Result: status changes to PENDING_VENDOR with vendor_assignment_request
 
@@ -90,8 +86,8 @@ pm probe --json                                   # Verify credentials
 | work-orders complete | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
 | work-orders cancel | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
 | work-orders schedule | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
+| work-orders assign-vendor | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
 | assign-tech (in-house) | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
-| assign vendor (external) | snapcli http_backend directly | PM_CREDS_PATH cookies |
 | tenants list/get | snapcli (plain HTTP) | PM_CREDS_PATH cookies |
 | properties/vendors list | Nexus API | PM_CLIENT_ID/SECRET |
 | maintenance_notes PATCH | Nexus API | PM_CLIENT_ID/SECRET |
