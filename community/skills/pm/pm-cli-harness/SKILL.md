@@ -1,7 +1,8 @@
 ---
-name: propertymeld
+name: pm-cli-harness
 description: "CLI for Property Meld work order management. snapcli (pm) is the primary tool for all PM operations — use it first. Nexus API is secondary (reads + maintenance_notes). Manual UI is last resort only if snapcli itself is broken."
-triggers: ["property meld", "work order", "meld", "pm work-orders", "pm assign-tech", "meld triage"]
+effort: low
+triggers: ["pm work-orders", "pm assign-tech", "meld triage"]
 ---
 
 # Property Meld CLI
@@ -37,7 +38,7 @@ pm work-orders complete --meld-id <id> --json     # Mark complete (meld must be 
 pm work-orders complete --meld-id <id> --notes "text" --json  # Complete with notes
 pm work-orders cancel --meld-id <id> --json       # Cancel meld
 pm work-orders cancel --meld-id <id> --reason "text" --json   # Cancel with reason
-pm work-orders schedule --meld-id <id> --dtstart 2026-04-27T14:00:00-04:00 --hours 2 --json  # Set appointment window
+pm work-orders schedule --meld-id <id> --dtstart 2026-04-27T14:00:00-04:00 --hours 2 --json  # Set appointment (dtstart must include timezone, e.g. -04:00 for ET)
 ```
 
 ### Tenants
@@ -60,18 +61,17 @@ pm assign-tech --work-order-id <id> --tech Carlos --json
 ```
 
 ### External Vendor Assignment
-No dedicated CLI command yet. Use http_backend directly:
-```python
-import sys; sys.path.insert(0, '/Users/davidhunter/projects/cli-anything-propertymeld')
-from cli_anything.propertymeld import http_backend
-creds = http_backend._load_creds()
-cookie_hdr = http_backend._cookie_header(creds)
-csrf_token = http_backend._get_csrf_token(cookie_hdr)
-# Get vendor object from vendors list, set type="Vendor"
-vendor_obj = {..., "type": "Vendor", "composite_id": f"1-{vendor_id}"}
-http_backend._http_patch(f"melds/{meld_id}/assign-maintenance/", {"maintenance": [vendor_obj]}, cookie_hdr, csrf_token)
-# Result: status changes to PENDING_VENDOR with vendor_assignment_request
+Use the wrapper script (validates inputs, handles errors):
+```bash
+PM_LIB_PATH=~/projects/cli-anything-propertymeld \
+  python3 ~/.claude/skills/pm-cli-harness/scripts/pm-assign-vendor.py <meld_id> <vendor_id> [account_prefix]
+
+# Example:
+python3 ~/.claude/skills/pm-cli-harness/scripts/pm-assign-vendor.py 12345 67890
+# Optional account prefix (default "1"):
+python3 ~/.claude/skills/pm-cli-harness/scripts/pm-assign-vendor.py 12345 67890 2
 ```
+Result: status changes to PENDING_VENDOR with vendor_assignment_request
 
 ### Health Check
 ```bash
