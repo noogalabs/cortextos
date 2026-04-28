@@ -93,6 +93,17 @@ pm vendors list --json                            # All vendors
 pm assign-tech --work-order-id <id> --tech Carlos --json
 ```
 
+### Vendor Assignment
+```bash
+# Top-level (preferred — mirrors assign-tech UX):
+pm assign-vendor --work-order-id 12345 --vendor Rogers --json
+pm assign-vendor --work-order-id 12345 --vendor "Rogers Electric" --json
+
+# Nested form (still works, takes numeric vendor-id):
+pm work-orders assign-vendor --meld-id 12345 --vendor-id 92504 --json
+```
+Result: status changes to PENDING_VENDOR. Vendor name uses partial match against `pm vendors list`.
+
 ### External Vendor Assignment
 ```bash
 pm work-orders assign-vendor --meld-id <id> --vendor-id <id> --json
