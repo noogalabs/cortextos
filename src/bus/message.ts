@@ -91,7 +91,7 @@ export function sendMessage(
   // Best-effort: never throw out of the canonical send path.
   try {
     const bodyPreview = text.length > 120 ? text.slice(0, 120) + '…' : text;
-    logEvent(paths, from, _orgFromPaths(paths), 'action', 'inbox_arrival', 'info', {
+    logEvent(paths, to, _orgFromPaths(paths), 'action', 'inbox_arrival', 'info', {
       to_agent: to,
       from_agent: from,
       msg_id: msgId,
