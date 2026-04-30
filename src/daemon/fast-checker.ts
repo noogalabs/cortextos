@@ -476,9 +476,13 @@ export class FastChecker {
     try {
       const toRead = stats.size - this.eventLogPosition;
       const buf = Buffer.alloc(toRead);
-      readSync(fd, buf, 0, toRead, this.eventLogPosition);
-      this.eventLogPosition = stats.size;
-      const text = buf.toString('utf-8');
+      // Honour readSync's return value — file can shrink between statSync and
+      // readSync (rotation race). Advance position by ACTUAL bytes read so a
+      // short read doesn't silently skip past unread data on the next tick.
+      const bytesRead = readSync(fd, buf, 0, toRead, this.eventLogPosition);
+      if (bytesRead <= 0) return;
+      this.eventLogPosition += bytesRead;
+      const text = buf.subarray(0, bytesRead).toString('utf-8');
       for (const line of text.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
