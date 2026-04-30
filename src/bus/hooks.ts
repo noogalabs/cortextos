@@ -264,6 +264,7 @@ export async function dispatchHook(hook: HookEntry, event: Event): Promise<void>
     'hook_fire';
 
   emitHookBusEvent(eventName, {
+    ...(result.meta ?? {}),
     hook_id: hook.id,
     handler_type: hook.handler_type,
     event_id: event.id,
@@ -271,7 +272,6 @@ export async function dispatchHook(hook: HookEntry, event: Event): Promise<void>
     event_type: event.event,
     source_agent: event.agent,
     outcome: result.reason ?? `${result.action}_no_reason`,
-    ...(result.meta ?? {}),
   });
 }
 

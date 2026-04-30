@@ -234,6 +234,36 @@ describe('src/bus/hooks — Day-2 per-handler wiring', () => {
       expect(e?.meta.handler_type).toBe('log_event');
       expect(e?.meta.event_id).toBe('evt-meta');
     });
+
+    it('handler meta cannot override dispatcher bookkeeping fields', async () => {
+      registerHandler('log_event', (): HandlerResult => ({
+        action: 'fire',
+        reason: 'meta_override_check',
+        meta: {
+          hook_id: 'OVERRIDE_ATTEMPT',
+          handler_type: 'OVERRIDE_ATTEMPT',
+          event_id: 'OVERRIDE_ATTEMPT',
+          event_category: 'OVERRIDE_ATTEMPT',
+          event_type: 'OVERRIDE_ATTEMPT',
+          source_agent: 'OVERRIDE_ATTEMPT',
+          outcome: 'OVERRIDE_ATTEMPT',
+          extra_handler_field: 'kept',
+        },
+      }));
+      await dispatchHook(
+        makeHook({ id: 'h-real', handler_type: 'log_event' }),
+        makeEvent({ id: 'evt-real', agent: 'real-agent', category: 'action', event: 'real_event' }),
+      );
+      const e = lastEmittedEvent();
+      expect(e?.meta.hook_id).toBe('h-real');
+      expect(e?.meta.handler_type).toBe('log_event');
+      expect(e?.meta.event_id).toBe('evt-real');
+      expect(e?.meta.event_category).toBe('action');
+      expect(e?.meta.event_type).toBe('real_event');
+      expect(e?.meta.source_agent).toBe('real-agent');
+      expect(e?.meta.outcome).toBe('meta_override_check');
+      expect(e?.meta.extra_handler_field).toBe('kept');
+    });
   });
 
   describe('handler registry', () => {
