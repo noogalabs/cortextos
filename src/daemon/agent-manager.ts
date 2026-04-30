@@ -245,23 +245,28 @@ export class AgentManager {
       allowedUserId: allowedUserId ? parseInt(allowedUserId, 10) : undefined,
     });
 
-    // Send Telegram notification on crashes and session refreshes
-    if (telegramApi && chatId) {
-      const tgApi = telegramApi;
-      const tgChatId = chatId;
-      let prevStatus: string | null = null;
-      agentProcess.onStatusChanged((status) => {
+    // Reset watchdog session state on every transition to 'running' AND
+    // (separately) send Telegram notifications on crashes / session refreshes.
+    // The reset runs for ALL agents — non-Telegram agents previously did not
+    // get their watchdog state cleared on restart, leaking stale handoff
+    // timestamps across session boundaries.
+    let prevStatus: string | null = null;
+    agentProcess.onStatusChanged((status) => {
+      if (status.status === 'running' && prevStatus !== 'running') {
+        checker.resetWatchdogState();
+      }
+      if (telegramApi && chatId) {
         if (status.status === 'crashed') {
           const crashNum = status.crashCount ?? '?';
-          tgApi.sendMessage(tgChatId, `Agent ${name} crashed (crash #${crashNum}) — auto-restarting`).catch(() => {});
+          telegramApi.sendMessage(chatId, `Agent ${name} crashed (crash #${crashNum}) — auto-restarting`).catch(() => {});
         } else if (status.status === 'halted') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`).catch(() => {});
+          telegramApi.sendMessage(chatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`).catch(() => {});
         } else if (status.status === 'running' && prevStatus === 'crashed') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`).catch(() => {});
+          telegramApi.sendMessage(chatId, `Agent ${name} recovered and is back online`).catch(() => {});
         }
-        prevStatus = status.status;
-      });
-    }
+      }
+      prevStatus = status.status;
+    });
 
     this.agents.set(name, { process: agentProcess, checker });
 

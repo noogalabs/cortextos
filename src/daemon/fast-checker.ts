@@ -155,6 +155,25 @@ export class FastChecker {
   }
 
   /**
+   * Clear per-session watchdog state. Called by agent-manager when an agent
+   * transitions back to 'running' (fresh start or recovery from crash) so
+   * stale handoff/warning timestamps from the prior session do not leak into
+   * the new one.
+   *
+   * Resets the four ctx-watchdog fields that are tied to a single session
+   * lifetime: ctxHandoffFiredAt, ctxHandoffDeadlineAt, ctxWarningFiredAt,
+   * stdoutLogSize. Other state (dedup hashes, circuit breaker) intentionally
+   * persists across the boundary.
+   */
+  resetWatchdogState(): void {
+    this.ctxHandoffFiredAt = 0;
+    this.ctxHandoffDeadlineAt = 0;
+    this.ctxWarningFiredAt = 0;
+    this.stdoutLogSize = -1;
+    this.log('Watchdog state reset (agent transitioned to running)');
+  }
+
+  /**
    * Queue a formatted Telegram message for injection.
    * Called by the daemon's Telegram handler.
    */

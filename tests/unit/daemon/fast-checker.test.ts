@@ -833,4 +833,29 @@ describe('FastChecker', () => {
       expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
   });
+
+  describe('resetWatchdogState', () => {
+    it('clears the four per-session ctx-watchdog fields', () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework') as unknown as {
+        ctxHandoffFiredAt: number;
+        ctxHandoffDeadlineAt: number;
+        ctxWarningFiredAt: number;
+        stdoutLogSize: number;
+        resetWatchdogState: () => void;
+      };
+
+      checker.ctxHandoffFiredAt = 111;
+      checker.ctxHandoffDeadlineAt = 222;
+      checker.ctxWarningFiredAt = 333;
+      checker.stdoutLogSize = 999;
+
+      checker.resetWatchdogState();
+
+      expect(checker.ctxHandoffFiredAt).toBe(0);
+      expect(checker.ctxHandoffDeadlineAt).toBe(0);
+      expect(checker.ctxWarningFiredAt).toBe(0);
+      expect(checker.stdoutLogSize).toBe(-1);
+    });
+  });
 });
