@@ -499,34 +499,14 @@ export class FastChecker {
     const matched = matchHooks(this.hookRegistry, event, this.agent.name);
     if (matched.length === 0) return;
     for (const hook of matched) {
-      // Best-effort observability: log every match so we can see which hooks
-      // would have fired today even before Piece 3 wires real handlers.
-      execFile(
-        'cortextos',
-        [
-          'bus',
-          'log-event',
-          'action',
-          'hook_dispatch_attempted',
-          'info',
-          '--meta',
-          JSON.stringify({
-            hook_id: hook.id,
-            handler_type: hook.handler_type,
-            event_id: event.id,
-            event_category: event.category,
-            event_type: event.event,
-            day1_stub: true,
-          }),
-        ],
-        { timeout: 5_000 },
-        () => { /* fire-and-forget */ },
-      );
-      // dispatchHook is still the MM stub — logs hook_attempt_stub to
-      // hooks.log without invoking any handler. Piece 3 (Day-2) replaces it
-      // with the per-handler-type switch from rfc-bus-hooks-dispatcher-design.md §6.
+      // dispatchHook writes hooks.log locally AND emits exactly one
+      // hook_fire / hook_block / hook_escalate bus event per dispatch — it is
+      // the single source of truth for hook telemetry. The pre-dispatch
+      // `hook_dispatch_attempted` emit was dropped (2026-04-30 ultrareview Fix 6,
+      // Option A) — it doubled the subprocess spawn rate per hook with no
+      // observability the dispatcher event does not already carry.
       dispatchHook(hook, event).catch((err) => {
-        this.log(`dispatchHook stub error for ${hook.id}: ${(err as Error).message}`);
+        this.log(`dispatchHook error for ${hook.id}: ${(err as Error).message}`);
       });
     }
   }
