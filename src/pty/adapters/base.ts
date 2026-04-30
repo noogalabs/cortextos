@@ -15,16 +15,19 @@ export interface VendorAdapter {
 }
 
 import { anthropicAdapter } from './anthropic.js';
+import { openaiAdapter } from './openai.js';
 
 export function loadAdapter(vendor: string | undefined): VendorAdapter {
   const v = vendor || 'anthropic';
   switch (v) {
     case 'anthropic':
       return anthropicAdapter;
+    case 'openai':
+      return openaiAdapter;
     default:
       throw new Error(
-        `Unknown vendor: '${v}'. Only 'anthropic' is supported in MVP. ` +
-        `OpenAI and Google adapters land in subsequent migration steps.`
+        `Unknown vendor: '${v}'. Supported MVP vendors: 'anthropic', 'openai'. ` +
+        `Google adapter lands in migration step #3.`
       );
   }
 }
