@@ -10,7 +10,8 @@ import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { SlackAPI, type SlackMessage } from '../slack/api.js';
 import { KEYS } from '../pty/inject.js';
-import { stripControlChars } from '../utils/validate.js';
+import { stripControlChars, validateOrgName } from '../utils/validate.js';
+import { resolve as pathResolve } from 'path';
 // added 2026-04-29 by collie via dane dispatch — RFC #15 Day-1 dispatcher integration; Piece 3 (handler-type wiring) deferred to Day-2
 import { loadHookRegistry, matchHooks, dispatchHook, type HookRegistry } from '../bus/hooks.js';
 
@@ -362,8 +363,22 @@ export class FastChecker {
       this.log('Hook dispatcher disabled — CTX_ORG env not set; fail-open per RFC #15 §9');
       return;
     }
+    try {
+      validateOrgName(org);
+    } catch (err) {
+      this.log(`Hook dispatcher disabled — invalid CTX_ORG '${org}': ${(err as Error).message}`);
+      return;
+    }
     this.hookOrg = org;
     const orgPath = join(this.frameworkRoot, 'orgs', org);
+    // Belt-and-suspenders: confirm resolved org path stays inside frameworkRoot/orgs
+    // even after symlink expansion. Defends against any path-traversal slip past validateOrgName.
+    const orgsRoot = pathResolve(join(this.frameworkRoot, 'orgs'));
+    const resolvedOrgPath = pathResolve(orgPath);
+    if (!resolvedOrgPath.startsWith(orgsRoot + '/') && resolvedOrgPath !== orgsRoot) {
+      this.log(`Hook dispatcher disabled — org path escaped frameworkRoot: ${orgPath}`);
+      return;
+    }
     this.hookRegistryPath = join(orgPath, 'hooks.json');
     this.loadAndAnnounceRegistry(orgPath, 'startup');
 
