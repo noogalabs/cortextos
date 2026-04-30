@@ -218,6 +218,14 @@ export interface AgentConfig {
    * continuity, and exit handling.
    */
   runtime?: 'claude-code' | 'hermes';
+  /**
+   * Vendor adapter for the underlying CLI binary. Defaults to 'anthropic'
+   * when absent (which spawns the `claude` CLI). MVP supports anthropic only;
+   * 'openai' and 'google' adapters land in subsequent migration steps.
+   * Only meaningful when `runtime` is unset or 'claude-code' — Hermes runtime
+   * uses its own override path in HermesPTY.
+   */
+  vendor?: 'anthropic' | 'openai' | 'google';
 }
 
 export interface CronEntry {

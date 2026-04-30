@@ -1,9 +1,9 @@
 import { join } from 'path';
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
-import { resolveModel } from '../utils/model-tiers.js';
 import { OutputBuffer } from './output-buffer.js';
+import { loadAdapter } from './adapters/base.js';
 
 // node-pty types
 interface IPty {
@@ -192,56 +192,21 @@ export class AgentPTY {
   /**
    * Returns the binary name for the agent process.
    * Protected so HermesPTY can override to return 'hermes'.
+   * Default delegates to the configured vendor adapter (anthropic by default).
    */
   protected getBinaryName(): string {
-    return platform() === 'win32' ? 'claude.cmd' : 'claude';
+    return loadAdapter(this.config.vendor).binary;
   }
 
   /**
-   * Build the claude CLI argument array.
+   * Build the CLI argument array.
    * Returns args suitable for passing directly to node-pty spawn (no shell escaping needed).
    * Protected so HermesPTY can override this for its own spawn args.
+   * Default delegates to the configured vendor adapter (anthropic by default).
    */
   protected buildClaudeArgs(mode: 'fresh' | 'continue', prompt: string): string[] {
-    const args: string[] = [];
-
-    if (mode === 'continue') {
-      args.push('--continue');
-    }
-
-    args.push('--dangerously-skip-permissions');
-
-    const model = resolveModel(this.config);
-    if (model) {
-      args.push('--model', model);
-    }
-
-    // Local override pattern (feat #20): concatenate {agentDir}/local/*.md files
-    // and append as system prompt. The local/ dir is gitignored so users can customize
-    // agent behavior without merge conflicts on framework updates.
-    const agentDir = this.env.agentDir;
-    if (agentDir) {
-      const localDir = join(agentDir, 'local');
-      if (existsSync(localDir)) {
-        try {
-          const mdFiles = readdirSync(localDir)
-            .filter(f => f.endsWith('.md'))
-            .sort()
-            .map(f => join(localDir, f));
-          if (mdFiles.length > 0) {
-            const localContent = mdFiles
-              .map(f => readFileSync(f, 'utf-8'))
-              .join('\n\n');
-            args.push('--append-system-prompt', localContent);
-          }
-        } catch { /* ignore read errors */ }
-      }
-    }
-
-    // Pass prompt as a plain string — no shell escaping needed when using node-pty directly
-    args.push(prompt);
-
-    return args;
+    const adapter = loadAdapter(this.config.vendor);
+    return adapter.buildArgs(mode, prompt, { config: this.config, env: this.env });
   }
 
   /**
