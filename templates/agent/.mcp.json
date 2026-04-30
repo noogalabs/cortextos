@@ -1,12 +1,3 @@
 {
-  "mcpServers": {
-    "agentmemory": {
-      "command": "npx",
-      "args": ["-y", "agentmemory-mcp"],
-      "env": {
-        "TOKEN_BUDGET": "2000",
-        "AGENTMEMORY_TOOLS": "core"
-      }
-    }
-  }
+  "mcpServers": {}
 }
