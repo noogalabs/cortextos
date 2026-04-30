@@ -114,7 +114,8 @@ busCommand
 
     const msgId = sendMessage(paths, env.agentName, to, priority as Priority, text, effectiveReplyTo);
     try {
-      logEvent(paths, env.agentName, env.org, 'message', 'agent_message_sent', 'info', JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null }));
+      // rerouted to canonical category 2026-04-29 by collie via dane dispatch — RFC #15 schema-drift cleanup
+      logEvent(paths, env.agentName, env.org, 'action', 'agent_message_sent', 'info', JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null }));
     } catch { /* non-fatal */ }
     console.log(msgId);
   });
@@ -136,7 +137,8 @@ busCommand
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     ackInbox(paths, id);
     try {
-      logEvent(paths, env.agentName, env.org, 'message', 'inbox_ack', 'info', JSON.stringify({ msg_id: id }));
+      // rerouted to canonical category 2026-04-29 by collie via dane dispatch — RFC #15 schema-drift cleanup
+      logEvent(paths, env.agentName, env.org, 'action', 'inbox_ack', 'info', JSON.stringify({ msg_id: id }));
     } catch { /* non-fatal */ }
     console.log(`ACK'd ${id}`);
   });
@@ -1044,7 +1046,8 @@ busCommand
         try {
           const paths = resolvePaths(env.agentName, env.instanceId, env.org);
           const preview = message.length > 120 ? message.slice(0, 120) + '…' : message;
-          logEvent(paths, env.agentName, env.org, 'message', 'telegram_sent', 'info', JSON.stringify({ chat_id: chatId, message_id: sentMessageId, preview }));
+          // rerouted to canonical category 2026-04-29 by collie via dane dispatch — RFC #15 schema-drift cleanup
+          logEvent(paths, env.agentName, env.org, 'action', 'telegram_sent', 'info', JSON.stringify({ chat_id: chatId, message_id: sentMessageId, preview }));
         } catch { /* non-fatal */ }
       }
 
@@ -2117,7 +2120,8 @@ busCommand
           // Log to event bus
           if (!opts.dryRun) {
             try {
-              logEvent(paths, env.agentName, env.org, 'agent_activity' as any, 'tool_call', 'info', {
+              // rerouted to canonical category 2026-04-29 by collie via dane dispatch — RFC #15 schema-drift cleanup
+              logEvent(paths, env.agentName, env.org, 'action', 'tool_call', 'info', {
                 line: trimmed,
                 session: sessionName,
                 high_signal: isHighSignal,
@@ -2226,6 +2230,107 @@ busCommand
     if (!opts.dryRun && patched > 0) {
       console.log('\nRestart affected agents to apply the new settings:');
       console.log('  cortextos restart <agent-name>');
+    }
+  });
+
+// added 2026-04-29 by collie via dane dispatch K+L+N+F batch — needs npm run build before live
+busCommand
+  .command('session-burn-so-far')
+  .description('Report estimated token burn for the current session — reads inbound/outbound message logs + activity log, sums any usage fields, falls back to ~4-chars-per-token heuristic.')
+  .option('--format <fmt>', 'Output format: json (default) | table', 'json')
+  .action((opts: { format: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+
+    // Locate session-relevant logs under ~/.cortextos/<instanceId>/logs/<agentName>/
+    const inboundPath = join(paths.logDir, 'inbound-messages.jsonl');
+    const outboundPath = join(paths.logDir, 'outbound-messages.jsonl');
+    const activityPath = join(paths.logDir, 'activity.log');
+
+    // Find the most recent session_start event (best heuristic for "current session" boundary)
+    let sessionStartTs = 0;
+    if (existsSync(activityPath)) {
+      try {
+        const lines = readFileSync(activityPath, 'utf-8').trim().split('\n');
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i];
+          if (line.includes('session_start')) {
+            const tsMatch = line.match(/"timestamp":\s*"([^"]+)"|^([\d-]+T[\d:.]+Z?)/);
+            if (tsMatch) {
+              const tsStr = tsMatch[1] || tsMatch[2];
+              const t = Date.parse(tsStr);
+              if (!isNaN(t)) {
+                sessionStartTs = t;
+                break;
+              }
+            }
+          }
+        }
+      } catch { /* fall through */ }
+    }
+    // If no session_start found, default to last 24h
+    if (sessionStartTs === 0) sessionStartTs = Date.now() - 24 * 60 * 60 * 1000;
+
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let messageCount = 0;
+    let estimateUsed = false;
+
+    const tallyJsonl = (path: string) => {
+      if (!existsSync(path)) return;
+      try {
+        const lines = readFileSync(path, 'utf-8').trim().split('\n');
+        for (const line of lines) {
+          if (!line) continue;
+          try {
+            const d = JSON.parse(line);
+            const tsRaw = d.timestamp || d.created_at || d.ts;
+            const tsMs = typeof tsRaw === 'string' ? Date.parse(tsRaw) : (typeof tsRaw === 'number' ? tsRaw : 0);
+            if (tsMs && tsMs < sessionStartTs) continue;
+            messageCount++;
+            const usage = d.usage || d.token_usage;
+            if (usage && typeof usage === 'object') {
+              totalInputTokens += Number(usage.input_tokens || 0);
+              totalOutputTokens += Number(usage.output_tokens || 0);
+            } else {
+              estimateUsed = true;
+              const bodyLen = (d.body || d.text || d.content || JSON.stringify(d)).length;
+              totalInputTokens += Math.ceil(bodyLen / 4);
+            }
+          } catch { /* ignore malformed line */ }
+        }
+      } catch { /* ignore read errors */ }
+    };
+
+    tallyJsonl(inboundPath);
+    tallyJsonl(outboundPath);
+
+    const elapsedMs = Date.now() - sessionStartTs;
+    const elapsedMin = Math.round(elapsedMs / 60000);
+    const totalTokens = totalInputTokens + totalOutputTokens;
+    const tokensPerMin = elapsedMin > 0 ? Math.round(totalTokens / elapsedMin) : 0;
+
+    const result = {
+      session_start_ts: new Date(sessionStartTs).toISOString(),
+      total_input_tokens: totalInputTokens,
+      total_output_tokens: totalOutputTokens,
+      total_tokens: totalTokens,
+      message_count: messageCount,
+      time_elapsed_min: elapsedMin,
+      tokens_per_min: tokensPerMin,
+      estimate: estimateUsed,
+    };
+
+    if (opts.format === 'table') {
+      console.log(`Session start:      ${result.session_start_ts}`);
+      console.log(`Elapsed:            ${result.time_elapsed_min} min`);
+      console.log(`Messages counted:   ${result.message_count}`);
+      console.log(`Input tokens:       ${result.total_input_tokens}${result.estimate ? ' (est)' : ''}`);
+      console.log(`Output tokens:      ${result.total_output_tokens}${result.estimate ? ' (est)' : ''}`);
+      console.log(`Total tokens:       ${result.total_tokens}${result.estimate ? ' (est, ~4 chars/token)' : ''}`);
+      console.log(`Tokens / min:       ${result.tokens_per_min}`);
+    } else {
+      console.log(JSON.stringify(result, null, 2));
     }
   });
 

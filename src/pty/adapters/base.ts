@@ -16,6 +16,8 @@ export interface VendorAdapter {
 
 import { anthropicAdapter } from './anthropic.js';
 import { openaiAdapter } from './openai.js';
+// added 2026-04-29 by collie via dane dispatch — Task 2: Gemini skeleton wired into the factory
+import { googleAdapter } from './google.js';
 
 export function loadAdapter(vendor: string | undefined): VendorAdapter {
   const v = vendor || 'anthropic';
@@ -24,10 +26,11 @@ export function loadAdapter(vendor: string | undefined): VendorAdapter {
       return anthropicAdapter;
     case 'openai':
       return openaiAdapter;
+    case 'google':
+      return googleAdapter;
     default:
       throw new Error(
-        `Unknown vendor: '${v}'. Supported MVP vendors: 'anthropic', 'openai'. ` +
-        `Google adapter lands in migration step #3.`
+        `Unknown vendor: '${v}'. Supported MVP vendors: 'anthropic', 'openai', 'google'.`
       );
   }
 }

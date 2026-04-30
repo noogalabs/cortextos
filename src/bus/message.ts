@@ -7,6 +7,8 @@ import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { acquireLock, releaseLock } from '../utils/lock.js';
 import { randomString } from '../utils/random.js';
 import { validateAgentName, validatePriority } from '../utils/validate.js';
+// added 2026-04-29 by collie via dane dispatch — RFC #15 Wave 1 events implementation
+import { logEvent } from './event.js';
 
 // ---------------------------------------------------------------------------
 // Security (H10): HMAC-SHA256 message signing
@@ -84,7 +86,34 @@ export function sendMessage(
   ensureDir(inboxDir);
   atomicWriteSync(join(inboxDir, filename), JSON.stringify(message));
 
+  // added 2026-04-29 by collie via dane dispatch — RFC #15 Wave 1 events implementation
+  // Emit inbox_arrival event so hooks can subscribe to cross-agent message routing.
+  // Best-effort: never throw out of the canonical send path.
+  try {
+    const bodyPreview = text.length > 120 ? text.slice(0, 120) + '…' : text;
+    logEvent(paths, from, _orgFromPaths(paths), 'action', 'inbox_arrival', 'info', {
+      to_agent: to,
+      from_agent: from,
+      msg_id: msgId,
+      priority,
+      has_reply_to: Boolean(replyTo),
+      body_preview: bodyPreview,
+    });
+  } catch { /* non-fatal */ }
+
   return msgId;
+}
+
+// added 2026-04-29 by collie via dane dispatch — RFC #15 Wave 1 events implementation
+// Resolve org from BusPaths by walking analyticsDir which has shape `<root>/analytics/<org>`.
+// Falls back to env CTX_ORG, then '' as last resort. logEvent treats '' as a no-op org tag.
+function _orgFromPaths(paths: BusPaths): string {
+  try {
+    const parts = paths.analyticsDir.split('/');
+    const idx = parts.indexOf('analytics');
+    if (idx >= 0 && idx + 1 < parts.length) return parts[idx + 1];
+  } catch { /* ignore */ }
+  return process.env.CTX_ORG ?? '';
 }
 
 /**
