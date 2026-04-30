@@ -304,11 +304,30 @@ function logHookAttempt(hook: HookEntry, event: Event): void {
 //   - hook_block    — a hook matched + actively blocked the calling action (gate said NO)
 //   - hook_escalate — a hook matched + raised severity / re-routed (future use; not emitted by current code paths)
 type HookEmitName = 'hook_fire' | 'hook_block' | 'hook_escalate';
+// Cap meta payload to keep subprocess argv under macOS / Linux ARG_MAX practical
+// limits and avoid silent E2BIG drops. Oversize meta is replaced with a sentinel
+// that preserves dispatcher bookkeeping so the audit trail survives even when a
+// handler returns a huge meta blob.
+const META_MAX_BYTES = 8 * 1024;
 function emitHookBusEvent(name: HookEmitName, meta: Record<string, unknown>): void {
+  let serialized = JSON.stringify(meta);
+  if (Buffer.byteLength(serialized, 'utf-8') > META_MAX_BYTES) {
+    serialized = JSON.stringify({
+      hook_id: meta.hook_id,
+      handler_type: meta.handler_type,
+      event_id: meta.event_id,
+      event_category: meta.event_category,
+      event_type: meta.event_type,
+      source_agent: meta.source_agent,
+      outcome: meta.outcome,
+      truncated_meta: true,
+      original_bytes: Buffer.byteLength(serialized, 'utf-8'),
+    });
+  }
   try {
     execFile(
       'cortextos',
-      ['bus', 'log-event', 'action', name, 'info', '--meta', JSON.stringify(meta)],
+      ['bus', 'log-event', 'action', name, 'info', '--meta', serialized],
       { timeout: 5_000 },
       () => { /* fire-and-forget */ },
     );

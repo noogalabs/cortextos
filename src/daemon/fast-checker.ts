@@ -1,15 +1,18 @@
-import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync, openSync, readSync, closeSync, watch, type FSWatcher } from 'fs';
 import { execFile } from 'child_process';
-import { join } from 'path';
+import { join, resolve as pathResolve } from 'path';
 import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
-import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
+import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery, Event } from '../types/index.js';
 import { checkInbox, ackInbox } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
-import { stripControlChars } from '../utils/validate.js';
+import { stripControlChars, validateOrgName } from '../utils/validate.js';
+// RFC #15 Day-1 dispatcher integration. Pairs with the framework at src/bus/hooks.ts (PR-5 #272).
+import { loadHookRegistry, matchHooks, dispatchHook, type HookRegistry } from '../bus/hooks.js';
+import { registerBuiltInHandlers } from '../bus/hook-handlers/index.js';
 
 type LogFn = (msg: string) => void;
 
@@ -58,6 +61,20 @@ export class FastChecker {
   private ctxCircuitBrokenAt: number | null = null; // when circuit tripped (null = healthy)
   // Persisted to disk so --continue restarts don't reset the circuit breaker
   private ctxCircuitFile: string = '';
+
+  // RFC #15 Day-1 dispatcher state. Inert until startHookDispatcher runs in start().
+  // Per RFC #15 §9 fail-open: if the org cannot be resolved (no CTX_ORG env, no
+  // registry file), the dispatcher stays disabled and never fires hooks.
+  private hookRegistry: HookRegistry = { schema_version: '0.1', hooks: [] };
+  private hookRegistryPath: string = '';
+  private hookRegistryWatcher: FSWatcher | null = null;
+  private eventLogTailer: NodeJS.Timeout | null = null;
+  private eventLogPosition: number = 0;
+  private eventLogCurrentPath: string = '';
+  private readonly EVENT_LOG_TAIL_INTERVAL_MS = 500;
+  // org slug used to scope dispatcher state. Falls back to inert dispatcher
+  // if CTX_ORG env is missing or fails validateOrgName.
+  private hookOrg: string | null = null;
 
   constructor(
     agent: AgentProcess,
@@ -116,6 +133,10 @@ export class FastChecker {
       });
     }, HEARTBEAT_INTERVAL_MS);
 
+    // RFC #15 Day-1 dispatcher: load + watch hooks.json, tail events JSONL,
+    // route through matchHooks → dispatchHook. Inert if CTX_ORG env is unset.
+    this.startHookDispatcher();
+
     while (this.running) {
       try {
         // Check for urgent signal file
@@ -140,6 +161,14 @@ export class FastChecker {
     if (this.heartbeatTimer !== null) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+    if (this.hookRegistryWatcher !== null) {
+      try { this.hookRegistryWatcher.close(); } catch { /* best-effort */ }
+      this.hookRegistryWatcher = null;
+    }
+    if (this.eventLogTailer !== null) {
+      clearInterval(this.eventLogTailer);
+      this.eventLogTailer = null;
     }
   }
 
@@ -1189,6 +1218,164 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       return this.lastMessageInjectedAt > idleTs;
     } catch {
       return true; // Can't read flag — assume still active
+    }
+  }
+
+  // ── RFC #15 Day-1 hook dispatcher ─────────────────────────────────────────
+  // Piece 1: load + watch hooks.json. Piece 2: tail today's event JSONL and
+  // call matchHooks → dispatchHook. Piece 3 (per-handler-type wiring with
+  // bash/send_message/log_event/webhook) lands via registerBuiltInHandlers.
+  private startHookDispatcher(): void {
+    const org = process.env.CTX_ORG;
+    if (!org) {
+      this.log('Hook dispatcher disabled — CTX_ORG env not set; fail-open per RFC #15 §9');
+      return;
+    }
+    try {
+      validateOrgName(org);
+    } catch (err) {
+      this.log(`Hook dispatcher disabled — invalid CTX_ORG '${org}': ${(err as Error).message}`);
+      return;
+    }
+    this.hookOrg = org;
+    const orgPath = join(this.frameworkRoot, 'orgs', org);
+    // Belt-and-suspenders: confirm resolved org path stays inside frameworkRoot/orgs
+    // even after symlink expansion. Defends against any path-traversal slip past validateOrgName.
+    const orgsRoot = pathResolve(join(this.frameworkRoot, 'orgs'));
+    const resolvedOrgPath = pathResolve(orgPath);
+    if (!resolvedOrgPath.startsWith(orgsRoot + '/') && resolvedOrgPath !== orgsRoot) {
+      this.log(`Hook dispatcher disabled — org path escaped frameworkRoot: ${orgPath}`);
+      return;
+    }
+    this.hookRegistryPath = join(orgPath, 'hooks.json');
+    this.loadAndAnnounceRegistry(orgPath, 'startup');
+
+    // Wire built-in hook handlers (log_event, plus scaffold-throw bash_spawn /
+    // send_message / webhook_fetch). Idempotent: registerHandler overwrites by
+    // type, so re-init or hot-reload is safe. Without this call the dispatcher
+    // always falls through to `no_handler_registered` and the Day-3 scaffolding
+    // is dead code.
+    const handlerCount = registerBuiltInHandlers();
+    this.log(`Hook dispatcher: registered ${handlerCount} built-in handler(s)`);
+
+    // Piece 1 — hot-reload on file change. Best-effort; missing file is OK
+    // (loadHookRegistry returns empty registry, dispatcher just sees nothing).
+    if (existsSync(this.hookRegistryPath)) {
+      try {
+        this.hookRegistryWatcher = watch(this.hookRegistryPath, () => {
+          this.loadAndAnnounceRegistry(orgPath, 'change');
+        });
+      } catch (err) {
+        this.log(`Hook registry watcher failed to attach: ${(err as Error).message}`);
+      }
+    }
+
+    // Piece 2 — start the per-tick event-log tailer. Position 0 = read from
+    // start of today's file on first tick; subsequent ticks read only new
+    // bytes appended since the last position.
+    this.eventLogPosition = 0;
+    this.eventLogCurrentPath = this.computeEventLogPath();
+    this.eventLogTailer = setInterval(() => {
+      try {
+        this.eventLogTailTick();
+      } catch (err) {
+        // best-effort — never throw out of an interval callback
+        this.log(`Hook tail error: ${(err as Error).message}`);
+      }
+    }, this.EVENT_LOG_TAIL_INTERVAL_MS);
+  }
+
+  private loadAndAnnounceRegistry(orgPath: string, reason: 'startup' | 'change'): void {
+    const next = loadHookRegistry(orgPath);
+    this.hookRegistry = next;
+    const enabledCount = next.hooks.filter((h) => h.enabled).length;
+    // Best-effort observability event: schema_version + counts + reason
+    execFile(
+      'cortextos',
+      [
+        'bus',
+        'log-event',
+        'action',
+        'hooks_registry_loaded',
+        'info',
+        '--meta',
+        JSON.stringify({
+          source_path: this.hookRegistryPath,
+          hook_count: next.hooks.length,
+          enabled_count: enabledCount,
+          schema_version: next.schema_version,
+          reason,
+        }),
+      ],
+      { timeout: 5_000 },
+      () => { /* fire-and-forget */ },
+    );
+  }
+
+  private computeEventLogPath(): string {
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    return join(this.paths.analyticsDir, 'events', this.agent.name, `${today}.jsonl`);
+  }
+
+  private eventLogTailTick(): void {
+    // Day-rollover detection: if computed path differs, rotate.
+    const expectedPath = this.computeEventLogPath();
+    if (expectedPath !== this.eventLogCurrentPath) {
+      this.eventLogCurrentPath = expectedPath;
+      this.eventLogPosition = 0;
+    }
+
+    if (!existsSync(this.eventLogCurrentPath)) {
+      // Today's file may not exist yet — nothing to tail.
+      return;
+    }
+
+    const stats = statSync(this.eventLogCurrentPath);
+    // Rotation/truncation guard: shrink → reset to 0.
+    if (stats.size < this.eventLogPosition) {
+      this.eventLogPosition = 0;
+    }
+    if (stats.size <= this.eventLogPosition) {
+      return; // nothing new
+    }
+
+    const fd = openSync(this.eventLogCurrentPath, 'r');
+    try {
+      const toRead = stats.size - this.eventLogPosition;
+      const buf = Buffer.alloc(toRead);
+      // Honour readSync's return value — file can shrink between statSync and
+      // readSync (rotation race). Advance position by ACTUAL bytes read so a
+      // short read doesn't silently skip past unread data on the next tick.
+      const bytesRead = readSync(fd, buf, 0, toRead, this.eventLogPosition);
+      if (bytesRead <= 0) return;
+      this.eventLogPosition += bytesRead;
+      const text = buf.subarray(0, bytesRead).toString('utf-8');
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let event: Event;
+        try {
+          event = JSON.parse(trimmed) as Event;
+        } catch {
+          continue; // skip malformed lines, preserve position so we don't refire
+        }
+        this.handleHookEvent(event);
+      }
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  private handleHookEvent(event: Event): void {
+    const matched = matchHooks(this.hookRegistry, event, this.agent.name);
+    if (matched.length === 0) return;
+    for (const hook of matched) {
+      // dispatchHook writes hooks.log locally AND emits exactly one
+      // hook_fire / hook_block / hook_escalate bus event per dispatch — it is
+      // the single source of truth for hook telemetry.
+      dispatchHook(hook, event).catch((err) => {
+        this.log(`dispatchHook error for ${hook.id}: ${(err as Error).message}`);
+      });
     }
   }
 }

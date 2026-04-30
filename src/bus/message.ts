@@ -7,6 +7,8 @@ import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { acquireLock, releaseLock } from '../utils/lock.js';
 import { randomString } from '../utils/random.js';
 import { validateAgentName, validatePriority } from '../utils/validate.js';
+// RFC #15 Wave 1 producer side — emit inbox_arrival event so hooks can subscribe.
+import { logEvent } from './event.js';
 
 // ---------------------------------------------------------------------------
 // Security (H10): HMAC-SHA256 message signing
@@ -84,7 +86,35 @@ export function sendMessage(
   ensureDir(inboxDir);
   atomicWriteSync(join(inboxDir, filename), JSON.stringify(message));
 
+  // RFC #15 Wave 1 — emit inbox_arrival event so hooks subscribed to
+  // `category=action, type=inbox_arrival` can dispatch on cross-agent message
+  // routing. Logged under the recipient agent (`to`) so the recipient's
+  // FastChecker.eventLogTailTick sees it. Best-effort: never throw out of the
+  // canonical send path.
+  try {
+    const bodyPreview = text.length > 120 ? text.slice(0, 120) + '…' : text;
+    logEvent(paths, to, _orgFromPaths(paths), 'action', 'inbox_arrival', 'info', {
+      to_agent: to,
+      from_agent: from,
+      msg_id: msgId,
+      priority,
+      has_reply_to: Boolean(replyTo),
+      body_preview: bodyPreview,
+    });
+  } catch { /* non-fatal */ }
+
   return msgId;
+}
+
+// Resolve the org slug from a BusPaths instance. analyticsDir has shape
+// `<root>/orgs/<org>/analytics`; if that pattern fails, fall back to CTX_ORG.
+function _orgFromPaths(paths: BusPaths): string {
+  try {
+    const parts = paths.analyticsDir.split('/');
+    const idx = parts.indexOf('analytics');
+    if (idx >= 0 && idx + 1 < parts.length) return parts[idx + 1];
+  } catch { /* ignore */ }
+  return process.env.CTX_ORG ?? '';
 }
 
 /**
