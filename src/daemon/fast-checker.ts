@@ -14,6 +14,7 @@ import { stripControlChars, validateOrgName } from '../utils/validate.js';
 import { resolve as pathResolve } from 'path';
 // added 2026-04-29 by collie via dane dispatch — RFC #15 Day-1 dispatcher integration; Piece 3 (handler-type wiring) deferred to Day-2
 import { loadHookRegistry, matchHooks, dispatchHook, type HookRegistry } from '../bus/hooks.js';
+import { registerBuiltInHandlers } from '../bus/hook-handlers/index.js';
 
 type LogFn = (msg: string) => void;
 
@@ -381,6 +382,14 @@ export class FastChecker {
     }
     this.hookRegistryPath = join(orgPath, 'hooks.json');
     this.loadAndAnnounceRegistry(orgPath, 'startup');
+
+    // Wire built-in hook handlers (log_event, plus scaffold-throw bash_spawn /
+    // send_message / webhook_fetch). Idempotent: registerHandler overwrites by
+    // type, so re-init or hot-reload is safe. Without this call the dispatcher
+    // always falls through to `no_handler_registered` and the Day-3 scaffolding
+    // is dead code.
+    const handlerCount = registerBuiltInHandlers();
+    this.log(`Hook dispatcher: registered ${handlerCount} built-in handler(s)`);
 
     // Piece 1 — hot-reload on file change. Best-effort; missing file is OK
     // (loadHookRegistry returns empty registry, dispatcher just sees nothing).
