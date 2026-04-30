@@ -144,12 +144,19 @@ export class AgentPTY {
     const claudeArgs = this.buildClaudeArgs(mode, prompt);
     const claudeCmd = this.getBinaryName();
 
+    // Apply vendor adapter's env filter — strips CLAUDE_* env vars before
+    // spawning non-Anthropic binaries so CLAUDE_CODE_SKIP_*_AUTH leakage
+    // doesn't corrupt Codex/Gemini auth detection. Anthropic adapter is a
+    // no-op pass-through. HermesPTY uses default config.vendor (anthropic),
+    // so its env is unchanged.
+    const filteredEnv = loadAdapter(this.config.vendor).envFilter(ptyEnv);
+
     this.pty = this.spawnFn!(claudeCmd, claudeArgs, {
       name: 'xterm-256color',
       cols: 200,
       rows: 50,
       cwd,
-      env: ptyEnv,
+      env: filteredEnv,
     });
 
     this._alive = true;
