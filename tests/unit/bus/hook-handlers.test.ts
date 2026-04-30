@@ -103,9 +103,9 @@ describe('src/bus/hook-handlers', () => {
     });
   });
 
-  it('scaffold handlers throw TODO errors with the handler slug', async () => {
-    await expect(() => bashSpawnHandler(makeHook(), makeEvent())).toThrow(/TODO.*bash_spawn/);
-    await expect(() => sendMessageHandler(makeHook(), makeEvent())).toThrow(/TODO.*send_message/);
-    await expect(() => webhookFetchHandler(makeHook(), makeEvent())).toThrow(/TODO.*webhook_fetch/);
+  it('scaffold handlers return fire/not_implemented (no throw)', () => {
+    expect(bashSpawnHandler(makeHook(), makeEvent())).toEqual({ action: 'fire', reason: 'not_implemented' });
+    expect(sendMessageHandler(makeHook(), makeEvent())).toEqual({ action: 'fire', reason: 'not_implemented' });
+    expect(webhookFetchHandler(makeHook(), makeEvent())).toEqual({ action: 'fire', reason: 'not_implemented' });
   });
 });
