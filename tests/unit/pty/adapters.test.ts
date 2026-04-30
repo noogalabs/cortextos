@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import { loadAdapter } from '../../../src/pty/adapters/base';
 import { anthropicAdapter } from '../../../src/pty/adapters/anthropic';
 import { openaiAdapter } from '../../../src/pty/adapters/openai';
+import { googleAdapter } from '../../../src/pty/adapters/google';
 import type { AgentConfig, CtxEnv } from '../../../src/types/index';
 
 function makeEnv(agentDir: string): CtxEnv {
@@ -33,9 +34,13 @@ describe('loadAdapter', () => {
     expect(loadAdapter('openai')).toBe(openaiAdapter);
   });
 
-  it('throws for vendors not yet implemented at MVP', () => {
-    expect(() => loadAdapter('google')).toThrow(/Unknown vendor.*google/);
+  it('returns google adapter for "google"', () => {
+    expect(loadAdapter('google')).toBe(googleAdapter);
+  });
+
+  it('throws for vendors outside MVP scope', () => {
     expect(() => loadAdapter('grok')).toThrow(/Unknown vendor.*grok/);
+    expect(() => loadAdapter('xai')).toThrow(/Unknown vendor.*xai/);
   });
 });
 
@@ -214,6 +219,105 @@ describe('openaiAdapter', () => {
         expect(args).toContain('--disable');
         expect(args).toContain('shell_snapshot');
       }
+    });
+  });
+});
+
+describe('googleAdapter', () => {
+  const env = makeEnv('/nonexistent-agent-dir');
+
+  it('binary is "gemini"', () => {
+    expect(googleAdapter.binary).toBe('gemini');
+  });
+
+  it('exposes 2-Enter bracketed-paste count for Gemini Ink TUI', () => {
+    expect(googleAdapter.pasteEnterCount).toBe(2);
+  });
+
+  it('extractionRetries is 2 (Ink notification spinners obscure output)', () => {
+    expect(googleAdapter.extractionRetries).toBe(2);
+  });
+
+  describe('envFilter — strips CLAUDE_* leakage', () => {
+    it('removes CLAUDE_CODE_SKIP_*_AUTH (corrupts Gemini auth detection)', () => {
+      const out = googleAdapter.envFilter({
+        CLAUDE_CODE_SKIP_BEDROCK_AUTH: '1',
+        CLAUDE_CODE_SKIP_VERTEX_AUTH: '1',
+        CLAUDE_API_KEY: 'sk-test',
+      });
+      expect(out).toEqual({});
+    });
+
+    it('passes through GEMINI_API_KEY, GOOGLE_APPLICATION_CREDENTIALS, and other non-Claude vars', () => {
+      const out = googleAdapter.envFilter({
+        GEMINI_API_KEY: 'gemini-key',
+        GOOGLE_APPLICATION_CREDENTIALS: '/Users/me/.gemini/app_creds.json',
+        PATH: '/usr/bin',
+        CLAUDE_CODE_SKIP_AUTH: '1',
+      });
+      expect(out).toEqual({
+        GEMINI_API_KEY: 'gemini-key',
+        GOOGLE_APPLICATION_CREDENTIALS: '/Users/me/.gemini/app_creds.json',
+        PATH: '/usr/bin',
+      });
+    });
+  });
+
+  describe('buildArgs', () => {
+    const config: AgentConfig = { model: 'gemini-2.5-pro' };
+
+    it('fresh mode: bypass flags + --model + prompt', () => {
+      const args = googleAdapter.buildArgs('fresh', 'hello', { config, env });
+      expect(args).toEqual([
+        '--yolo',
+        '--sandbox', 'false',
+        '--model', 'gemini-2.5-pro',
+        'hello',
+      ]);
+    });
+
+    it('continue mode falls back to fresh args (Gemini has no CLI session-resume)', () => {
+      const fresh = googleAdapter.buildArgs('fresh', 'p', { config, env });
+      const cont = googleAdapter.buildArgs('continue', 'p', { config, env });
+      expect(cont).toEqual(fresh);
+    });
+
+    it('omits --model when unset (gemini picks default)', () => {
+      const args = googleAdapter.buildArgs('fresh', 'p', { config: {}, env });
+      expect(args).toEqual([
+        '--yolo',
+        '--sandbox', 'false',
+        'p',
+      ]);
+    });
+
+    it('reads model from ctx.config.model', () => {
+      const args = googleAdapter.buildArgs(
+        'fresh',
+        'p',
+        { config: { model: 'gemini-2.0-flash' }, env },
+      );
+      expect(args).toContain('--model');
+      expect(args[args.indexOf('--model') + 1]).toBe('gemini-2.0-flash');
+    });
+
+    it('always includes the bypass pair (--yolo + --sandbox false) for both modes', () => {
+      const fresh = googleAdapter.buildArgs('fresh', 'p', { config: {}, env });
+      const cont = googleAdapter.buildArgs('continue', 'p', { config: {}, env });
+      for (const args of [fresh, cont]) {
+        expect(args).toContain('--yolo');
+        expect(args).toContain('--sandbox');
+        expect(args[args.indexOf('--sandbox') + 1]).toBe('false');
+      }
+    });
+
+    it('places prompt last in the arg list', () => {
+      const args = googleAdapter.buildArgs(
+        'fresh',
+        'final-prompt',
+        { config: { model: 'gemini-2.5-pro' }, env },
+      );
+      expect(args[args.length - 1]).toBe('final-prompt');
     });
   });
 });
