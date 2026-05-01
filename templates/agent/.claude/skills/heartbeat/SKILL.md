@@ -36,21 +36,30 @@ When the gate is enabled, most quiet heartbeats become a 1-line noop. The Sunday
 ```bash
 # Read flag (treat absent as false)
 EVENT_DRIVEN=$(jq -r '.heartbeat.event_driven // false' "$CTX_AGENT_DIR/config.json" 2>/dev/null)
+HEARTBEAT_NOOP=false
 
 if [[ "$EVENT_DRIVEN" == "true" ]]; then
-  # 0a. Find the last agent_heartbeat event timestamp
-  LAST_FIRE=$(cat ~/.cortextos/$CTX_INSTANCE_ID/orgs/$CTX_ORG/analytics/events/$CTX_AGENT_NAME/*.jsonl 2>/dev/null \
-    | jq -r 'select(.event == "agent_heartbeat") | .timestamp' | sort | tail -1)
+  # 0a. Find the last agent_heartbeat event timestamp.
+  # Scope to last 2 days of JSONL files to bound work per heartbeat cycle.
+  LAST_FIRE=$(find ~/.cortextos/"$CTX_INSTANCE_ID"/orgs/"$CTX_ORG"/analytics/events/"$CTX_AGENT_NAME" \
+    -name '*.jsonl' -mtime -2 2>/dev/null \
+    | xargs -I{} cat {} 2>/dev/null \
+    | jq -r 'select(.event == "agent_heartbeat") | .timestamp' \
+    | sort | tail -1)
 
-  # 0b. Count signal events since LAST_FIRE
+  # 0b. Count signal events since LAST_FIRE.
+  # Use chronological (epoch) comparison via fromdateiso8601, NOT lexicographic
+  # string > — protects against timestamps that ever omit Z or carry local offsets.
   if [[ -n "$LAST_FIRE" ]]; then
-    NOTEWORTHY=$(cat ~/.cortextos/$CTX_INSTANCE_ID/orgs/$CTX_ORG/analytics/events/$CTX_AGENT_NAME/*.jsonl 2>/dev/null \
-      | jq --arg t "$LAST_FIRE" -c 'select(.timestamp > $t) | select(
+    NOTEWORTHY=$(find ~/.cortextos/"$CTX_INSTANCE_ID"/orgs/"$CTX_ORG"/analytics/events/"$CTX_AGENT_NAME" \
+      -name '*.jsonl' -mtime -2 2>/dev/null \
+      | xargs -I{} cat {} 2>/dev/null \
+      | jq --arg t "$LAST_FIRE" -c 'select((.timestamp | fromdateiso8601) > ($t | fromdateiso8601)) | select(
           .event == "inbox_arrival"
           or .category == "approval"
           or .severity == "error"
           or .severity == "critical"
-        )' | wc -l | tr -d ' ')
+        )' | jq -s 'length')
   else
     NOTEWORTHY=1  # first run ever — never noop
   fi
@@ -64,7 +73,11 @@ if [[ "$EVENT_DRIVEN" == "true" ]]; then
     cortextos bus update-heartbeat "noop heartbeat — no inbox/approval/error/stale signals since $LAST_FIRE"
     cortextos bus log-event heartbeat agent_heartbeat info \
       --meta "{\"agent\":\"$CTX_AGENT_NAME\",\"status\":\"active\",\"mode\":\"noop\"}"
-    exit 0
+    HEARTBEAT_NOOP=true
+    # NOTE: do NOT use `exit 0` here — agents run in a persistent PTY shell;
+    # exit terminates the whole shell and triggers a watchdog restart, turning
+    # the NOOP optimization into a self-inflicted restart storm. Set the
+    # HEARTBEAT_NOOP guard and let the wrapper below skip Steps 1–5 instead.
   fi
   # Otherwise → fall through to Steps 1–5 below
 fi
@@ -75,20 +88,22 @@ If the predicate skips for 3+ consecutive scheduled fires AND the dashboard neve
 ### Steps 1–4 (full heartbeat — runs when gate is off OR predicate matched)
 
 ```bash
-# 1. Update your heartbeat with what you're doing
-cortextos bus update-heartbeat "WORKING ON: <current task summary>"
+if [[ "$HEARTBEAT_NOOP" != "true" ]]; then
+  # 1. Update your heartbeat with what you're doing
+  cortextos bus update-heartbeat "WORKING ON: <current task summary>"
 
-# 2. Check inbox for messages
-cortextos bus check-inbox
+  # 2. Check inbox for messages
+  cortextos bus check-inbox
 
-# 3. Log heartbeat event
-cortextos bus log-event heartbeat agent_heartbeat info \
-  --meta "{\"agent\":\"$CTX_AGENT_NAME\",\"status\":\"active\"}"
+  # 3. Log heartbeat event
+  cortextos bus log-event heartbeat agent_heartbeat info \
+    --meta "{\"agent\":\"$CTX_AGENT_NAME\",\"status\":\"active\"}"
 
-# 4. Check your task queue for anything stale
-# MANDATORY — do not skip even when running alongside other crons
-cortextos bus list-tasks --agent $CTX_AGENT_NAME --status in_progress
-# Flag any task that has been in_progress for >2h without a memory update
+  # 4. Check your task queue for anything stale
+  # MANDATORY — do not skip even when running alongside other crons
+  cortextos bus list-tasks --agent "$CTX_AGENT_NAME" --status in_progress
+  # Flag any task that has been in_progress for >2h without a memory update
+fi
 ```
 
 ---
@@ -98,19 +113,21 @@ cortextos bus list-tasks --agent $CTX_AGENT_NAME --status in_progress
 The standalone `check-approvals` cron was retired — heartbeat absorbs it. Run this sweep on every heartbeat cycle.
 
 ```bash
-# 5a. Confirm the sweep cycle fired (replaces the old approvals_cron_fired event)
-cortextos bus log-event action approvals_cron_fired info \
-  --meta "{\"agent\":\"$CTX_AGENT_NAME\",\"source\":\"heartbeat-fold\"}"
+if [[ "$HEARTBEAT_NOOP" != "true" ]]; then
+  # 5a. Confirm the sweep cycle fired (replaces the old approvals_cron_fired event)
+  cortextos bus log-event action approvals_cron_fired info \
+    --meta "{\"agent\":\"$CTX_AGENT_NAME\",\"source\":\"heartbeat-fold\"}"
 
-# 5b. Human task queue — pending tasks assigned to a human
-cortextos bus list-tasks --status pending
-# For each task assigned to "human" or "david":
-#   - If created >24h ago with no update: send ONE Telegram reminder
-#   - If blocking agent work: surface explicitly with blocking context
-#   - If night mode (after 19:30 ET): defer reminders to next morning-review
+  # 5b. Human task queue — pending tasks assigned to a human
+  cortextos bus list-tasks --status pending
+  # For each task assigned to "human" or "david":
+  #   - If created >24h ago with no update: send ONE Telegram reminder
+  #   - If blocking agent work: surface explicitly with blocking context
+  #   - If night mode (after 19:30 ET): defer reminders to next morning-review
 
-# 5c. Pending approvals — list and re-ping if stale
-cortextos bus list-approvals --format json
+  # 5c. Pending approvals — list and re-ping if stale
+  cortextos bus list-approvals --format json
+fi
 ```
 
 For each pending approval in 5c, check `created_at`:
