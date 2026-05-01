@@ -86,15 +86,29 @@ describe('FastChecker — RFC #15 Day-1 dispatcher integration', () => {
   let frameworkRoot: string;
   let paths: BusPaths;
   const ORIGINAL_CTX_ORG = process.env.CTX_ORG;
+  // Stash any FastChecker that called startHookDispatcher() so afterEach can
+  // close the FSWatcher + clear the eventLogTailer interval centrally.
+  // Without this, tests leak handles and Vitest hangs on CI.
+  let checkerForTeardown: { hookRegistryWatcher?: { close?: () => void } | null; eventLogTailer?: NodeJS.Timeout | null } | null = null;
 
   beforeEach(() => {
     testDir = mkdtempSync(join(tmpdir(), 'cortextos-fc-hooks-'));
     frameworkRoot = mkdtempSync(join(tmpdir(), 'cortextos-fr-'));
     paths = createTestPaths(testDir);
     clearHandlerRegistry();
+    checkerForTeardown = null;
   });
 
   afterEach(() => {
+    if (checkerForTeardown) {
+      const watcher = checkerForTeardown.hookRegistryWatcher;
+      if (watcher && typeof watcher.close === 'function') {
+        try { watcher.close(); } catch { /* best-effort */ }
+      }
+      if (checkerForTeardown.eventLogTailer) {
+        clearInterval(checkerForTeardown.eventLogTailer);
+      }
+    }
     rmSync(testDir, { recursive: true, force: true });
     rmSync(frameworkRoot, { recursive: true, force: true });
     if (ORIGINAL_CTX_ORG === undefined) delete process.env.CTX_ORG;
@@ -109,8 +123,11 @@ describe('FastChecker — RFC #15 Day-1 dispatcher integration', () => {
 
     const checker = new FastChecker(createMockAgent(), paths, frameworkRoot) as unknown as {
       startHookDispatcher: () => void;
+      hookRegistryWatcher: { close?: () => void } | null;
+      eventLogTailer: NodeJS.Timeout | null;
     };
     checker.startHookDispatcher();
+    checkerForTeardown = checker;
 
     expect(_getRegisteredHandler('log_event')).toBeTruthy();
     expect(_getRegisteredHandler('bash')).toBeTruthy();
@@ -126,8 +143,11 @@ describe('FastChecker — RFC #15 Day-1 dispatcher integration', () => {
       hookRegistry: { hooks: unknown[] };
       hookRegistryPath: string;
       hookOrg: string | null;
+      hookRegistryWatcher: { close?: () => void } | null;
+      eventLogTailer: NodeJS.Timeout | null;
     };
     checker.startHookDispatcher();
+    checkerForTeardown = checker;
 
     // Disabled-due-to-invalid-CTX_ORG log line emitted; registry stays empty.
     expect(logSpy).toHaveBeenCalled();
@@ -147,17 +167,15 @@ describe('FastChecker — RFC #15 Day-1 dispatcher integration', () => {
 
     const checker = new FastChecker(createMockAgent(), paths, frameworkRoot) as unknown as {
       startHookDispatcher: () => void;
-      hookRegistryWatcher: unknown;
+      hookRegistryWatcher: { close?: () => void } | null;
       hookRegistry: { hooks: unknown[] };
+      eventLogTailer: NodeJS.Timeout | null;
     };
     checker.startHookDispatcher();
+    checkerForTeardown = checker;
 
     expect(checker.hookRegistryWatcher).not.toBeNull();
     expect(checker.hookRegistry.hooks).toHaveLength(1);
-
-    // Cleanup the watcher so the test process can exit.
-    const watcher = checker.hookRegistryWatcher as { close?: () => void };
-    if (watcher && typeof watcher.close === 'function') watcher.close();
   });
 
   it('eventLogTailTick advances eventLogPosition by actual bytes read and processes new lines', () => {
@@ -172,8 +190,11 @@ describe('FastChecker — RFC #15 Day-1 dispatcher integration', () => {
       eventLogPosition: number;
       eventLogCurrentPath: string;
       hookRegistry: { hooks: Array<{ id: string }> };
+      hookRegistryWatcher: { close?: () => void } | null;
+      eventLogTailer: NodeJS.Timeout | null;
     };
     checker.startHookDispatcher();
+    checkerForTeardown = checker;
     expect(checker.hookRegistry.hooks).toHaveLength(1);
 
     // Compute the path the tailer is watching, then write a single matching event.
