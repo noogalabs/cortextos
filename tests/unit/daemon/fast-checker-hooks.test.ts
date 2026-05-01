@@ -28,6 +28,8 @@ import { FastChecker } from '../../../src/daemon/fast-checker';
 import {
   clearHandlerRegistry,
   _getRegisteredHandler,
+  registerHandler,
+  type HandlerFn,
 } from '../../../src/bus/hooks';
 import type { BusPaths } from '../../../src/types';
 
@@ -135,7 +137,14 @@ describe('FastChecker — RFC #15 Day-1 dispatcher integration', () => {
     expect(_getRegisteredHandler('webhook')).toBeTruthy();
   });
 
-  it('startHookDispatcher rejects path-traversal CTX_ORG — validateOrgName gates load', () => {
+  it('startHookDispatcher rejects path-traversal CTX_ORG — early-return runs BEFORE registerBuiltInHandlers', () => {
+    // Positive witness: pre-populate the handler registry with a sentinel
+    // so the assertion can distinguish "early-return ran" from "beforeEach
+    // already cleared the registry". Without this, the assertion is vacuous
+    // (toBeUndefined would pass even if startHookDispatcher silently no-op'd).
+    const sentinel: HandlerFn = () => ({ action: 'fire', reason: 'sentinel' });
+    registerHandler('log_event', sentinel);
+
     process.env.CTX_ORG = '../../etc';
     const logSpy = vi.fn();
     const checker = new FastChecker(createMockAgent(), paths, frameworkRoot, { log: logSpy }) as unknown as {
@@ -156,8 +165,10 @@ describe('FastChecker — RFC #15 Day-1 dispatcher integration', () => {
     expect(checker.hookRegistry.hooks).toEqual([]);
     expect(checker.hookRegistryPath).toBe('');
     expect(checker.hookOrg).toBeNull();
-    // No handlers registered when dispatcher is disabled at the org-validation gate.
-    expect(_getRegisteredHandler('log_event')).toBeUndefined();
+    // Sentinel is still registered — proves registerBuiltInHandlers was NOT
+    // reached. If the early-return regressed, registerBuiltInHandlers would
+    // have overwritten log_event with the real logEventHandler.
+    expect(_getRegisteredHandler('log_event')).toBe(sentinel);
   });
 
   it('startHookDispatcher attaches hot-reload watcher when hooks.json exists at boot', () => {
