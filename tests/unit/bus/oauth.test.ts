@@ -191,6 +191,18 @@ describe('refreshOAuthToken', () => {
     const store = loadAccounts(tmpDir)!;
     expect(store.accounts.primary.access_token).toBe('new_access_tok');
     expect(store.accounts.primary.refresh_token).toBe('new_refresh_tok');
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe('https://console.anthropic.com/v1/oauth/token');
+    expect(init.method).toBe('POST');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    const parsed = JSON.parse(init.body as string);
+    expect(parsed).toMatchObject({
+      grant_type: 'refresh_token',
+      refresh_token: 'rtok_primary_xyz',
+      client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
+    });
   });
 
   it('refreshes named account', async () => {

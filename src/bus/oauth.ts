@@ -80,6 +80,8 @@ const THRESHOLD_7D = 0.80;
 // Alert thresholds (warn before rotating)
 export const ALERT_5H = 0.80;
 export const ALERT_7D = 0.70;
+// Anthropic's public OAuth client_id for Claude Max (PKCE public client — safe to commit)
+const CLAUDE_OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 
 // --- Path helpers ---
 
@@ -278,6 +280,7 @@ export async function refreshOAuthToken(
     body: JSON.stringify({
       grant_type: 'refresh_token',
       refresh_token: account.refresh_token,
+      client_id: CLAUDE_OAUTH_CLIENT_ID,
     }),
   });
 
