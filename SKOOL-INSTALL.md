@@ -1,421 +1,367 @@
-# AscendOps — Skool Member Install Guide
+# AscendOps — Zero-to-Fleet Install Guide
 
-> **Audience:** Property management operator who just joined the Skool community and wants the two reference personas (Maintenance Director + Leasing Coordinator) running and texting them on Telegram within 30 minutes.
+> **This is the delivered install guide.** A successful install lands this exact
+> file locally at `~/ascendops/SKOOL-INSTALL.md`. If you reached it via a link
+> that rendered blank, ignore that copy and read this local one — the critical
+> steps also live inside each agent's `/onboarding` skill, so the install works
+> even if every external link is dead.
 >
-> **What you'll have at the end:** AscendOps daemon running, two agents (Maintenance Director + Leasing Coordinator) booted, both messaging you on Telegram. PM software integration is a separate add-on; you'll have a working fleet first.
+> **Audience:** A property-management operator starting from ABSOLUTE ZERO — you
+> may never have opened a terminal or used Claude Code. This guide takes you from
+> nothing to a running agent fleet that texts you on Telegram.
 >
-> **Two paths to the same end state.** The "Easy way" below uses our one-line installer and the guided onboarding flow — recommended for most operators. The "Advanced — for developers" section at the bottom walks every step manually (useful if you want to read the source as you go, customize the install path, or contribute back to AscendOps via your own GitHub fork).
+> **Two phases, in order:**
+> - **Phase 1 — Bootstrap.** Get the machinery installed and one agent talking to
+>   you. Fast and foolproof. This is the part that historically tripped people up;
+>   follow it step by step and you will reach Phase 2.
+> - **Phase 2 — Onboarding.** Each agent interviews you about your business, your
+>   PM software, your vendors, and your style, then configures itself. This is
+>   where the real value is.
+>
+> **Time:** ~30 min if you already have the accounts in Step 1.1, ~60–90 min if
+> you need to create them.
 
 ---
 
-## Easy way (recommended)
+# PHASE 1 — BOOTSTRAP (absolute zero → first agent online)
 
-**Time:** 30 minutes if you have the accounts below, 60–90 minutes if you need to create them.
+Do these in order. Do not skip ahead.
 
-### Step 1 — Prerequisites
+## Step 1.1 — Create the prerequisite accounts
 
-You need:
-- [ ] **macOS or Linux** (Windows via WSL2 — see [README.md](./README.md) Windows section; adds ~15 minutes)
-- [ ] **Node.js 20 or newer** (`node --version` should report v20.x+)
-- [ ] **Claude Code installed and authed** — install with `npm install -g @anthropic-ai/claude-code`, then `claude login` once. This is the runtime that powers every agent.
-- [ ] **A Telegram account** (we'll create the bot tokens during onboarding)
-- [ ] **(Recommended) GitHub account + `gh` CLI authed** — when the installer detects an authed `gh`, it creates your own fork of AscendOps on GitHub so you can pull updates from us AND push your improvements back. Install gh with `brew install gh` on macOS, then `gh auth login`. Without it, the install still works but you'll be on a plain clone (no contribute-back path until you set up a fork manually later).
+You need these accounts before anything else. Create any you don't have (all have
+free tiers):
 
-If any of those is missing, install it now before running the one-liner.
+- [ ] **GitHub** — [github.com/signup](https://github.com/signup). The installer
+      forks AscendOps into your account so you get our updates and can send your
+      improvements back.
+- [ ] **Anthropic / Claude** — [claude.ai](https://claude.ai) or
+      [console.anthropic.com](https://console.anthropic.com). This is the brain
+      that runs every agent. A Claude subscription (Pro/Max) that lets you log in
+      via the `claude` CLI is the easiest; an `ANTHROPIC_API_KEY` also works.
+- [ ] **Google** — a free Google account. Powers the knowledge base (semantic
+      search) via a free Gemini API key you'll create during onboarding at
+      [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+- [ ] **Telegram** — install the Telegram app and create an account. This is how
+      you'll talk to your agents. You'll create one bot per agent in Step 1.5.
+- [ ] **(Optional) Telnyx** — [telnyx.com](https://telnyx.com). Only if you want
+      agents to send SMS / place voice calls to vendors and tenants. Skip for
+      day one; you can add it later.
 
-### Step 2 — Run the installer
+## Step 1.2 — Install Claude Code
+
+Claude Code is the command-line app the agents run inside. You almost certainly
+don't have it yet — install it now.
+
+**First, make sure you have Node.js 20+.** Open a terminal (on Mac: Cmd+Space →
+"Terminal"; on Linux: your terminal app) and run:
+
+```bash
+node --version
+```
+
+- If it prints `v20.x` or higher, you're set.
+- If it prints a lower version or "command not found", install Node from
+  [nodejs.org](https://nodejs.org/) (the LTS download) and re-check.
+
+**Then install Claude Code and log in:**
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude login
+```
+
+`claude login` opens your browser to authenticate with your Anthropic/Claude
+account from Step 1.1. Do this once.
+
+**(Recommended) install the GitHub CLI** so the installer can fork the repo for
+you (enables sending improvements back upstream):
+
+```bash
+# macOS:
+brew install gh && gh auth login
+# Linux: see https://cli.github.com for the install command, then: gh auth login
+```
+
+Without `gh`, the install still works — you'll just be on a plain clone (pull-only)
+until you set up a fork later.
+
+## Step 1.3 — Run the installer (one command)
+
+Copy-paste this single line into your terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/noogalabs/ascendops/main/install.mjs | node
 ```
 
-> **Not comfortable with the terminal?** Paste this doc into ChatGPT or Claude and ask them to walk you through each step. They will — the install is straightforward and they have all the context they need from this page.
+> **Not comfortable in the terminal?** Paste this whole guide into Claude or
+> ChatGPT and ask it to walk you through each step — it has everything it needs.
 
 The installer:
-- Detects whether `gh` CLI is authed. If yes, creates your fork at `github.com/<your-username>/ascendops` (or reuses an existing fork), then clones from there with `upstream` pointing back at `noogalabs/ascendops`. If `gh` is not authed, falls back to a plain clone with `upstream` pointing at `noogalabs/ascendops`.
-- Installs into `~/ascendops/` (override with `ASCENDOPS_DIR=/some/other/path` if you want it elsewhere).
-- Runs `npm install` + `npm run build` to compile.
-- Links the `cortextos` CLI into your PATH.
+- Forks + clones AscendOps to `~/ascendops` (or plain-clones if `gh` isn't authed).
+  Override the location with `ASCENDOPS_DIR=/some/path` if you want it elsewhere.
+- Runs `npm install` and `npm run build` to compile.
+- Links the `cortextos` CLI into your PATH and installs PM2 (the process manager).
+- A successful clone delivers this very file to `~/ascendops/SKOOL-INSTALL.md` and
+  the `/onboarding` skill into each template — so the rest of the install never
+  depends on an external link.
 
-When the installer finishes, you should see a "✓ Done — next step:" message with the Claude Code command to run.
+When it finishes you'll see **"AscendOps installed successfully!"** and a
+copy-paste command to launch onboarding.
 
-### Step 3 — Open in Claude Code and run onboarding
+## Step 1.4 — Open the installed folder in Claude Code
 
-```bash
-claude ~/ascendops
-```
-
-Then in the Claude Code prompt, type:
-
-```
-/onboarding
-```
-
-The guided onboarding flow walks you through:
-- Choosing an org name (your business name works)
-- Creating the two persona agents (Maintenance Director + Leasing Coordinator)
-- Telegram bot provisioning for each agent (the @BotFather flow, with `chat_id` capture automated)
-- `.env` wiring including the activity-channel bot + operator-alert fallback creds
-- Dashboard auth setup (if you want the web dashboard on day one — skippable)
-- Starting the daemon and verifying the bots come online
-
-You'll see "Booting up..." land on Telegram for each agent within seconds of the onboarding wrapping up. From there, both personas continue their own first-boot onboarding via Telegram — they'll ask you about your company, vendors, properties, and comms style.
-
-### Step 4 — (Recommended) Install Tirith for terminal + agent safety
-
-Tirith is a terminal security layer that inspects every command before it runs and flags risky patterns. AscendOps doesn't bundle it (AGPL-3.0 license) — install in one step:
+The installer prints this exact command — run it:
 
 ```bash
-brew install sheeki03/tap/tirith
-echo 'eval "$(tirith init --shell zsh)"' >> ~/.zshrc
-source ~/.zshrc
+cd ~/ascendops && claude /onboarding
 ```
 
-For bash/fish and the full Tirith reference, see [github.com/sheeki03/tirith](https://github.com/sheeki03/tirith). Default mode is warn-only (logs findings, never blocks).
+This opens Claude Code in the AscendOps folder with the onboarding wizard already
+starting. (If the auto-launch didn't fire, run the command above yourself.)
 
-### Want Slack?
+## Step 1.5 — Create a Telegram bot per agent (with auto chat_id capture)
 
-Just message your orchestrator agent in Telegram: "Help me set up Slack." It'll walk you through it interactively — workspace creation (if needed), app creation at api.slack.com/apps, OAuth scopes, token paste, channel pick — and save the credentials in the right place. Takes about 10 minutes. Your Slack bot token stays on your machine; AscendOps has no managed infrastructure to send it to.
+Each agent talks to you through its own Telegram bot. This used to be the single
+most error-prone step (manually hunting for a numeric "chat id"). It is now
+automated — **you never copy a chat id by hand.**
 
-### How updates and improvements flow
+You'll repeat this short loop once per agent, in the order Phase 2 lays out
+(EA/orchestrator first). For each agent:
 
-What this looks like depends on which install path you took. Quick check first:
+**a. Create the bot at @BotFather.**
+1. In Telegram, open a chat with **@BotFather**.
+2. Send `/newbot`.
+3. Give it a display name (e.g. "Acme Maintenance Director").
+4. Give it a username ending in `bot` (e.g. `acme_md_bot`).
+5. BotFather replies with a **BOT_TOKEN** that looks like `123456789:AA...`. Copy it.
+
+**b. Let AscendOps capture the chat id automatically.** In your terminal, run:
 
 ```bash
-cd ~/ascendops
-git remote -v
+cortextos detect-chat-id --agent <agent-name> --org <your-org>
 ```
 
-**If you see both an `origin` (your fork) and an `upstream` (noogalabs/ascendops):** the installer detected an authed `gh` CLI and forked for you. You're set up for two-way flow:
+It will:
+- Ask you to paste the BOT_TOKEN (or pass `--token <token>`).
+- Verify the token and print the bot's `@username`.
+- Wait for you to message the bot. **Open Telegram, search the `@username` it
+  printed, and send `/start`.**
+- The moment your message lands, it captures the chat id + your user, writes
+  `BOT_TOKEN`, `CHAT_ID`, and `ALLOWED_USER` into that agent's `.env` (chmod 600),
+  and tells you the agent is ready to start.
 
-- **We ship to `noogalabs/ascendops` main.** You pull via `git pull upstream main` in `~/ascendops/`. The installer's auto-update path also does this when re-run.
-- **You build or tweak something locally.** Branch off, commit, push to your fork:
-  ```bash
-  git checkout -b feat/my-improvement
-  # edits...
-  git push origin feat/my-improvement
-  gh pr create --repo noogalabs/ascendops --base main
-  ```
-- **We review and merge** if it fits. Every other operator picks it up the next time they `git pull upstream main`.
+If you wait too long or messaged the wrong bot it times out cleanly with a clear
+message — just re-run it. (The same flow is also available as the interactive
+`cortextos bot create <agent-name>` if you prefer one combined walkthrough.)
 
-**If you only see an `upstream` (no `origin`):** the installer fell back to plain clone — `gh` wasn't authed at install time. You're in pull-only mode right now:
-
-- **Pulling updates works the same:** `git pull upstream main` from `~/ascendops/`.
-- **To enable contributing back later:** run `gh auth login` (if you haven't yet), then from the install dir:
-  ```bash
-  cd ~/ascendops
-  gh repo fork noogalabs/ascendops --remote
-  ```
-  `gh repo fork --remote` creates the fork on your GitHub account and adds it as a git remote. The existing `upstream` stays pointed at noogalabs/ascendops, your new fork takes the `origin` slot, and from there you can `git push origin <branch>` + `gh pr create` per the fork-path commands above.
-
-The persona templates, PM integrations, and skill scaffolding were built by operators with real businesses solving real problems. AscendOps gets better as you do.
+That's the bootstrap. Every agent now has a bot and a captured chat id. On to the
+real value.
 
 ---
 
-## Troubleshooting (easy way)
+# PHASE 2 — ONBOARDING (configure each agent for YOUR business)
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `curl` install fails with HTTP error | Network or rate limit | Wait a minute, retry. If it persists, clone manually: `git clone https://github.com/noogalabs/ascendops.git ~/ascendops` then `node ~/ascendops/install.mjs` |
-| Installer reports "gh CLI installed but not authed" | You haven't run `gh auth login` | Either run `gh auth login` and re-run the installer, or accept the plain-clone fallback (you can fork later) |
-| `claude ~/ascendops` says "claude: command not found" | Claude Code CLI not installed | Run `npm install -g @anthropic-ai/claude-code`, then `claude login` |
-| `/onboarding` does nothing in Claude Code | You're not at the project root | `cd ~/ascendops` then re-launch Claude Code with `claude .` |
-| Agents start but never message Telegram | Bot token or chat_id wrong | Re-check `.env` files under `~/ascendops/orgs/<org>/agents/<agent>/.env` and confirm with `cortextos status` |
+This is what the install is *for*. Each agent runs a question-driven `/onboarding`
+that configures it for your company, your PM software, your vendors, and your
+communication style. The Phase-1 bootstrap exists only to get you here.
 
-For anything else: check `~/.cortextos/default/logs/<agent>/stderr.log` and `cortextos bus read-all-heartbeats`. The Skool community is the right place to ask.
+## Step 2.1 — The agent roster (ordered)
 
----
+Agents come up in a deliberate order: the **EA / orchestrator first** (it
+coordinates the others), then the **required core agents**, then **optional**
+agents you can add or skip. The roster is data-driven so the exact lineup can
+change without changing the install steps — work down the list top to bottom and
+**create + onboard each required agent before moving to optional ones.**
 
----
+> **Roster (LOCKED 2026-06-02):** 6 personas — 4 required, 2 optional. Work the
+> table top to bottom; bring up every **required** agent before any **optional**
+> one. The list is data-driven, so the lineup can change later without changing
+> these steps.
 
-# Advanced — for developers (manual install)
+| Order | Agent | Template | Required? | Role |
+|-------|-------|----------|-----------|------|
+| 1 | EA / Orchestrator | `orchestrator` | **required** | Coordinates the fleet; your single point of contact |
+| 2 | Maintenance Director | `agent-maintenance-director` | **required** | Work-order triage, vendor dispatch, resident comms |
+| 3 | Analyst | `analyst` | **required** | Metrics, reporting, and fleet/data analysis |
+| 4 | Dev | `agent` | **required** | Builds + reviews code changes for your fleet (Claude Code) |
+| 5 | Second Dev (Codex) | `agent-codex` | optional | A second build agent on the Codex runtime |
+| 6 | Leasing Coordinator | `agent-leasing-coordinator` | optional | Leasing pipeline: intake, showings, applications, move-in. **Newer — built + defined but not yet production-proven; the Maintenance Director is the proven PM persona.** |
 
-> Read this section if you want to read AscendOps source as you install, customize the install path, contribute back via PR without going through the installer, or troubleshoot a failed easy-way install step-by-step. The end state is identical to the easy way.
+The wizard reads this ordering and walks you through it. The rule it follows:
+**EA/orchestrator → required core agents → optional agents.** If you skip an
+optional agent now, you can add it later with the same two steps (create, then
+onboard).
 
-## What you need before you start
+> **PM software is a Phase-2 choice, not an install dependency.** The Maintenance
+> Director (and Leasing Coordinator) ship as personas no matter which property
+> software you run. You bind your PM software — **Property Meld** today, more
+> adapters coming, or **none** — during that agent's `/onboarding` (Phase 2), not
+> during this install. The agents come up and work without any PM software wired.
 
-**Time:** 30 minutes if you have the accounts below, 60–90 minutes if you need to create them.
+## Step 2.2 — For each agent, in order: create → bot → onboard
 
-**Accounts (create these first):**
-- [ ] **GitHub account** (free tier is fine) — install creates your own fork of AscendOps so you can pull updates from us AND push improvements back. See "How updates and improvements flow" further down.
-- [ ] **Anthropic Claude account** — you'll need either an OAuth-logged-in `claude` CLI on the host OR an `ANTHROPIC_API_KEY` from [console.anthropic.com](https://console.anthropic.com). OAuth is easier.
-- [ ] **Telegram account** with the @BotFather bot accessible. You'll create three bots: one per agent (Maintenance Director, Leasing Coordinator) and one "activity channel" bot that posts agent events into a separate Telegram channel.
-- [ ] **Google account (free) — required** for Gemini API key. Powers the knowledge base (semantic search). Free tier handles typical small-operator volumes. The `cortextos configure` wizard walks you to https://aistudio.google.com/apikey to create one in about 2 minutes.
+For every agent in the roster (top to bottom, required before optional):
 
-**Machine:**
-- [ ] macOS or Linux. Windows works via WSL2 — see the Windows section in [README.md](./README.md), and add 15 minutes to your install budget.
-- [ ] Node.js 20 or newer (`node --version` should report v20.x+)
-- [ ] `jq` installed (`brew install jq` on macOS, `apt install jq` on Linux)
-- [ ] `git` installed
-- [ ] `gh` CLI (GitHub's command-line tool) installed — `brew install gh` on macOS. Linux/Windows install steps at [cli.github.com](https://cli.github.com).
-- [ ] `gh auth login` completed — runs a quick browser-based OAuth (about 2 min). Required so the fork-clone step in Step 1 can create your fork without prompting for a password.
-- [ ] Terminal you're comfortable in
-
-If any of those is missing, install it now. The guide assumes they exist.
-
----
-
-## Step 1 — Fork and clone the repo
-
-```bash
-gh repo fork noogalabs/ascendops --clone --remote
-cd ascendops
-npm install
-npm run build
-```
-
-What each piece does in plain talk:
-- `gh repo fork noogalabs/ascendops` creates `github.com/<your-username>/ascendops` on your GitHub account — your own copy of the repo that you control.
-- `--clone` immediately clones that fork to your local machine into an `ascendops/` directory.
-- `--remote` sets up two git remotes for you: `origin` points at your fork, and `upstream` points back at `noogalabs/ascendops`. That's how you pull our updates and push your own improvements (see "How updates and improvements flow" at the end of this guide).
-- `npm install` pulls dependencies (no AscendOps-side network calls beyond npm). `npm run build` compiles TypeScript to `dist/`. You should see `Build success in <ms>` at the end.
-
-**Verify the CLI works:**
-
-```bash
-node dist/cli.js --version
-```
-
-You should see a version string. If you want a shorter command, you can `npm link` to put `cortextos` on your PATH, but we'll keep using `node dist/cli.js` in this guide so the steps work regardless.
-
-**Verify the fork remote was set up:**
-
-```bash
-git remote -v
-```
-
-You should see two remotes — `origin` pointing at `github.com/<your-username>/ascendops.git` and `upstream` pointing at `github.com/noogalabs/ascendops.git`. If `upstream` is missing, run `git remote add upstream https://github.com/noogalabs/ascendops.git` to add it manually.
-
----
-
-## Step 2 — Initialize your organization
-
-Your fleet lives under an "org" name. Pick something short (your company name works). Example uses `acme`.
-
-```bash
-node dist/cli.js init acme
-```
-
-This creates:
-- `orgs/acme/` — your org-scoped state
-- `orgs/acme/secrets.env` — org-wide secrets (we'll fill this in Step 4)
-- `orgs/acme/.env` — org defaults
-
-`chmod 600` is applied automatically to the secret files.
-
----
-
-## Step 3 — Create the two persona agents
-
-The Skool release ships two reference personas:
-
-- **Maintenance Director** — owns work-order triage, vendor dispatch coordination, resident comms, follow-up tracking.
-- **Leasing Coordinator** — owns leasing pipeline: prospect intake, showings, applications, lease docs, move-in coordination.
-
-**Precondition check — both templates must be on disk:**
-
-```bash
-ls templates/agent-maintenance-director templates/agent-leasing-coordinator
-```
-
-Both directories should list. If either is missing, your fork is behind the upstream `noogalabs/ascendops` main — run `git pull upstream main` and re-check. (Under the fork-default install, `origin` points at your personal fork and `upstream` points at the AscendOps repo, so pulling from `origin` would only refresh from your own copy and wouldn't fetch newly-added templates.) Do not proceed until both directories exist; `add-agent` silently falls back to a generic minimal scaffold when the named template is missing, and you'll end up with a non-persona agent.
-
-Create both:
-
-```bash
-node dist/cli.js add-agent maintenance-director --template agent-maintenance-director --org acme
-node dist/cli.js add-agent leasing-coordinator --template agent-leasing-coordinator --org acme
-```
-
-Each command should report `Copied template files from <template>` followed by `Agent <name> created`. If you see `Created minimal agent files` instead of `Copied template files from agent-...`, the template wasn't on disk — stop, re-run the precondition check, pull main, and try again.
-
-**Verify the scaffold:**
-
-```bash
-ls orgs/acme/agents/maintenance-director/
-ls orgs/acme/agents/leasing-coordinator/
-```
-
-You should see ~55 files in each, including `AGENTS.md`, `IDENTITY.md`, `ONBOARDING.md`, `config.json`, and `.env`.
-
----
-
-## Step 4 — Wire credentials
-
-Each agent needs at minimum a Telegram bot token, your Telegram chat ID, and either Claude OAuth on the host OR an Anthropic API key.
-
-### 4.1 — Create a Telegram bot for each agent
-
-In the Telegram app, message `@BotFather`:
-
-1. `/newbot` → name it `Acme Maintenance Director` → username e.g. `acme_md_bot`. Copy the API token BotFather returns.
-2. Repeat for the second agent: `/newbot` → `Acme Leasing Coordinator` → username e.g. `acme_lc_bot`. Copy that token.
-3. Repeat once more for the **activity channel bot**: `/newbot` → `Acme Activity Channel` → username e.g. `acme_activity_bot`. Copy that token.
-
-Now find your numeric chat ID (the same number works for all three bots, because all three message YOU):
-
-1. In Telegram, send any message (e.g. `/start`) to each of the three bots you just created.
-2. In your terminal, with the Maintenance Director's token in hand:
-
+1. **Create it** (skip if the wizard already did):
    ```bash
-   curl -s "https://api.telegram.org/bot<MD_BOT_TOKEN>/getUpdates" | jq '.result[-1].message.chat.id'
+   cortextos add-agent <agent-name> --template <template> --org <your-org>
    ```
+   Confirm you see `Copied template files from <template>` (not
+   `Created minimal agent files` — that means the template wasn't on disk; run
+   `git pull upstream main` and retry).
 
-3. Note the number that prints. That's your `CHAT_ID`. It's the same for all three bots since you're the recipient.
+2. **Wire its Telegram bot** using the Phase-1 Step 1.5 loop
+   (`cortextos detect-chat-id --agent <agent-name> --org <your-org>`).
 
-### 4.2 — Edit each agent's `.env`
+3. **Start it and run its onboarding:**
+   ```bash
+   cortextos start <agent-name>
+   ```
+   "Booting up..." lands in that bot's Telegram chat within ~5–15s. Then, in that
+   Telegram chat, send:
+   ```
+   /onboarding
+   ```
+   Answer its questions (5–10 min each). It writes its `IDENTITY.md`, `GOALS.md`,
+   `USER.md`, `GUARDRAILS.md`, sets up crons, and marks itself onboarded.
 
-Open `orgs/acme/agents/maintenance-director/.env` and set:
+Do the EA/orchestrator first so it can coordinate the rest, then the required PM
+personas, then any optional agents.
 
-```
-BOT_TOKEN=<the Maintenance Director bot token from BotFather>
-CHAT_ID=<your numeric chat ID from step 4.1>
-ALLOWED_USER=<your numeric chat ID — for 1-on-1 it's the same as CHAT_ID>
-```
+## Step 2.3 — Verify the fleet
 
-Repeat for `orgs/acme/agents/leasing-coordinator/.env` with that bot's token.
-
-### 4.3 — Edit `orgs/acme/secrets.env` and `orgs/acme/activity-channel.env`
-
-**4.3a — `orgs/acme/secrets.env`:**
-
-```
-ANTHROPIC_API_KEY=<from console.anthropic.com, optional if claude CLI is logged in>
-CTX_OPERATOR_BOT_TOKEN=<a bot token that can always reach you>
-CTX_OPERATOR_CHAT_ID=<your CHAT_ID>
-GEMINI_API_KEY=<from aistudio.google.com — free tier is fine>
-```
-
-**4.3b — `orgs/acme/activity-channel.env`:**
-
-```bash
-cat > orgs/acme/activity-channel.env <<'EOF'
-ACTIVITY_BOT_TOKEN=<the third bot's token from step 4.1>
-ACTIVITY_CHAT_ID=<your CHAT_ID — or a dedicated channel ID if you set one up>
-EOF
-chmod 600 orgs/acme/activity-channel.env
-```
-
-(See `src/bus/approval.ts` for the runtime read path. Activity-channel vars live in their own file, NOT in `secrets.env`.)
-
-### 4.4 — Dashboard auth (skip if not running the dashboard on day one)
-
-Add to `orgs/acme/secrets.env`:
-
-```
-AUTH_SECRET=<run: openssl rand -base64 32>
-ADMIN_USERNAME=<pick a username>
-ADMIN_PASSWORD=<pick a strong password>
-NEXTAUTH_URL=http://localhost:3001
-DASHBOARD_URL=http://localhost:3001
-SYNC_ADMIN_PASSWORD=<same as ADMIN_PASSWORD, or a separate sync password>
-```
-
----
-
-## Step 5 — Start the daemon and your agents
-
-```bash
-node dist/cli.js start maintenance-director
-node dist/cli.js start leasing-coordinator
-```
-
-Each command spins up the agent under PM2. "Booting up..." should land in your Telegram chat with each bot within 5–15 seconds. If it doesn't, check `node dist/cli.js status` and `tail -50 ~/.cortextos/default/logs/maintenance-director/stderr.log`.
-
----
-
-## Step 6 — Run onboarding for each agent
-
-Both persona agents ship with a built-in question-driven onboarding. In each Telegram chat:
-
-```
-/onboarding
-```
-
-Answer the questions. Each agent takes 5–10 minutes. After both say "Onboarding complete," they're real.
-
----
-
-## Step 7 — Verify it's all working
-
-Send each agent:
+Message each agent:
 
 > "Morning. What's on your plate today?"
 
-Each should respond with a short status reflecting what onboarding configured. The Maintenance Director will mention work orders or vendor coordination; the Leasing Coordinator will mention prospects or showings. Lifecycle events should also be landing in your activity channel.
+Each should reply with a short status reflecting what onboarding configured — the
+Maintenance Director mentions work orders / vendors, the Leasing Coordinator
+mentions prospects / showings, the orchestrator gives a fleet-level pulse. You can
+also run:
+
+```bash
+cortextos status
+```
+
+If everything is green and the agents reply on Telegram, you have a running fleet.
 
 ---
 
-## Recommended add-on — install Tirith for terminal + agent safety
+# Add-ons (after the fleet is up)
 
-Same Tirith install as the easy way:
+## Tirith — terminal + agent safety (recommended)
+
+A safety layer that inspects every command before it runs. AGPL-3.0, so we can't
+bundle it — one-step install:
 
 ```bash
 brew install sheeki03/tap/tirith
 echo 'eval "$(tirith init --shell zsh)"' >> ~/.zshrc
 source ~/.zshrc
-tirith doctor   # should report "hook status: CONFIGURED"
+tirith doctor   # should report: hook status: CONFIGURED
 ```
 
-AGPL-3.0 licensed, so we can't bundle it. Default mode is warn-only. See [github.com/sheeki03/tirith](https://github.com/sheeki03/tirith) for the full reference (Linux install, policy authoring, etc.).
+bash/fish + full reference: [github.com/sheeki03/tirith](https://github.com/sheeki03/tirith). Default mode is warn-only.
+
+## Slack
+
+Just message your orchestrator agent on Telegram: "Help me set up Slack." It walks
+you through workspace + app creation, OAuth scopes, token paste, and channel pick
+(~10 min). Your Slack token stays on your machine.
+
+## What to skip on day one
+
+- **PM software integration** (Property Meld / AppFolio) — agents work without it.
+  See [README.envs.md](./README.envs.md) for the credential variables.
+- **Telnyx (voice + SMS)** — add when you want vendor/tenant outbound.
+- **Cloudflare R2 (photo storage)** — only matters once tenants upload photos.
+- **Knowledge base ingestion** — agents run on built-in memory until you ingest
+  your own docs.
 
 ---
 
-## What to skip for day one
+# How updates and improvements flow
 
-- **PM software integration** (Property Meld / AppFolio / etc.) — agents work without it. See [README.envs.md](./README.envs.md) for the credential variables.
-- **Telnyx (voice + SMS)** — useful for vendor/tenant outbound. Skip day one.
-- **Cloudflare R2 (photo storage)** — only matters once tenants upload photos. Skip day one.
-- **Knowledge base ingestion** — agents work with built-in memory until you ingest your own docs.
+Check which path you're on:
+
+```bash
+cd ~/ascendops && git remote -v
+```
+
+- **You see both `origin` (your fork) and `upstream` (noogalabs/ascendops):** the
+  installer forked for you. Two-way flow:
+  - Pull our updates: `git pull upstream main`
+  - Send yours back:
+    ```bash
+    git checkout -b feat/my-improvement
+    # edits...
+    git push origin feat/my-improvement
+    gh pr create --repo noogalabs/ascendops --base main
+    ```
+- **You see only `upstream`:** plain-clone (pull-only) — `gh` wasn't authed at
+  install. Pull updates with `git pull upstream main`. To enable contributing back:
+  ```bash
+  cd ~/ascendops
+  gh auth login            # if you haven't
+  gh repo fork noogalabs/ascendops --remote
+  ```
+
+The persona templates, PM integrations, and skills were built by operators with
+real businesses. AscendOps gets better as you do.
 
 ---
 
-## How updates and improvements flow (manual install)
-
-AscendOps is collaborative by design, and the fork setup from Step 1 enables a two-way loop:
-
-- **We ship to `noogalabs/ascendops` main.** You pull our updates:
-  ```bash
-  git pull upstream main
-  npm install && npm run build   # only if package.json or src/ changed
-  ```
-- **You build or tweak something locally.** Branch off, commit, push to your fork:
-  ```bash
-  git checkout -b feat/my-improvement
-  # ... your changes ...
-  git push origin feat/my-improvement
-  ```
-- **You send your work back to us:**
-  ```bash
-  gh pr create --repo noogalabs/ascendops --base main --head <your-username>:feat/my-improvement
-  ```
-- **We review and merge** if it fits. Every other operator picks it up the next time they `git pull upstream main`.
-
----
-
-## Troubleshooting (manual install)
+# Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Agent doesn't send "Booting up..." | Wrong BOT_TOKEN, wrong CHAT_ID, or claude CLI not logged in | Re-check Step 4.1 output. Run `claude login` if no API key is set. |
-| Agent boots but `/onboarding` does nothing | `.onboarded` file already exists from a prior attempt | `rm ~/.cortextos/default/state/<agent-name>/.onboarded` and retry |
-| `cortextos` not found | `npm link` wasn't run | Either run `npm link` or keep using `node dist/cli.js` |
-| `EADDRINUSE` when starting dashboard | Something else is on port 3001 | Either kill the other process or set `DASHBOARD_PORT=3002` in `secrets.env` |
-| `Module not found` on first run | `npm run build` wasn't run | Run `npm run build`, then retry |
-| Activity channel silent | `ACTIVITY_BOT_TOKEN` / `ACTIVITY_CHAT_ID` missing | Add to `orgs/<org>/activity-channel.env` (NOT `secrets.env` — runtime reads a separate file) and restart the agent |
-| `add-agent` says "Created minimal agent files" instead of "Copied template files" | Template directory not on disk (your fork is behind upstream) | Run the Step 3 precondition `ls templates/agent-...` check; `git pull upstream main` (NOT `origin` — that's your own fork under the fork-default install) to fetch new templates from the AscendOps upstream |
-| `gh repo fork` fails with auth error | `gh auth login` not completed | Run `gh auth login` (browser flow, ~2 min), then re-run the fork command |
-| `git pull upstream main` fails with "couldn't find remote" | `--remote` flag was missed on the original fork-clone | `git remote add upstream https://github.com/noogalabs/ascendops.git` to add it now |
+| `curl` install fails (HTTP error) | Network / rate limit | Wait a minute, retry. Or clone manually: `git clone https://github.com/noogalabs/ascendops.git ~/ascendops` then `node ~/ascendops/install.mjs` |
+| `claude: command not found` | Claude Code not installed | `npm install -g @anthropic-ai/claude-code` then `claude login` (Step 1.2) |
+| `node: command not found` or version < 20 | Node.js missing/old | Install Node LTS from [nodejs.org](https://nodejs.org/) (Step 1.2) |
+| Installer says "gh installed but not authed" | No `gh auth login` | Run `gh auth login`, or accept the plain-clone fallback (fork later) |
+| `/onboarding` does nothing in Claude Code | Not at the project root | `cd ~/ascendops` then `claude .` |
+| `detect-chat-id` / bot setup times out | You didn't `/start` the bot, or messaged the wrong one | Re-run it; send `/start` to the exact `@username` it prints, from your own account (not a channel/bot) |
+| Agent starts but never messages Telegram | Wrong BOT_TOKEN / CHAT_ID | Re-run `cortextos detect-chat-id --agent <name>`; confirm with `cortextos status` |
+| `add-agent` says "Created minimal agent files" | Template not on disk (fork behind upstream) | `git pull upstream main`, then re-run `add-agent` |
+| Agent boots but `/onboarding` does nothing | `.onboarded` already exists from a prior attempt | `rm ~/.cortextos/default/state/<agent-name>/.onboarded` and retry |
 
-For anything else: check `~/.cortextos/default/logs/<agent>/stderr.log` and `cortextos bus read-all-heartbeats`.
+For anything else: check `~/.cortextos/default/logs/<agent>/stderr.log` and run
+`cortextos bus read-all-heartbeats`. The Skool community is the place to ask.
 
 ---
 
-## Appendix — what got installed
+# Advanced — manual install (for developers)
 
-- `~/.cortextos/default/` — daemon state, logs, inbox/outbox, agent state files. Per-instance.
-- `~/ascendops/orgs/<org>/` — your org-scoped config, secrets, agent directories. Committed to git if you want versioning (secrets stay gitignored).
-- `node_modules/` — npm dependencies. Gitignored. ~2 minutes to recreate on a fresh checkout.
-- PM2 process manager — runs the daemon and agents. `pm2 list` to see them.
+If you want to read the source as you go, customize the install path, or
+troubleshoot a failed step by hand, the manual path produces the identical end
+state. Briefly:
 
-No system-level files outside `~/.cortextos/` and the cloned repo. Uninstalling is `rm -rf` on those two locations.
+```bash
+gh repo fork noogalabs/ascendops --clone --remote   # origin=fork, upstream=canonical
+cd ascendops && npm install && npm run build
+node dist/cli.js --version                            # verify CLI
+node dist/cli.js init <your-org>                      # create your org
+# then, per agent in the Phase-2 roster order:
+node dist/cli.js add-agent <name> --template <template> --org <your-org>
+node dist/cli.js detect-chat-id --agent <name> --org <your-org>   # auto chat_id
+node dist/cli.js start <name>
+# then /onboarding in each agent's Telegram chat
+```
+
+Everything Phase 1 + Phase 2 above describes maps onto these commands; the wizard
+just runs them for you in order. Org secrets live in `orgs/<org>/secrets.env` and
+the activity-channel bot creds in `orgs/<org>/activity-channel.env` (both chmod
+600); the onboarding wizard fills these in.
+
+---
+
+# Appendix — what got installed
+
+- `~/.cortextos/default/` — daemon state, logs, inbox/outbox, agent state. Per-instance.
+- `~/ascendops/orgs/<org>/` — your org config, secrets, agent dirs. Secrets gitignored.
+- `node_modules/` — npm deps (gitignored; ~2 min to recreate).
+- PM2 — runs the daemon and agents (`pm2 list`).
+
+No system files outside `~/.cortextos/` and `~/ascendops/`. Uninstall is `rm -rf`
+on those two locations.

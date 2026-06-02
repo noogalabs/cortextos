@@ -25,6 +25,7 @@ import { configureCommand } from './configure.js';
 import { spawnWorkerCommand, terminateWorkerCommand, listWorkersCommand, injectWorkerCommand } from './workers.js';
 import { importAgentCommand } from './import-agent.js';
 import { botCommand } from './bot.js';
+import { detectChatIdCommand } from './detect-chat-id.js';
 import { finalizeProcess } from './_finalize.js';
 
 const program = new Command();
@@ -61,6 +62,7 @@ program.addCommand(listWorkersCommand);
 program.addCommand(injectWorkerCommand);
 program.addCommand(importAgentCommand);
 program.addCommand(botCommand);
+program.addCommand(detectChatIdCommand);
 
 // crash-alert: SessionEnd hook — cross-platform replacement for crash-alert.sh
 const crashAlertCommand = new Command('crash-alert')
