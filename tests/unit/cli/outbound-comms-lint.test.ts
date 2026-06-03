@@ -35,23 +35,45 @@ let originalAgentName: string | undefined;
 let originalBotToken: string | undefined;
 let originalInstanceId: string | undefined;
 let originalHome: string | undefined;
+let originalFrameworkRoot: string | undefined;
+let originalProjectRoot: string | undefined;
+let originalOrg: string | undefined;
+let originalAgentDir: string | undefined;
 
 beforeEach(() => {
   tempCtx = mkdtempSync(join(tmpdir(), 'comms-lint-ctx-'));
   mkdirSync(join(tempCtx, 'logs', 'test-agent'), { recursive: true });
   mkdirSync(join(tempCtx, 'inbox', 'target-agent'), { recursive: true });
+  // Isolated framework root with a real target-agent dir so the send-message
+  // recipient-existence gate (Part-2 fails-loud) resolves it as EXISTS rather
+  // than falling back to process.cwd() (the repo's real orgs/). Without this,
+  // the gate would treat 'target-agent' as unknown and block the allow-cases.
+  const fwRoot = join(tempCtx, 'framework');
+  mkdirSync(join(fwRoot, 'orgs', 'testorg', 'agents', 'target-agent'), { recursive: true });
 
   originalCtxRoot = process.env.CTX_ROOT;
   originalAgentName = process.env.CTX_AGENT_NAME;
   originalBotToken = process.env.BOT_TOKEN;
   originalInstanceId = process.env.CTX_INSTANCE_ID;
   originalHome = process.env.HOME;
+  originalFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
+  originalProjectRoot = process.env.CTX_PROJECT_ROOT;
+  originalOrg = process.env.CTX_ORG;
+  originalAgentDir = process.env.CTX_AGENT_DIR;
 
   process.env.CTX_ROOT = tempCtx;
   process.env.CTX_AGENT_NAME = 'test-agent';
   process.env.BOT_TOKEN = 'fake-token';
   process.env.CTX_INSTANCE_ID = 'default';
   process.env.HOME = tempCtx;
+  process.env.CTX_FRAMEWORK_ROOT = fwRoot;
+  // Keep the isolation guard in resolveEnv (issue #313) satisfied: projectRoot
+  // must EQUAL frameworkRoot and the derived agentDir must sit UNDER it. Pin
+  // both to fwRoot and clear any inherited CTX_AGENT_DIR so the agent dir is
+  // derived as fwRoot/orgs/testorg/agents/test-agent (subordinate to fwRoot).
+  process.env.CTX_PROJECT_ROOT = fwRoot;
+  process.env.CTX_ORG = 'testorg';
+  delete process.env.CTX_AGENT_DIR;
 
   sendMessageSpy.mockClear();
   telegramSendSpy.mockClear();
@@ -72,6 +94,18 @@ afterEach(() => {
 
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+
+  if (originalFrameworkRoot === undefined) delete process.env.CTX_FRAMEWORK_ROOT;
+  else process.env.CTX_FRAMEWORK_ROOT = originalFrameworkRoot;
+
+  if (originalProjectRoot === undefined) delete process.env.CTX_PROJECT_ROOT;
+  else process.env.CTX_PROJECT_ROOT = originalProjectRoot;
+
+  if (originalOrg === undefined) delete process.env.CTX_ORG;
+  else process.env.CTX_ORG = originalOrg;
+
+  if (originalAgentDir === undefined) delete process.env.CTX_AGENT_DIR;
+  else process.env.CTX_AGENT_DIR = originalAgentDir;
 
   rmSync(tempCtx, { recursive: true, force: true });
 });

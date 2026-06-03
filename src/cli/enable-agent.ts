@@ -251,6 +251,11 @@ export const enableAgentCommand = new Command('enable')
       const response = await ipc.send({ type: 'start-agent', agent, source: 'cortextos enable' });
       if (response.success) {
         console.log(`  Started via daemon: ${response.data}`);
+      } else {
+        // Fail loud: enabled-in-config-but-not-running is the worst silent state.
+        // Drain-safe — human-readable line only, set exitCode + let finalizeProcess drain.
+        console.error(`  Error: failed to start via daemon: ${response.error}`);
+        process.exitCode = 1;
       }
     } else {
       console.log('  Daemon not running. Start with: cortextos start');
@@ -283,7 +288,10 @@ export const disableAgentCommand = new Command('disable')
       if (response.success) {
         console.log(`Agent "${agent}" disabled and stopped.`);
       } else {
+        // Fail loud: "disabled but still running" is a broken state worth
+        // surfacing. Keep the human-readable message; drain-safe exitCode.
         console.log(`Agent "${agent}" disabled. Stop failed: ${response.error}`);
+        process.exitCode = 1;
       }
     } else {
       console.log(`Agent "${agent}" disabled.`);

@@ -179,6 +179,10 @@ export const startCommand = new Command('start')
         console.log(`  ${response.data}`);
       } else {
         console.error(`  Error: ${response.error}`);
+        // Fail loud: the requested start did not happen. Drain-safe — only
+        // human-readable lines were written, so set exitCode and let the
+        // top-level finalizeProcess drain+exit (no raw process.exit).
+        process.exitCode = 1;
       }
     } else {
       const response = await ipc.send({ type: 'status', source: 'cortextos start' });
