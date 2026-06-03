@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
+import { softRestartAllExit } from './soft-restart-exit.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
@@ -1627,9 +1628,10 @@ busCommand
       }
     }
 
-    if (failed > 0) {
-      console.error(`soft-restart-all: ${failed} of ${targets.length} agent(s) failed to restart.`);
-      process.exit(1);
+    const restartExit = softRestartAllExit(failed, targets.length);
+    if (restartExit.error) {
+      console.error(restartExit.error);
+      process.exit(restartExit.exitCode);
     }
     console.log('soft-restart-all complete.');
   });
