@@ -3,7 +3,7 @@ import { spawnSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
-import { validateAgentName } from '../utils/validate.js';
+import { validateAgentName, isValidJson } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
@@ -125,6 +125,33 @@ function lintOutboundMessage(text: string): OutboundLintResult {
   }
 
   return { ok: true };
+}
+
+/**
+ * Prints a result envelope, then FAILS LOUD: exit 1 on an unambiguous failure
+ * status so shell callers / crons checking $? see the failure. Only 'error' and
+ * 'conflict' are universal failures; valid non-success states (up_to_date, ok,
+ * dry_run, installed, submitted, contributed, merged, clean, empty,
+ * already_exists) intentionally stay exit 0 to avoid false-positive regressions
+ * on reads/idempotent ops. extraFailStatuses lets a specific handler add its own
+ * failure status (e.g. prepare-submission treats 'pii_detected' as a block).
+ *
+ * Exported for unit testing (process.exit is spied); handlers call it internally.
+ */
+export function emitResult(result: unknown, extraFailStatuses: string[] = []): void {
+  console.log(JSON.stringify(result, null, 2));
+  const status = (result && typeof result === 'object')
+    ? (result as { status?: unknown }).status
+    : undefined;
+  if (typeof status === 'string'
+      && (status === 'error' || status === 'conflict' || extraFailStatuses.includes(status))) {
+    // Drain-safe: set the exit code and let the top-level CLI completion route
+    // through finalizeProcess() (which flushes piped stdout before exiting). A
+    // raw process.exit(1) here would truncate the un-flushed JSON envelope that
+    // $()-capturing consumers read — corrupting the very output this fix makes
+    // reliable. See src/cli/_finalize.ts.
+    process.exitCode = 1;
+  }
 }
 
 function enforceOutboundLintOrExit(text: string, skipLint: boolean | undefined): void {
@@ -620,6 +647,19 @@ busCommand
       console.error(`Invalid severity '${severity}'. Must be one of: ${validSeverities.join(', ')}`);
       process.exit(1);
     }
+    // Fail loud on a PASSED-but-malformed --meta. An absent --meta defaults to
+    // '{}' (always valid), so this only trips on a string the caller actually
+    // supplied that is not valid JSON — never on the no-flag case. Without this,
+    // logEvent would silently drop the bad JSON (meta stays {}) and still report
+    // success, hiding the caller's mistake from any $?-checking cron/skill.
+    if (!isValidJson(opts.meta)) {
+      // Drain-safe: set exit code + return (do NOT log the event). A raw
+      // process.exit here would truncate the piped error envelope. See
+      // src/cli/_finalize.ts.
+      console.log(JSON.stringify({ status: 'error', error: `invalid --meta JSON: ${opts.meta}` }, null, 2));
+      process.exitCode = 1;
+      return;
+    }
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     logEvent(paths, env.agentName, env.org, category as EventCategory, event, severity as EventSeverity, opts.meta);
@@ -925,7 +965,11 @@ busCommand
     if (success) {
       console.log('Activity posted');
     } else {
+      // Fail loud: postActivity returns false on missing config / send failure.
+      // Previously this printed to stderr but exited 0, so callers checking $?
+      // treated a dropped activity post as success.
       console.error('Failed to post activity. Check that ACTIVITY_CHAT_ID is set in your org secrets.env or .env file.');
+      process.exitCode = 1; // drain-safe (see src/cli/_finalize.ts)
     }
   });
 
@@ -1083,7 +1127,7 @@ busCommand
       tag: opts.tag,
       search: opts.search,
     });
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result);
   });
 
 busCommand
@@ -1098,7 +1142,7 @@ busCommand
       dryRun: opts.dryRun,
       agentDir: env.agentDir,
     });
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result);
   });
 
 busCommand
@@ -1113,7 +1157,7 @@ busCommand
     const result = prepareSubmission(env.ctxRoot, type, sourcePath, name, {
       dryRun: opts.dryRun,
     });
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result, ['pii_detected']);
   });
 
 busCommand
@@ -1133,7 +1177,7 @@ busCommand
       author: opts.author,
       contribute: opts.contribute,
     });
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result);
   });
 
 busCommand
@@ -1165,7 +1209,7 @@ busCommand
     const env = resolveEnv();
     const frameworkRoot = env.frameworkRoot || env.projectRoot || process.cwd();
     const result = checkUpstream(frameworkRoot, { apply: opts.apply });
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result);
   });
 
 busCommand
@@ -1176,7 +1220,7 @@ busCommand
   .action(async (botToken: string, scanDirs: string[]) => {
     const commands = collectTelegramCommands(scanDirs);
     const result = await registerTelegramCommands(botToken, commands);
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result);
   });
 
 busCommand
@@ -1907,6 +1951,7 @@ busCommand
 
     console.log(`Restarting ${targets.length} agent(s) with ${opts.stagger}s stagger: ${targets.join(', ')}`);
 
+    let failures = 0;
     for (let i = 0; i < targets.length; i++) {
       const agent = targets[i];
       if (i > 0) {
@@ -1922,11 +1967,19 @@ busCommand
       if (resp.success) {
         console.log(`[${i + 1}/${targets.length}] Restarted ${agent}`);
       } else {
+        failures++;
         console.error(`[${i + 1}/${targets.length}] Failed to restart ${agent}: ${resp.error}`);
       }
     }
 
-    console.log('soft-restart-all complete.');
+    // Fail loud: previously this always exited 0 even if every restart failed,
+    // so a cron checking $? could not tell a full failure from full success.
+    if (failures > 0) {
+      console.error(`soft-restart-all: ${failures}/${targets.length} agent restart(s) failed.`);
+      process.exitCode = 1; // drain-safe (see src/cli/_finalize.ts)
+    } else {
+      console.log('soft-restart-all complete.');
+    }
   });
 
 busCommand

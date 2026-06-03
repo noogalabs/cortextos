@@ -80,7 +80,10 @@ program.addCommand(crashAlertCommand);
 // without truncating un-flushed piped stdout. See ./_finalize.ts.
 program
   .parseAsync(process.argv)
-  .then(() => finalizeProcess(0))
+  // Respect a handler-set non-zero exit code (e.g. emitResult / fail-loud
+  // handlers set process.exitCode = 1 instead of a raw process.exit so the
+  // piped stdout envelope is drained before exit — see ./_finalize.ts).
+  .then(() => finalizeProcess(typeof process.exitCode === 'number' ? process.exitCode : 0))
   .catch((err: unknown) => {
     console.error(err instanceof Error ? err.message : String(err));
     finalizeProcess(1);
