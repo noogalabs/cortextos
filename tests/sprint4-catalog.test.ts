@@ -268,6 +268,19 @@ describe('Sprint 4: Community Catalog', () => {
       expect(result.pii_detected.some(p => p.includes('deployment_url'))).toBe(true);
     });
 
+    it('detects JWT tokens (jwt pattern wired into the generic scan, not inert)', () => {
+      // Regression: prepareSubmission previously hard-coded only 5 pattern
+      // checks and never tested jwt, so a JWT-only secret returned clean. A
+      // letter-heavy JWT (no @, no sk-/token=/chat_id, no 10-digit run) trips
+      // ONLY the jwt pattern — so this also proves the jwt finding fires on its
+      // own, not as a side effect of another pattern.
+      const jwtOnly = 'eyJhbGciOiJIUzInRcCIisXVCJ.eyJzdWIiOiJhYmNkZWZnIiwibmFtZSI.aGVsbG9Xb3JsZFNpZ25hdHVyZUFCQ0RFRg';
+      writeFileSync(join(sourceDir, 'token.ts'), `const t = "${jwtOnly}"`, 'utf-8');
+      const result = prepareSubmission(ctxRoot, 'skill', sourceDir, 'my-skill');
+      expect(result.status).toBe('pii_detected');
+      expect(result.pii_detected.some(p => p.includes('jwt_token'))).toBe(true);
+    });
+
     it('detects telegram chat IDs', () => {
       writeFileSync(join(sourceDir, 'tg.ts'), 'chat_id: 123456789', 'utf-8');
       const result = prepareSubmission(ctxRoot, 'skill', sourceDir, 'my-skill');
