@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, cpSync, rmSync, chmodSync } from 'fs';
 import { join, resolve, relative } from 'path';
 import { execSync, execFileSync } from 'child_process';
-import { ensureDir } from '../utils/atomic.js';
+import { ensureDir, atomicWriteSync } from '../utils/atomic.js';
 import { PII_PATTERNS } from '../utils/pii-patterns.js';
 
 // --- Types ---
@@ -153,7 +153,10 @@ function readInstalled(ctxRoot: string): Record<string, { version: string; type:
 function writeInstalled(ctxRoot: string, data: Record<string, unknown>): void {
   const p = getInstalledPath(ctxRoot);
   ensureDir(ctxRoot);
-  writeFileSync(p, JSON.stringify(data, null, 2) + '\n', 'utf-8');
+  // Atomic temp-file + rename so a crash mid-write can't leave the installed
+  // manifest truncated (which would make browseCatalog parse-fail for ALL
+  // items). atomicWriteSync appends the trailing newline.
+  atomicWriteSync(p, JSON.stringify(data, null, 2));
 }
 
 // --- browseCatalog ---
@@ -507,7 +510,10 @@ export function submitCommunityItem(
     submitted_at: timestamp,
   });
 
-  writeFileSync(catalogPath, JSON.stringify(catalog, null, 2) + '\n', 'utf-8');
+  // Atomic temp-file + rename so a crash mid-write can't truncate the catalog
+  // (which would make browseCatalog parse-fail for ALL items). atomicWriteSync
+  // appends the trailing newline.
+  atomicWriteSync(catalogPath, JSON.stringify(catalog, null, 2));
 
   // Clean up staging
   rmSync(stagingDir, { recursive: true, force: true });

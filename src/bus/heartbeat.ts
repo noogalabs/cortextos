@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { Heartbeat, BusPaths } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { withFileLockSync } from '../utils/lock.js';
 
 /**
  * Update heartbeat for the current agent.
@@ -30,10 +31,16 @@ export function updateHeartbeat(
     loop_interval: options?.loopInterval ?? '',
   };
 
-  atomicWriteSync(
-    join(paths.stateDir, 'heartbeat.json'),
-    JSON.stringify(heartbeat),
-  );
+  // Take the per-agent stateDir lock — the SAME lock the logEvent heartbeat
+  // refresh (event.ts:refreshHeartbeatTimestamp) takes — so this overwrite
+  // cannot interleave between that refresh's read and write and silently lose
+  // the status/mode/current_task fields set here (TOCTOU lost-update).
+  withFileLockSync(paths.stateDir, () => {
+    atomicWriteSync(
+      join(paths.stateDir, 'heartbeat.json'),
+      JSON.stringify(heartbeat),
+    );
+  });
 }
 
 /**

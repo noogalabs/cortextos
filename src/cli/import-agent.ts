@@ -6,6 +6,7 @@ import { spawnSync } from 'child_process';
 import { validateAgentName } from '../utils/validate.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { resolvePaths } from '../utils/paths.js';
+import { atomicWriteSync } from '../utils/atomic.js';
 
 interface ExportManifest {
   version: string;
@@ -174,7 +175,9 @@ export const importAgentCommand = new Command('import-agent')
     }
     enabledAgents[agentName] = { enabled: true, status: 'configured', org };
     mkdirSync(join(ctxRoot, 'config'), { recursive: true });
-    writeFileSync(enabledPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');
+    // Atomic temp-file + rename: a torn write to the fleet registry would
+    // disable every agent on next boot. atomicWriteSync appends the newline.
+    atomicWriteSync(enabledPath, JSON.stringify(enabledAgents, null, 2));
     console.log(`  Registered in enabled-agents.json`);
 
     cleanup(tmpDir);

@@ -6,8 +6,9 @@
  * automatically with --fix.
  */
 
-import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
+import { atomicWriteSync } from '../utils/atomic.js';
 
 export interface CronAuditEntry {
   agent: string;
@@ -121,7 +122,9 @@ export function cronAudit(
             prompt,
             '',
           ].join('\n');
-          writeFileSync(skillFile, content);
+          // Atomic temp-file + rename so a crash mid-write can't truncate the
+          // generated SKILL.md. atomicWriteSync appends the trailing newline.
+          atomicWriteSync(skillFile, content);
         }
 
         // Slim the prompt
@@ -139,7 +142,10 @@ export function cronAudit(
     }
 
     if (configChanged) {
-      writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+      // Atomic temp-file + rename so a crash mid-write can't truncate the
+      // agent's config.json. atomicWriteSync appends the trailing newline,
+      // so the manual `+ '\n'` is dropped here.
+      atomicWriteSync(configPath, JSON.stringify(config, null, 2));
     }
   }
 
