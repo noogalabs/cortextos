@@ -691,6 +691,7 @@ busCommand
       console.log('Activity posted');
     } else {
       console.error('Failed to post activity. Check that ACTIVITY_CHAT_ID is set in your org secrets.env or .env file.');
+      process.exit(1);
     }
   });
 
@@ -1605,6 +1606,7 @@ busCommand
 
     console.log(`Restarting ${targets.length} agent(s) with ${opts.stagger}s stagger: ${targets.join(', ')}`);
 
+    let failed = 0;
     for (let i = 0; i < targets.length; i++) {
       const agent = targets[i];
       if (i > 0) {
@@ -1621,9 +1623,14 @@ busCommand
         console.log(`[${i + 1}/${targets.length}] Restarted ${agent}`);
       } else {
         console.error(`[${i + 1}/${targets.length}] Failed to restart ${agent}: ${resp.error}`);
+        failed++;
       }
     }
 
+    if (failed > 0) {
+      console.error(`soft-restart-all: ${failed} of ${targets.length} agent(s) failed to restart.`);
+      process.exit(1);
+    }
     console.log('soft-restart-all complete.');
   });
 
