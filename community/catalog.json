@@ -445,6 +445,42 @@
       "dependencies": [],
       "install_path": "community/skills/pm/skill-auto-discovery",
       "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "business-development",
+      "description": "Business development agent — outbound prospecting, lead qualification, and pipeline management using the NEPQ sales methodology",
+      "author": "ascendops",
+      "type": "agent",
+      "version": "1.0.0",
+      "tags": ["business-development", "sales", "prospecting", "nepq", "pipeline"],
+      "review_status": "community",
+      "dependencies": ["nepq"],
+      "install_path": "community/agents/business-development",
+      "submitted_at": "2026-06-03T00:00:00Z"
+    },
+    {
+      "name": "leasing-coordinator",
+      "description": "Leasing coordinator agent — manages prospective-tenant inquiries, showings, applications, and lease coordination",
+      "author": "ascendops",
+      "type": "agent",
+      "version": "1.0.0",
+      "tags": ["leasing", "coordinator", "tenants", "showings", "applications"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/leasing-coordinator",
+      "submitted_at": "2026-06-03T00:00:00Z"
+    },
+    {
+      "name": "nepq",
+      "description": "NEPQ sales methodology bundle — framework, cold outreach, discovery notes, follow-up cadence, objection handling, and the verbatim Black Book question bank (6 sub-skills)",
+      "author": "ascendops",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["nepq", "sales", "prospecting", "objection-handling", "question-bank"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/skills/nepq",
+      "submitted_at": "2026-06-03T00:00:00Z"
     }
   ]
 }

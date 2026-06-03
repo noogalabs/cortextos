@@ -1,0 +1,27 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "tier": "sonnet",
+  "working_directory": "",
+  "timezone": "",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest-priority BD task (inbound lead response, prospect research, discovery follow-up, the configured follow-up cadence on open prospects, or qualified-opportunity handoff)."
+    },
+    {
+      "name": "followup-sweep",
+      "type": "recurring",
+      "interval": "24h",
+      "prompt": "Read and follow .claude/skills/nepq/nepq-followup-cadence/SKILL.md. Sweep every open prospect, fire any follow-up due today on the configured cadence (draft for approval unless auto-send is enabled), and recover no-shows / no-responses. Report pipeline movement to the owner."
+    }
+  ],
+  "ecosystem": {
+    "local_version_control": { "enabled": true }
+  }
+}
