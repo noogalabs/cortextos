@@ -8,7 +8,57 @@ vi.mock('child_process', () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-import { readMaxCrashesPerDay, notifyAgents } from '../../../src/hooks/hook-crash-alert';
+import { readMaxCrashesPerDay, notifyAgents, safeCrashCount } from '../../../src/hooks/hook-crash-alert';
+
+describe('safeCrashCount NaN-guard (bug-hunt #8)', () => {
+  // Mirrors AgentProcess.safeCrashCount. All four hook crash-count sites route
+  // through this helper (same-day increment :212, read-only :224, cap compare
+  // :263, display :319), so guaranteeing finite coercion here guarantees no
+  // NaN reaches the writeback or the `crashCount < maxCrashes` cap comparison.
+
+  it('valid numeric token parses unchanged', () => {
+    expect(safeCrashCount('0')).toBe(0);
+    expect(safeCrashCount('3')).toBe(3);
+    expect(safeCrashCount('10')).toBe(10);
+  });
+
+  it('non-numeric token coerces to safe 0 (not NaN)', () => {
+    expect(safeCrashCount('abc')).toBe(0);
+    expect(Number.isFinite(safeCrashCount('abc'))).toBe(true);
+  });
+
+  it('undefined token (no colon in file) coerces to safe 0', () => {
+    expect(safeCrashCount(undefined)).toBe(0);
+    expect(Number.isFinite(safeCrashCount(undefined))).toBe(true);
+  });
+
+  it('empty string coerces to safe 0', () => {
+    expect(safeCrashCount('')).toBe(0);
+  });
+
+  it('literal "NaN" token coerces to safe 0 (kills self-propagation)', () => {
+    // The bug self-propagates by writing back `${today}:NaN`; on next read
+    // parseInt("NaN") is NaN again. The guard breaks the cycle.
+    expect(safeCrashCount('NaN')).toBe(0);
+  });
+
+  it('negative token coerces to safe 0', () => {
+    expect(safeCrashCount('-5')).toBe(0);
+  });
+
+  it('same-day increment still accumulates for valid counts (interplay preserved)', () => {
+    // Hook crash path is `safeCrashCount(count) + 1` when date === today.
+    expect(safeCrashCount('3') + 1).toBe(4);
+  });
+
+  it('same-day increment of a garbage count is cap-safe first crash, not NaN', () => {
+    // Garbage → 0 → 0 + 1 = 1, so the cap comparison stays meaningful and
+    // counting resumes from a real number instead of writing back `:NaN`.
+    expect(safeCrashCount('abc') + 1).toBe(1);
+    expect(safeCrashCount(undefined) + 1).toBe(1);
+  });
+});
+
 
 describe('readMaxCrashesPerDay', () => {
   let tmp: string;

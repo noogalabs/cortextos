@@ -259,6 +259,115 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
   });
 });
 
+describe('AgentProcess - crashCount NaN-guard (bug-hunt #8)', () => {
+  // Helper: point existsSync + readFileSync at a .crash_count_today file with
+  // the given raw contents, leave the .daemon-stop marker absent so the exit
+  // is classified as a real crash.
+  const seedCrashFile = (raw: string) => {
+    fsMocks.existsSync.mockImplementation((p: any) =>
+      String(p).endsWith('/state/alice/.crash_count_today'),
+    );
+    fsMocks.readFileSync.mockImplementation((p: any) => {
+      if (String(p).endsWith('/state/alice/.crash_count_today')) return raw;
+      return '';
+    });
+  };
+
+  const crashLogLine = (): string => {
+    const call = fsMocks.appendFileSync.mock.calls.find(c =>
+      String(c[0]).endsWith('/logs/alice/restarts.log'),
+    );
+    return call ? String(call[1]) : '';
+  };
+
+  const crashCountWrite = (): string | undefined => {
+    const call = fsMocks.writeFileSync.mock.calls.find(c =>
+      String(c[0]).endsWith('/state/alice/.crash_count_today'),
+    );
+    return call ? String(call[1]) : undefined;
+  };
+
+  it('malformed same-day count does NOT bypass the cap — cap still HALTS', async () => {
+    // max_crashes_per_day=1 with a garbage stored count. With the NaN bug,
+    // parseInt("abc")+1 = NaN, NaN>=1 is false, and the agent would re-enter
+    // the crash path forever (cap never fires). The guard coerces the garbage
+    // to 0, so this crash counts as #1 and the cap fires immediately.
+    const today = new Date().toISOString().split('T')[0];
+    seedCrashFile(`${today}:abc`);
+
+    const ap = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 1 });
+    await ap.start();
+    capturedOnExit!(1, 0);
+
+    expect(ap.getStatus().status).toBe('halted');
+    expect(crashLogLine()).toMatch(/\] HALTED: exit_code=1 crash_count=1 max_crashes=1/);
+  });
+
+  it('malformed count never yields a NaN backoff (no immediate tight restart loop)', async () => {
+    // The scariest symptom: Math.pow(2, NaN-1) → setTimeout(fn, NaN) → fires
+    // immediately → tight infinite restart loop. With the guard, a garbage
+    // count coerces to 0, crash #1, finite 5s backoff.
+    const today = new Date().toISOString().split('T')[0];
+    seedCrashFile(`${today}:not-a-number`);
+
+    const ap = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 10 });
+    await ap.start();
+    capturedOnExit!(1, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    const line = crashLogLine();
+    expect(line).toMatch(/\] CRASH: exit_code=1 crash_count=1 backoff_s=5\b/);
+    expect(line).not.toMatch(/NaN/);
+    // Persisted count is a real number, not the self-propagating `:NaN`.
+    expect(crashCountWrite()).toBe(`${today}:1`);
+    expect(crashCountWrite()).not.toMatch(/NaN/);
+  });
+
+  it('missing count field (no colon) coerces to a safe finite value', async () => {
+    // File content like a bare date with no `:count` → split yields
+    // count=undefined → parseInt(undefined) = NaN under the bug.
+    const today = new Date().toISOString().split('T')[0];
+    seedCrashFile(today); // no ":count"
+
+    const ap = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 10 });
+    await ap.start();
+    capturedOnExit!(1, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(crashLogLine()).toMatch(/crash_count=1 backoff_s=5\b/);
+    expect(crashCountWrite()).toBe(`${today}:1`);
+  });
+
+  it('same-day increments still ACCUMULATE (++/reset interplay preserved)', async () => {
+    // A valid same-day count of 3 must become 4 — the guard must not change
+    // the existing increment behavior, only harden the parse.
+    const today = new Date().toISOString().split('T')[0];
+    seedCrashFile(`${today}:3`);
+
+    const ap = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 10 });
+    await ap.start();
+    capturedOnExit!(1, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(crashLogLine()).toMatch(/crash_count=4 backoff_s=40\b/);
+    expect(crashCountWrite()).toBe(`${today}:4`);
+  });
+
+  it('daily reset still ZEROES on a new day (interplay preserved)', async () => {
+    // A valid count from a prior date must reset to 1 today, not accumulate.
+    seedCrashFile('2026-01-01:9');
+
+    const ap = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 10 });
+    await ap.start();
+    capturedOnExit!(1, 0);
+
+    const today = new Date().toISOString().split('T')[0];
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(crashLogLine()).toMatch(/crash_count=1 backoff_s=5\b/);
+    expect(crashCountWrite()).toBe(`${today}:1`);
+  });
+});
+
 describe('AgentProcess onboarding fallback', () => {
   it('retro-writes .onboarded when bootstrap files have real content', () => {
     fsMocks.existsSync.mockImplementation((p: any) => {

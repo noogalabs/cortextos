@@ -585,6 +585,14 @@ export class AgentProcess {
     this.crashCount++;
     const today = new Date().toISOString().split('T')[0];
     this.resetCrashCountIfNewDay(today);
+    // Defensive normalization: resetCrashCountIfNewDay already guards the
+    // persisted-token parse, but normalize here too so the halt gate and the
+    // backoff math below can NEVER see a NaN regardless of how crashCount was
+    // seeded. A NaN here would make `crashCount >= maxCrashesPerDay` false
+    // forever (cap never fires) and `Math.pow(2, NaN)` → setTimeout(fn, NaN)
+    // → an immediate tight restart loop. Symmetric with the read-site guard;
+    // does not alter the ++/reset interplay above.
+    this.crashCount = this.safeCrashCount(String(this.crashCount));
 
     if (this.crashCount >= this.maxCrashesPerDay) {
       this.log(`HALTED: exceeded ${this.maxCrashesPerDay} crashes today`);
@@ -998,6 +1006,26 @@ export class AgentProcess {
     }
   }
 
+  /**
+   * Coerce a persisted crash-count token to a safe non-negative integer.
+   *
+   * The on-disk format is `<date>:<count>`; a torn/garbled write can leave
+   * `count` as `undefined`, `''`, or non-numeric junk. `parseInt` on those
+   * yields NaN, and an unguarded NaN silently defeats the `max_crashes_per_day`
+   * halt gate (`NaN >= N` is always false) and produces `setTimeout(fn, NaN)`
+   * — i.e. an immediate, tight, infinite restart loop. We treat any
+   * non-finite value as 0 ("no recoverable prior count"): that is safe for the
+   * cap (the very next increment makes it 1 and counting resumes), and because
+   * a garbage token carries no recoverable prior value there is nothing to
+   * erase. Must stay byte-for-byte in step with hook-crash-alert.ts's
+   * safeCrashCount — asymmetric guarding here previously caused a count
+   * divergence between the daemon halt path and the operator-alert path.
+   */
+  private safeCrashCount(raw: string | undefined): number {
+    const n = parseInt(raw ?? '', 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+
   private resetCrashCountIfNewDay(today: string): void {
     // Canonical crash-count location is state/<agent>/.crash_count_today —
     // matches hook-crash-alert.ts so daemon halt logic and operator alerts
@@ -1011,7 +1039,10 @@ export class AgentProcess {
         const content = readFileSync(crashFile, 'utf-8').trim();
         const [storedDate, count] = content.split(':');
         if (storedDate === today) {
-          this.crashCount = parseInt(count, 10) + 1;
+          // Guard parse: a malformed `count` must coerce to a finite 0 so the
+          // same-day increment still produces a real number (0 + 1 = 1), never
+          // propagating NaN into the halt/backoff comparisons below.
+          this.crashCount = this.safeCrashCount(count) + 1;
         } else {
           this.crashCount = 1;
         }

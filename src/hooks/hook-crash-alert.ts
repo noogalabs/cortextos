@@ -36,6 +36,22 @@ const QUIET_SUPPRESSED_TYPES = new Set([
   'rate-limited',
 ]);
 
+/**
+ * Coerce a persisted crash-count token to a safe non-negative integer.
+ *
+ * Mirror of AgentProcess.safeCrashCount (src/daemon/agent-process.ts). The
+ * on-disk `.crash_count_today` format is `<date>:<count>`; a torn write can
+ * leave `count` as undefined/empty/non-numeric, and an unguarded
+ * `parseInt(count, 10)` → NaN self-propagates (`writeFileSync(... :NaN)`) and
+ * defeats the `max_crashes_per_day` comparison that decides `restartAttempted`.
+ * Any non-finite value coerces to 0; both readers MUST agree on this so the
+ * daemon halt path and the operator-alert path never diverge.
+ */
+export function safeCrashCount(raw: string | undefined): number {
+  const n = parseInt(raw ?? '', 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
 function isQuietHoursLA(now: Date): boolean {
   const laString = now.toLocaleString('en-US', {
     timeZone: 'America/Los_Angeles',
@@ -209,7 +225,10 @@ async function main(): Promise<void> {
     try {
       const data = readFileSync(countFile, 'utf-8').trim();
       const [date, count] = data.split(':');
-      crashCount = date === today ? parseInt(count, 10) + 1 : 1;
+      // Guard parse: a malformed `count` coerces to 0 so a same-day increment
+      // still yields a real number (0 + 1 = 1) instead of writing back `:NaN`,
+      // which would self-propagate and defeat the restart-attempted cap below.
+      crashCount = date === today ? safeCrashCount(count) + 1 : 1;
     } catch {
       crashCount = 1;
     }
@@ -221,7 +240,9 @@ async function main(): Promise<void> {
     try {
       const data = readFileSync(countFile, 'utf-8').trim();
       const [date, count] = data.split(':');
-      crashCount = date === today ? parseInt(count, 10) : 0;
+      // Same guard on the read-only path: a malformed token surfaces as 0
+      // rather than NaN in the chief/analyst alert.
+      crashCount = date === today ? safeCrashCount(count) : 0;
     } catch {
       crashCount = 0;
     }
@@ -260,13 +281,18 @@ async function main(): Promise<void> {
   if (endType === 'crash' || endType === 'daemon-crashed') {
     const agentDir = process.env.CTX_AGENT_DIR || process.cwd();
     const maxCrashes = readMaxCrashesPerDay(agentDir);
-    const restartAttempted = maxCrashes === null || crashCount < maxCrashes;
+    // Defensive: normalize before the cap comparison so a stray NaN can never
+    // flip restartAttempted (`NaN < maxCrashes` is always false → would falsely
+    // report "cap reached / no restart" on a healthy agent). Symmetric with the
+    // daemon halt-gate guard in agent-process.ts.
+    const safeCount = safeCrashCount(String(crashCount));
+    const restartAttempted = maxCrashes === null || safeCount < maxCrashes;
     notifyAgents({
       agentName,
       endType,
       reason,
       lastTask,
-      crashCount,
+      crashCount: safeCount,
       restartAttempted,
       recipients: ['chief', 'analyst'],
     });
@@ -314,11 +340,15 @@ async function main(): Promise<void> {
     case 'rate-limited':
       message = `⏳ ${agentName} paused — Anthropic rate limit hit. Will resume when the window resets.`;
       break;
-    case 'crash':
+    case 'crash': {
+      // Normalize for display symmetry: a NaN here would silently drop the
+      // "Crashes today" line; surface the safe count instead.
+      const displayCount = safeCrashCount(String(crashCount));
       message = `🚨 CRASH: ${agentName} died unexpectedly.`;
-      if (crashCount > 0) message += ` Crashes today: ${crashCount}.`;
+      if (displayCount > 0) message += ` Crashes today: ${displayCount}.`;
       if (lastTask) message += `\nLast status: ${lastTask}`;
       break;
+    }
   }
 
   if (message) {
