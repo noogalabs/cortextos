@@ -370,6 +370,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     });
     expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1',
+      model: 'gpt-5-codex',
       input: [
         { type: 'skill', name: 'imagegen', path: '/skill.md' },
         { type: 'text', text: 'make a logo', text_elements: [] },
@@ -400,6 +401,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     });
     expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1',
+      model: 'gpt-5-codex',
       input: [
         { type: 'skill', name: 'imagegen', path: '/skill.md' },
         { type: 'text', text: 'make a logo', text_elements: [] },
@@ -435,6 +437,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     });
     expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1',
+      model: 'gpt-5-codex',
       input: [{ type: 'skill', name: 'heartbeat', path: '/h.md' }],
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'dangerFullAccess' },
@@ -488,6 +491,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
 
     expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1',
+      model: 'gpt-5-codex',
       input: [
         { type: 'skill', name: 'heartbeat', path: '/h.md' },
         { type: 'text', text: 'extra context here', text_elements: [] },
@@ -540,6 +544,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
 
     expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1',
+      model: 'gpt-5-codex',
       input: [{ type: 'skill', name: 'heartbeat', path: '/h.md' }],
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'dangerFullAccess' },
@@ -558,6 +563,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     expect(requestMock).toHaveBeenCalledTimes(1);
     expect(requestMock).toHaveBeenLastCalledWith('turn/start', {
       threadId: 'thread-1',
+      model: 'gpt-5-codex',
       input: [{ type: 'text', text: 'first', text_elements: [] }],
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'dangerFullAccess' },
@@ -575,6 +581,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     expect(requestMock).toHaveBeenCalledTimes(2);
     expect(requestMock).toHaveBeenLastCalledWith('turn/start', {
       threadId: 'thread-1',
+      model: 'gpt-5-codex',
       input: [{ type: 'text', text: 'second', text_elements: [] }],
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'dangerFullAccess' },
@@ -883,6 +890,7 @@ describe('CodexAppServerPTY thread lifecycle', () => {
 
     expect(requestMock).toHaveBeenCalledWith('thread/start', {
       cwd: '/tmp/fw/orgs/acme/agents/codex-app-agent',
+      model: 'gpt-5-codex',
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',
       config: { features: { goals: true } },
@@ -913,6 +921,7 @@ describe('CodexAppServerPTY thread lifecycle', () => {
     expect(requestMock).toHaveBeenCalledWith('thread/resume', {
       threadId: 'persisted-thread',
       cwd: '/tmp/fw/orgs/acme/agents/codex-app-agent',
+      model: 'gpt-5-codex',
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',
       config: { features: { goals: true } },
@@ -1197,8 +1206,8 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', (
     expect(entry.model).toBe('gpt-5-codex');
   });
 
-  it('preserves config.model override when set', () => {
-    const pty = new CodexAppServerPTY(mockEnv, { model: 'gpt-5-codex-preview' });
+  it('preserves an allowlisted config.model override when set', () => {
+    const pty = new CodexAppServerPTY(mockEnv, { model: 'gpt-5.5' });
     (pty as unknown as { _threadId: string })._threadId = 'thread-9';
     feedTokenUsage(pty, {
       last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
@@ -1207,7 +1216,52 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', (
     });
 
     const entry = lastAppendedEntry()!;
-    expect(entry.model).toBe('gpt-5-codex-preview');
+    expect(entry.model).toBe('gpt-5.5');
+  });
+
+  it('gates an unsafe/unentitled config.model override back to the safe default', () => {
+    // The SAFE_MODELS allowlist intentionally narrows override flexibility: an
+    // unentitled model (incl. the outage model gpt-5.3-codex) can never be sent
+    // or logged — it falls back to gpt-5-codex. The token-log label tracks the
+    // model actually sent, not the raw config.
+    const pty = new CodexAppServerPTY(mockEnv, { model: 'gpt-5.3-codex' });
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 100, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 150 },
+      modelContextWindow: 200000,
+    });
+
+    const entry = lastAppendedEntry()!;
+    expect(entry.model).toBe('gpt-5-codex');
+  });
+
+  it('warns once (dashboard event) when config.model is gated to the safe default', () => {
+    logEventMock.mockClear();
+    new CodexAppServerPTY(mockEnv, { model: 'gpt-5.3-codex' });
+    expect(logEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      'action',
+      'codex_model_gated_to_safe_default',
+      'warning',
+      expect.objectContaining({ configured_model: 'gpt-5.3-codex', used_model: 'gpt-5-codex' }),
+    );
+  });
+
+  it('does NOT warn when config.model is already a safe model', () => {
+    logEventMock.mockClear();
+    new CodexAppServerPTY(mockEnv, { model: 'gpt-5-codex' });
+    expect(logEventMock).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      'action',
+      'codex_model_gated_to_safe_default',
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it('skips append when turnId is missing', () => {
