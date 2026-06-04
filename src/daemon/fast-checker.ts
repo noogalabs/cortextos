@@ -17,6 +17,7 @@ import {
 import { KEYS } from '../pty/inject.js';
 import { stripControlChars, validateOrgName } from '../utils/validate.js';
 import { resolve as pathResolve } from 'path';
+import { atomicWriteSync } from '../utils/atomic.js';
 // added 2026-04-29 by collie via dane dispatch — RFC #15 Day-1 dispatcher integration; Piece 3 (handler-type wiring) deferred to Day-2
 import { loadHookRegistry, matchHooks, dispatchHook, type HookRegistry } from '../bus/hooks.js';
 import { registerBuiltInHandlers } from '../bus/hook-handlers/index.js';
@@ -42,6 +43,11 @@ type ContextStatus = {
   used_percentage: number;
   exceeds_200k_tokens: boolean;
   session_id?: string;
+};
+
+type WatchdogRestartMarker = {
+  restartedAt: number;
+  stdoutHighWater: number;
 };
 
 /**
@@ -124,6 +130,7 @@ export class FastChecker {
   private readonly WATCHDOG_WINDOW_MS = 15 * 60 * 1000; // 15 min
   private readonly WATCHDOG_CIRCUIT_RESET_MS = 30 * 60 * 1000; // 30 min
   private lastHardRestartAt: number = 0;
+  private watchdogRestartMarkerFile: string = '';
   private stdoutLastSize: number = 0;
   private stdoutLastChangeAt: number = 0;
   private watchdogTriggered: boolean = false;
@@ -279,6 +286,7 @@ export class FastChecker {
     // Initialize persistent dedup
     this.dedupFilePath = join(paths.stateDir, '.message-dedup-hashes');
     this.loadDedupHashes();
+    this.watchdogRestartMarkerFile = join(paths.stateDir, '.watchdog-restart-at');
 
     // Initialize Gmail watch
     if (options.gmailWatch) {
@@ -745,8 +753,10 @@ export class FastChecker {
    *      pending message and no idle flag) — passively frozen.
    */
   private watchdogCheck(): void {
-    if (this.watchdogTriggered) return;
     const now = Date.now();
+    const restartMarker = this.readWatchdogRestartMarker();
+    if (restartMarker.restartedAt > 0 && now - restartMarker.restartedAt < this.HARD_RESTART_COOLDOWN_MS) return;
+    if (this.watchdogTriggered) return;
     if (this.bootstrappedAt === 0 || now - this.bootstrappedAt < this.BOOTSTRAP_GRACE_MS) return;
     if (this.lastHardRestartAt > 0 && now - this.lastHardRestartAt < this.HARD_RESTART_COOLDOWN_MS) return;
 
@@ -755,13 +765,20 @@ export class FastChecker {
 
     let size: number;
     try { size = statSync(stdoutPath).size; } catch { return; }
+    let stdoutHighWater = restartMarker.stdoutHighWater;
+    if (stdoutHighWater > size) {
+      stdoutHighWater = 0;
+      if (restartMarker.restartedAt > 0) {
+        this.persistWatchdogRestartMarker(restartMarker.restartedAt, stdoutHighWater);
+      }
+    }
 
     if (size !== this.stdoutLastSize) {
       this.stdoutLastSize = size;
       this.stdoutLastChangeAt = now;
     }
 
-    // Read tail once — shared by Signal 1 and Signal 3
+    // Read tail once — shared by Signals 3 and 4
     let tail = '';
     try {
       const tailBytes = Math.min(20000, size);
@@ -775,10 +792,24 @@ export class FastChecker {
     } catch { /* non-critical */ }
 
     // Signal 1: session-survey prompt → immediate hard restart
-    if (tail && /How is Claude doing this session\?/.test(tail)) {
-      this.log('WATCHDOG: ctx-exhaustion survey prompt detected — hard-restarting');
-      this.triggerHardRestart('ctx exhaustion: session survey prompt in stdout');
-      return;
+    if (size > stdoutHighWater) {
+      let surveyTail = '';
+      try {
+        const start = stdoutHighWater;
+        const bytes = size - start;
+        if (bytes > 0) {
+          const fd = openSync(stdoutPath, 'r');
+          const buf = Buffer.alloc(bytes);
+          readSync(fd, buf, 0, bytes, start);
+          closeSync(fd);
+          surveyTail = buf.toString('utf-8');
+        }
+      } catch { /* non-critical */ }
+      if (surveyTail && /How is Claude doing this session\?/.test(surveyTail)) {
+        this.log('WATCHDOG: ctx-exhaustion survey prompt detected — hard-restarting');
+        this.triggerHardRestart('ctx exhaustion: session survey prompt in stdout', size);
+        return;
+      }
     }
 
     // Signal 3: context-threshold → proactive graceful restart
@@ -827,7 +858,12 @@ export class FastChecker {
     }
   }
 
-  private triggerHardRestart(reason: string): void {
+  private triggerHardRestart(reason: string, stdoutHighWater?: number): void {
+    const status = this.agent.getStatus().status;
+    if (status === 'halted' || status === 'stopped') {
+      this.log(`WATCHDOG: refusing hard-restart in status=${status}: ${reason}`);
+      return;
+    }
     this.watchdogTriggered = true;
     this.lastHardRestartAt = Date.now();
     if (this.telegramApi && this.chatId) {
@@ -835,6 +871,11 @@ export class FastChecker {
         .sendMessage(this.chatId, `Got stuck (${reason}). Hard-restarting now.`)
         .catch(() => { /* non-critical */ });
     }
+    const currentMarker = this.readWatchdogRestartMarker();
+    this.persistWatchdogRestartMarker(
+      this.lastHardRestartAt,
+      stdoutHighWater ?? currentMarker.stdoutHighWater,
+    );
     // Preserve any recent handoff doc before the abrupt restart, same as the
     // metric-driven forceContextRestart (Tier 2/3) path. Without this, a
     // watchdog-triggered hard restart — including the cooperative ctx-threshold
@@ -843,6 +884,28 @@ export class FastChecker {
     // 00:52Z forced restart.
     this.preserveRecentHandoffDoc();
     this.agent.hardRestartSelf(reason).catch(e => this.log(`hardRestartSelf failed: ${e}`));
+  }
+
+  private readWatchdogRestartMarker(): WatchdogRestartMarker {
+    try {
+      if (!existsSync(this.watchdogRestartMarkerFile)) return { restartedAt: 0, stdoutHighWater: 0 };
+      const raw = readFileSync(this.watchdogRestartMarkerFile, 'utf-8').trim();
+      const parsed = JSON.parse(raw) as Partial<WatchdogRestartMarker>;
+      return {
+        restartedAt: typeof parsed.restartedAt === 'number' && Number.isFinite(parsed.restartedAt) ? parsed.restartedAt : 0,
+        stdoutHighWater: typeof parsed.stdoutHighWater === 'number' && Number.isFinite(parsed.stdoutHighWater) ? parsed.stdoutHighWater : 0,
+      };
+    } catch {
+      return { restartedAt: 0, stdoutHighWater: 0 };
+    }
+  }
+
+  private persistWatchdogRestartMarker(restartedAt: number, stdoutHighWater: number): void {
+    try {
+      atomicWriteSync(this.watchdogRestartMarkerFile, JSON.stringify({ restartedAt, stdoutHighWater }));
+    } catch {
+      // Non-fatal: the in-memory cooldown still protects this FastChecker instance.
+    }
   }
 
   /**
@@ -2124,7 +2187,6 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     this.ctxThresholdTriggeredAt = 0;
     this.stdoutLastChangeAt = now;
     this.stdoutLastSize = 0;
-    this.lastHardRestartAt = 0;
     this.watchdogCircuitBroken = false;
     this.watchdogRestarts = [];
     this.watchdogCircuitBrokenAt = 0;

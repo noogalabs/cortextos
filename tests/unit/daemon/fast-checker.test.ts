@@ -31,6 +31,7 @@ function createMockAgent(name = 'test-agent') {
     isBootstrapped: vi.fn().mockReturnValue(true),
     injectMessage: vi.fn().mockReturnValue(true),
     write: vi.fn(),
+    getStatus: vi.fn().mockReturnValue({ status: 'running' }),
   } as any;
 }
 
@@ -1427,7 +1428,7 @@ describe('FastChecker', () => {
   });
 
   describe('resetWatchdogState — field coverage', () => {
-    it('zeroes every per-session field including the circuit-breaker triple', () => {
+    it('zeroes per-session fields but preserves the hard-restart cooldown guard', () => {
       const checker = new FastChecker(createMockAgent(), paths, '/tmp/framework') as any;
 
       checker.ctxHandoffFiredAt = 111;
@@ -1456,7 +1457,7 @@ describe('FastChecker', () => {
       expect(checker.stdoutLastChangeAt).toBeGreaterThanOrEqual(beforeNow);
       expect(checker.stdoutLastChangeAt).toBeLessThanOrEqual(afterNow);
       expect(checker.stdoutLastSize).toBe(0);
-      expect(checker.lastHardRestartAt).toBe(0);
+      expect(checker.lastHardRestartAt).toBe(666);
       expect(checker.watchdogCircuitBroken).toBe(false);
       expect(checker.watchdogRestarts).toEqual([]);
       expect(checker.watchdogCircuitBrokenAt).toBe(0);
@@ -1470,6 +1471,7 @@ describe('FastChecker', () => {
         isBootstrapped: vi.fn().mockReturnValue(true),
         injectMessage: vi.fn().mockReturnValue(true),
         write: vi.fn(),
+        getStatus: vi.fn().mockReturnValue({ status: 'running' }),
         getAgentDir: vi.fn().mockReturnValue(agentDir),
         hardRestartSelf: vi.fn().mockResolvedValue(undefined),
       } as any;
@@ -1494,6 +1496,153 @@ describe('FastChecker', () => {
       expect(existsSync(markerPath)).toBe(true);
       expect(readFileSync(markerPath, 'utf-8').trim()).toBe(recentDoc);
       // The restart still fires — preservation is additive, not a gate.
+      expect(agent.hardRestartSelf).toHaveBeenCalledTimes(1);
+    });
+
+    it('suppresses stale survey-prompt re-fire by high-water and fires on new survey output', () => {
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        const start = 1_780_580_000_000;
+        nowSpy.mockReturnValue(start);
+        const stdoutPath = join(paths.logDir, 'stdout.log');
+        const firstSurvey = 'How is Claude doing this session?';
+        writeFileSync(stdoutPath, firstSurvey, 'utf-8');
+
+        const firstTelegram = createMockTelegramApi();
+        const firstAgent = makeAgentWithDir(join(testDir, 'agent-first'));
+        firstAgent.hardRestartSelf.mockImplementation(async () => {
+          const marker = JSON.parse(readFileSync(join(paths.stateDir, '.watchdog-restart-at'), 'utf-8'));
+          expect(marker).toEqual({ restartedAt: start, stdoutHighWater: firstSurvey.length });
+        });
+        const firstChecker = new FastChecker(firstAgent, paths, '/framework', {
+          telegramApi: firstTelegram,
+          chatId: '123',
+        }) as any;
+        firstChecker.bootstrappedAt = start - firstChecker.BOOTSTRAP_GRACE_MS - 1;
+
+        firstChecker.watchdogCheck();
+
+        expect(firstAgent.hardRestartSelf).toHaveBeenCalledTimes(1);
+        expect(firstTelegram.sendMessage).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(readFileSync(join(paths.stateDir, '.watchdog-restart-at'), 'utf-8'))).toEqual({
+          restartedAt: start,
+          stdoutHighWater: firstSurvey.length,
+        });
+
+        nowSpy.mockReturnValue(start + 5_000);
+        const secondTelegram = createMockTelegramApi();
+        const secondAgent = makeAgentWithDir(join(testDir, 'agent-second'));
+        const secondChecker = new FastChecker(secondAgent, paths, '/framework', {
+          telegramApi: secondTelegram,
+          chatId: '123',
+        }) as any;
+        secondChecker.resetWatchdogState();
+        secondChecker.bootstrappedAt = start - secondChecker.BOOTSTRAP_GRACE_MS - 1;
+
+        secondChecker.watchdogCheck();
+
+        expect(secondAgent.hardRestartSelf).not.toHaveBeenCalled();
+        expect(secondTelegram.sendMessage).not.toHaveBeenCalled();
+
+        nowSpy.mockReturnValue(start + secondChecker.HARD_RESTART_COOLDOWN_MS + 1);
+        secondChecker.watchdogCheck();
+
+        expect(secondAgent.hardRestartSelf).not.toHaveBeenCalled();
+        expect(secondTelegram.sendMessage).not.toHaveBeenCalled();
+
+        writeFileSync(stdoutPath, `${firstSurvey}\nnew output\nHow is Claude doing this session?`, 'utf-8');
+        secondChecker.watchdogCheck();
+
+        expect(secondAgent.hardRestartSelf).toHaveBeenCalledTimes(1);
+        expect(secondTelegram.sendMessage).toHaveBeenCalledTimes(1);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('detects a new survey even when more than 20KB of output follows it', () => {
+      const stdoutPath = join(paths.logDir, 'stdout.log');
+      const priorOutput = 'handled survey from previous session';
+      const survey = 'How is Claude doing this session?';
+      const trailingOutput = 'x'.repeat(21000);
+      writeFileSync(
+        join(paths.stateDir, '.watchdog-restart-at'),
+        JSON.stringify({
+          restartedAt: Date.now() - 20 * 60 * 1000,
+          stdoutHighWater: priorOutput.length,
+        }),
+        'utf-8',
+      );
+      writeFileSync(stdoutPath, `${priorOutput}${survey}${trailingOutput}`, 'utf-8');
+
+      const agent = makeAgentWithDir(join(testDir, 'agent-large-survey-tail'));
+      const checker = new FastChecker(agent, paths, '/framework') as any;
+      checker.bootstrappedAt = Date.now() - checker.BOOTSTRAP_GRACE_MS - 1;
+
+      checker.watchdogCheck();
+
+      expect(agent.hardRestartSelf).toHaveBeenCalledTimes(1);
+      const marker = JSON.parse(readFileSync(join(paths.stateDir, '.watchdog-restart-at'), 'utf-8'));
+      expect(marker.stdoutHighWater).toBe(statSync(stdoutPath).size);
+    });
+
+    it('does not persist marker or notify when hard restart is rejected by stopped status', () => {
+      const telegram = createMockTelegramApi();
+      const agent = makeAgentWithDir(join(testDir, 'agent-stopped'));
+      agent.getStatus.mockReturnValue({ status: 'stopped' });
+      const checker = new FastChecker(agent, paths, '/framework', {
+        telegramApi: telegram,
+        chatId: '123',
+      }) as any;
+
+      checker.triggerHardRestart('ctx exhaustion: session survey prompt in stdout', 42);
+
+      expect(existsSync(join(paths.stateDir, '.watchdog-restart-at'))).toBe(false);
+      expect(telegram.sendMessage).not.toHaveBeenCalled();
+      expect(agent.hardRestartSelf).not.toHaveBeenCalled();
+      expect(checker.watchdogTriggered).toBe(false);
+      expect(checker.lastHardRestartAt).toBe(0);
+    });
+
+    it('treats corrupt persisted watchdog cooldown state as no active cooldown', () => {
+      writeFileSync(join(paths.stateDir, '.watchdog-restart-at'), 'not-a-timestamp', 'utf-8');
+      writeFileSync(join(paths.logDir, 'stdout.log'), 'How is Claude doing this session?', 'utf-8');
+
+      const agent = makeAgentWithDir(join(testDir, 'agent-corrupt-cooldown'));
+      const checker = new FastChecker(agent, paths, '/framework') as any;
+      checker.bootstrappedAt = Date.now() - checker.BOOTSTRAP_GRACE_MS - 1;
+
+      expect(() => checker.watchdogCheck()).not.toThrow();
+      expect(agent.hardRestartSelf).toHaveBeenCalledTimes(1);
+    });
+
+    it('resets survey high-water when stdout rotated below the persisted offset', () => {
+      const stdoutPath = join(paths.logDir, 'stdout.log');
+      const start = Date.now() - 20 * 60 * 1000;
+      writeFileSync(
+        join(paths.stateDir, '.watchdog-restart-at'),
+        JSON.stringify({ restartedAt: start, stdoutHighWater: 50000 }),
+        'utf-8',
+      );
+      writeFileSync(stdoutPath, 'How is Claude doing this session?', 'utf-8');
+
+      const agent = makeAgentWithDir(join(testDir, 'agent-rotated-stdout'));
+      const checker = new FastChecker(agent, paths, '/framework') as any;
+      checker.bootstrappedAt = Date.now() - checker.BOOTSTRAP_GRACE_MS - 1;
+
+      checker.watchdogCheck();
+
+      expect(agent.hardRestartSelf).toHaveBeenCalledTimes(1);
+      const marker = JSON.parse(readFileSync(join(paths.stateDir, '.watchdog-restart-at'), 'utf-8'));
+      expect(marker.stdoutHighWater).toBe(statSync(stdoutPath).size);
+    });
+
+    it('does not throw when watchdog cooldown state cannot be written', () => {
+      mkdirSync(join(paths.stateDir, '.watchdog-restart-at'));
+      const agent = makeAgentWithDir(join(testDir, 'agent-unwritable-cooldown'));
+      const checker = new FastChecker(agent, paths, '/framework') as any;
+
+      expect(() => checker.triggerHardRestart('survey prompt')).not.toThrow();
       expect(agent.hardRestartSelf).toHaveBeenCalledTimes(1);
     });
 
