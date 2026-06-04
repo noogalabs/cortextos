@@ -4,6 +4,7 @@ import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName, validateOrgName } from '../utils/validate';
+import { atomicWriteSync } from '../utils/atomic';
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
@@ -330,7 +331,9 @@ export const addAgentCommand = new Command('add-agent')
         status: 'configured',
         ...(org ? { org } : {}),
       };
-      writeFileSync(enabledPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');
+      // Atomic temp-file + rename: a torn write to the fleet registry would
+      // disable every agent on next boot. atomicWriteSync appends the newline.
+      atomicWriteSync(enabledPath, JSON.stringify(enabledAgents, null, 2));
       console.log(`  Registered in enabled-agents.json`);
     }
 

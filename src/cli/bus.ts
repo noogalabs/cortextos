@@ -3,7 +3,8 @@ import { spawnSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
-import { validateAgentName } from '../utils/validate.js';
+import { agentExists } from '../bus/agents.js';
+import { validateAgentName, isValidJson } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
@@ -125,6 +126,33 @@ function lintOutboundMessage(text: string): OutboundLintResult {
   }
 
   return { ok: true };
+}
+
+/**
+ * Prints a result envelope, then FAILS LOUD: exit 1 on an unambiguous failure
+ * status so shell callers / crons checking $? see the failure. Only 'error' and
+ * 'conflict' are universal failures; valid non-success states (up_to_date, ok,
+ * dry_run, installed, submitted, contributed, merged, clean, empty,
+ * already_exists) intentionally stay exit 0 to avoid false-positive regressions
+ * on reads/idempotent ops. extraFailStatuses lets a specific handler add its own
+ * failure status (e.g. prepare-submission treats 'pii_detected' as a block).
+ *
+ * Exported for unit testing (process.exit is spied); handlers call it internally.
+ */
+export function emitResult(result: unknown, extraFailStatuses: string[] = []): void {
+  console.log(JSON.stringify(result, null, 2));
+  const status = (result && typeof result === 'object')
+    ? (result as { status?: unknown }).status
+    : undefined;
+  if (typeof status === 'string'
+      && (status === 'error' || status === 'conflict' || extraFailStatuses.includes(status))) {
+    // Drain-safe: set the exit code and let the top-level CLI completion route
+    // through finalizeProcess() (which flushes piped stdout before exiting). A
+    // raw process.exit(1) here would truncate the un-flushed JSON envelope that
+    // $()-capturing consumers read — corrupting the very output this fix makes
+    // reliable. See src/cli/_finalize.ts.
+    process.exitCode = 1;
+  }
 }
 
 function enforceOutboundLintOrExit(text: string, skipLint: boolean | undefined): void {
@@ -260,6 +288,60 @@ function resolveAgentBusPaths(agentOverride?: string) {
   };
 }
 
+/**
+ * Fail-loud recipient gate shared by all CLI messaging sites (send-message,
+ * create-task/update-task --assignee, notify-agent).
+ *
+ * Returns `true` when it is safe to PROCEED with the side effect, `false` when
+ * the caller must RETURN WITHOUT the side effect (the gate has already printed
+ * the error and set process.exitCode = 1).
+ *
+ * Drain-safety: this runs BEFORE any stdout JSON envelope is written, so the
+ * actionable error goes to stderr and exitCode=1 is set; the top-level
+ * finalizeProcess() still drains and exits with that code. No raw process.exit.
+ *
+ * Semantics (see agentExists / EDGE CASES):
+ *   - exists                 → proceed (exit 0).
+ *   - --force                → proceed even if unknown (pre-provisioning), exit 0;
+ *                              prints a warning so the operator sees the override.
+ *   - unknown + resolvable   → FAIL LOUD: stderr error listing available agents,
+ *                              exitCode 1, return false (no side effect).
+ *   - unknown + UNresolvable → DEGRADE SAFE (fleet-brick guard): warn that the
+ *                              agent list could not be resolved, proceed exit 0.
+ */
+function assertRecipientOrFail(
+  recipient: string,
+  ctxRoot: string,
+  org: string | undefined,
+  force: boolean | undefined,
+): boolean {
+  const probe = agentExists(recipient, ctxRoot, org);
+  if (probe.exists) return true;
+
+  if (!probe.resolvable) {
+    // Fresh install / no orgs dir / empty registry — cannot verify. Degrade
+    // safely so a real send is never blocked by an unresolvable universe.
+    console.error(
+      `Warning: could not resolve the agent list to verify '${recipient}' (fresh install or no orgs dir). Proceeding without verification.`
+    );
+    return true;
+  }
+
+  if (force) {
+    console.error(
+      `Warning: agent '${recipient}' not found, but --force was passed — proceeding (pre-provisioning).`
+    );
+    return true;
+  }
+
+  console.error(
+    `Error: agent '${recipient}' not found. Available agents: ${probe.available.join(', ') || '(none)'}. ` +
+    `Pass --force to proceed anyway (intentional pre-provisioning).`
+  );
+  process.exitCode = 1;
+  return false;
+}
+
 busCommand
   .command('send-message')
   .argument('<to>', 'Target agent')
@@ -268,7 +350,8 @@ busCommand
   .argument('[reply-to]', 'Reply to message ID (optional positional form)')
   .option('--reply-to <id>', 'Reply to message ID')
   .option('--skip-lint', 'Skip outbound comms lint (for quoting/post-mortems only)', false)
-  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string; skipLint?: boolean }) => {
+  .option('--force', 'Send even if the recipient agent does not exist (intentional pre-provisioning)', false)
+  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string; skipLint?: boolean; force?: boolean }) => {
     // Accept reply-to as either positional arg or --reply-to flag (P2 fix #9)
     const effectiveReplyTo = opts.replyTo ?? replyToArg;
     const validPriorities: Priority[] = ['urgent', 'high', 'normal', 'low'];
@@ -288,25 +371,12 @@ busCommand
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     enforceOutboundLintOrExit(text, opts.skipLint);
 
-    // Warn if target agent doesn't exist (check project dir)
-    const { existsSync } = require('fs');
-    const { join } = require('path');
-    const projectRoot = env.projectRoot || env.frameworkRoot || process.cwd();
-    const orgsDir = join(projectRoot, 'orgs');
-    let agentExists = false;
-    if (existsSync(orgsDir)) {
-      const { readdirSync } = require('fs');
-      try {
-        for (const org of readdirSync(orgsDir)) {
-          if (existsSync(join(orgsDir, org, 'agents', to))) {
-            agentExists = true;
-            break;
-          }
-        }
-      } catch { /* skip */ }
-    }
-    if (!agentExists) {
-      console.error(`Warning: agent '${to}' not found in project. Message will be queued but may never be read.`);
+    // Fail loud on an unknown recipient (no orphan inbox file, no event logged)
+    // BEFORE the sendMessage() side effect. --force restores warn-and-proceed
+    // for pre-provisioning; an unresolvable agent list degrades safely. See
+    // assertRecipientOrFail / agentExists.
+    if (!assertRecipientOrFail(to, env.ctxRoot, env.org, opts.force)) {
+      return;
     }
 
     const msgId = sendMessage(paths, env.agentName, to, priority as Priority, text, effectiveReplyTo);
@@ -350,9 +420,17 @@ busCommand
   .option('--needs-approval', 'Require human approval before execution')
   .option('--blocked-by <ids>', 'Comma-separated task IDs that must complete before this task can progress')
   .option('--blocks <ids>', 'Comma-separated task IDs that this new task will block (symmetric reverse edge)')
-  .action((title: string, opts: { desc?: string; assignee?: string; priority: string; project?: string; needsApproval?: boolean; blockedBy?: string; blocks?: string }) => {
+  .option('--force', 'Create even if the --assignee agent does not exist (intentional pre-provisioning)', false)
+  .action((title: string, opts: { desc?: string; assignee?: string; priority: string; project?: string; needsApproval?: boolean; blockedBy?: string; blocks?: string; force?: boolean }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    // Fail loud on a phantom assignee BEFORE createTask() — no task is created
+    // assigned to a non-existent agent. Self-assign skips the check (edge #3).
+    if (opts.assignee && opts.assignee !== env.agentName) {
+      if (!assertRecipientOrFail(opts.assignee, env.ctxRoot, env.org, opts.force)) {
+        return;
+      }
+    }
     const parseList = (raw?: string) => (raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : []);
     const taskId = createTask(paths, env.agentName, env.org, title, {
       description: opts.desc,
@@ -378,7 +456,8 @@ busCommand
   .argument('<id>', 'Task ID')
   .argument('<status>', 'New status (pending, in_progress, completed, blocked, cancelled)')
   .option('--assignee <agent>', 'Reassign the task to a different agent (alongside the status update)')
-  .action((id: string, status: string, opts: { assignee?: string }) => {
+  .option('--force', 'Reassign even if the --assignee agent does not exist (intentional pre-provisioning)', false)
+  .action((id: string, status: string, opts: { assignee?: string; force?: boolean }) => {
     const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'completed', 'blocked', 'cancelled'];
     if (!validStatuses.includes(status as TaskStatus)) {
       console.error(`Invalid status '${status}'. Must be one of: ${validStatuses.join(', ')}`);
@@ -395,6 +474,14 @@ busCommand
       if (err) {
         console.error(err);
         process.exit(1);
+      }
+    }
+
+    // Fail loud on a phantom assignee BEFORE updateTask() — no reassignment to a
+    // non-existent agent. Self-assign skips the check (edge #3).
+    if (opts.assignee && opts.assignee !== env.agentName) {
+      if (!assertRecipientOrFail(opts.assignee, env.ctxRoot, env.org, opts.force)) {
+        return;
       }
     }
 
@@ -619,6 +706,19 @@ busCommand
     if (!validSeverities.includes(severity as EventSeverity)) {
       console.error(`Invalid severity '${severity}'. Must be one of: ${validSeverities.join(', ')}`);
       process.exit(1);
+    }
+    // Fail loud on a PASSED-but-malformed --meta. An absent --meta defaults to
+    // '{}' (always valid), so this only trips on a string the caller actually
+    // supplied that is not valid JSON — never on the no-flag case. Without this,
+    // logEvent would silently drop the bad JSON (meta stays {}) and still report
+    // success, hiding the caller's mistake from any $?-checking cron/skill.
+    if (!isValidJson(opts.meta)) {
+      // Drain-safe: set exit code + return (do NOT log the event). A raw
+      // process.exit here would truncate the piped error envelope. See
+      // src/cli/_finalize.ts.
+      console.log(JSON.stringify({ status: 'error', error: `invalid --meta JSON: ${opts.meta}` }, null, 2));
+      process.exitCode = 1;
+      return;
     }
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
@@ -898,7 +998,10 @@ busCommand
     const env = resolveEnv();
     const projectDir = env.projectRoot || env.frameworkRoot || process.cwd();
     const report = autoCommit(projectDir, opts.dryRun ?? false);
-    console.log(JSON.stringify(report));
+    // emitResult fails loud (exit 1) if autoCommit ever returns status 'error'/
+    // 'conflict'; valid states (clean, nothing_to_stage, dry_run, staged) stay
+    // exit 0. Drain-safe — sets exitCode, never raw exit after the envelope.
+    emitResult(report);
   });
 
 busCommand
@@ -925,7 +1028,11 @@ busCommand
     if (success) {
       console.log('Activity posted');
     } else {
+      // Fail loud: postActivity returns false on missing config / send failure.
+      // Previously this printed to stderr but exited 0, so callers checking $?
+      // treated a dropped activity post as success.
       console.error('Failed to post activity. Check that ACTIVITY_CHAT_ID is set in your org secrets.env or .env file.');
+      process.exitCode = 1; // drain-safe (see src/cli/_finalize.ts)
     }
   });
 
@@ -1083,7 +1190,7 @@ busCommand
       tag: opts.tag,
       search: opts.search,
     });
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result);
   });
 
 busCommand
@@ -1098,7 +1205,7 @@ busCommand
       dryRun: opts.dryRun,
       agentDir: env.agentDir,
     });
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result);
   });
 
 busCommand
@@ -1113,7 +1220,7 @@ busCommand
     const result = prepareSubmission(env.ctxRoot, type, sourcePath, name, {
       dryRun: opts.dryRun,
     });
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result, ['pii_detected']);
   });
 
 busCommand
@@ -1133,7 +1240,7 @@ busCommand
       author: opts.author,
       contribute: opts.contribute,
     });
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result);
   });
 
 busCommand
@@ -1165,7 +1272,7 @@ busCommand
     const env = resolveEnv();
     const frameworkRoot = env.frameworkRoot || env.projectRoot || process.cwd();
     const result = checkUpstream(frameworkRoot, { apply: opts.apply });
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result);
   });
 
 busCommand
@@ -1176,7 +1283,7 @@ busCommand
   .action(async (botToken: string, scanDirs: string[]) => {
     const commands = collectTelegramCommands(scanDirs);
     const result = await registerTelegramCommands(botToken, commands);
-    console.log(JSON.stringify(result, null, 2));
+    emitResult(result);
   });
 
 busCommand
@@ -1854,12 +1961,20 @@ busCommand
   .description('Send urgent signal to another agent for immediate delivery via fast-checker')
   .argument('<agent>', 'Target agent name')
   .argument('<message>', 'Urgent message text')
-  .action((targetAgent: string, message: string) => {
+  .option('--force', 'Signal even if the target agent does not exist (intentional pre-provisioning)', false)
+  .action((targetAgent: string, message: string, opts: { force?: boolean }) => {
     const { mkdirSync, writeFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+
+    // Fail loud on an unknown target BEFORE writing the .urgent-signal file — no
+    // orphan signal for a non-existent agent. --force / unresolvable degrade per
+    // assertRecipientOrFail. env.ctxRoot is the resolved root used for verification.
+    if (!assertRecipientOrFail(targetAgent, env.ctxRoot, env.org, opts.force)) {
+      return;
+    }
 
     // Write urgent signal file that fast-checker checks on every poll
     const signalDir = join(ctxRoot, 'state', targetAgent);
@@ -1955,6 +2070,7 @@ busCommand
 
     console.log(`Restarting ${targets.length} agent(s) with ${opts.stagger}s stagger: ${targets.join(', ')}`);
 
+    let failures = 0;
     for (let i = 0; i < targets.length; i++) {
       const agent = targets[i];
       if (i > 0) {
@@ -1970,11 +2086,19 @@ busCommand
       if (resp.success) {
         console.log(`[${i + 1}/${targets.length}] Restarted ${agent}`);
       } else {
+        failures++;
         console.error(`[${i + 1}/${targets.length}] Failed to restart ${agent}: ${resp.error}`);
       }
     }
 
-    console.log('soft-restart-all complete.');
+    // Fail loud: previously this always exited 0 even if every restart failed,
+    // so a cron checking $? could not tell a full failure from full success.
+    if (failures > 0) {
+      console.error(`soft-restart-all: ${failures}/${targets.length} agent restart(s) failed.`);
+      process.exitCode = 1; // drain-safe (see src/cli/_finalize.ts)
+    } else {
+      console.log('soft-restart-all complete.');
+    }
   });
 
 busCommand

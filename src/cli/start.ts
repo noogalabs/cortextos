@@ -1,10 +1,11 @@
 import { Command } from 'commander';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform } from 'os';
 import { execSync, spawn, spawnSync } from 'child_process';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { requestKeepAlive } from './_finalize.js';
+import { atomicWriteSync } from '../utils/atomic.js';
 
 const IS_WINDOWS = platform() === 'win32';
 const SAFE_CMD = /^[@a-z0-9._/-]+$/i;
@@ -188,7 +189,9 @@ export const startCommand = new Command('start')
           ...(existingOrg ? { org: existingOrg } : {}),
         };
         mkdirSync(join(ctxRoot, 'config'), { recursive: true });
-        writeFileSync(enabledPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');
+        // Atomic temp-file + rename: a torn write to the fleet registry would
+        // disable every agent on next boot. atomicWriteSync appends the newline.
+        atomicWriteSync(enabledPath, JSON.stringify(enabledAgents, null, 2));
         console.log(`  Registered ${agent} in enabled-agents.json`);
       }
 
@@ -198,6 +201,10 @@ export const startCommand = new Command('start')
         console.log(`  ${response.data}`);
       } else {
         console.error(`  Error: ${response.error}`);
+        // Fail loud: the requested start did not happen. Drain-safe — only
+        // human-readable lines were written, so set exitCode and let the
+        // top-level finalizeProcess drain+exit (no raw process.exit).
+        process.exitCode = 1;
       }
     } else {
       const response = await ipc.send({ type: 'status', source: 'cortextos start' });

@@ -8,7 +8,8 @@
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, cpSync, rmSync, chmodSync } from 'fs';
 import { join, resolve, relative } from 'path';
 import { execSync, execFileSync } from 'child_process';
-import { ensureDir } from '../utils/atomic.js';
+import { ensureDir, atomicWriteSync } from '../utils/atomic.js';
+import { PII_PATTERNS } from '../utils/pii-patterns.js';
 
 // --- Types ---
 
@@ -76,13 +77,27 @@ export interface SubmitResult {
 }
 
 // --- PII Patterns ---
-
-const PII_PATTERNS = {
-  email: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/,
-  phone: /\+?[0-9]{1,3}[-.\s]?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}/,
-  credential: /(sk-|ghp_|xoxb-|AKIA|token=|key=|password=|secret=)/,
-  telegram_chat_id: /chat_id[:\s]*[0-9]{6,}/,
-  deployment_url: /https?:\/\/[a-z0-9.-]+\.(railway\.app|vercel\.app|herokuapp\.com|netlify\.app)/,
+//
+// The pattern set lives in src/utils/pii-patterns.ts as the single source
+// of truth shared with the repo-wide CI lint (scripts/pii-lint.mjs).
+// prepareSubmission() iterates the WHOLE set generically (below), so every
+// pattern — the 5 originals (email, phone, credential, telegram_chat_id,
+// deployment_url) AND jwt, plus any pattern added to the source later — is
+// honored with no catalog-side change. (Previously the scan hard-coded the 5
+// keys and silently ignored jwt; iterating the source array fixes that and
+// makes the single-source-of-truth real — a JWT in a submission is a real
+// secret leak and must be flagged, not passed clean.)
+//
+// Stable finding labels per pattern name, kept byte-identical to the
+// pre-refactor strings so existing output + tests are unchanged; jwt_token is
+// the only new label.
+const PII_FINDING_LABELS: Record<string, string> = {
+  email: 'email_address',
+  phone: 'phone_number',
+  credential: 'credential_pattern',
+  telegram_chat_id: 'telegram_chat_id',
+  deployment_url: 'deployment_url',
+  jwt: 'jwt_token',
 };
 
 // --- Item name validation ---
@@ -138,7 +153,10 @@ function readInstalled(ctxRoot: string): Record<string, { version: string; type:
 function writeInstalled(ctxRoot: string, data: Record<string, unknown>): void {
   const p = getInstalledPath(ctxRoot);
   ensureDir(ctxRoot);
-  writeFileSync(p, JSON.stringify(data, null, 2) + '\n', 'utf-8');
+  // Atomic temp-file + rename so a crash mid-write can't leave the installed
+  // manifest truncated (which would make browseCatalog parse-fail for ALL
+  // items). atomicWriteSync appends the trailing newline.
+  atomicWriteSync(p, JSON.stringify(data, null, 2));
 }
 
 // --- browseCatalog ---
@@ -370,24 +388,14 @@ export function prepareSubmission(
       continue; // skip binary or unreadable files
     }
 
-    if (PII_PATTERNS.email.test(content)) {
-      piiFound.push(`${relPath}:email_address`);
-    }
-
-    if (PII_PATTERNS.phone.test(content)) {
-      piiFound.push(`${relPath}:phone_number`);
-    }
-
-    if (PII_PATTERNS.credential.test(content)) {
-      piiFound.push(`${relPath}:credential_pattern`);
-    }
-
-    if (PII_PATTERNS.telegram_chat_id.test(content)) {
-      piiFound.push(`${relPath}:telegram_chat_id`);
-    }
-
-    if (PII_PATTERNS.deployment_url.test(content)) {
-      piiFound.push(`${relPath}:deployment_url`);
+    // Iterate the shared pattern set generically so jwt — and any pattern
+    // added to pii-patterns.ts later — is applied automatically (single
+    // source of truth). Stable array order → deterministic findings. Regexes
+    // are non-global, so stateless .test() per file is correct.
+    for (const { name, regex } of PII_PATTERNS) {
+      if (regex.test(content)) {
+        piiFound.push(`${relPath}:${PII_FINDING_LABELS[name] ?? name}`);
+      }
     }
 
     // Check for known user names
@@ -502,7 +510,10 @@ export function submitCommunityItem(
     submitted_at: timestamp,
   });
 
-  writeFileSync(catalogPath, JSON.stringify(catalog, null, 2) + '\n', 'utf-8');
+  // Atomic temp-file + rename so a crash mid-write can't truncate the catalog
+  // (which would make browseCatalog parse-fail for ALL items). atomicWriteSync
+  // appends the trailing newline.
+  atomicWriteSync(catalogPath, JSON.stringify(catalog, null, 2));
 
   // Clean up staging
   rmSync(stagingDir, { recursive: true, force: true });

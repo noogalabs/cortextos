@@ -26,6 +26,7 @@ import { configureCommand } from './configure.js';
 import { spawnWorkerCommand, terminateWorkerCommand, listWorkersCommand, injectWorkerCommand } from './workers.js';
 import { importAgentCommand } from './import-agent.js';
 import { botCommand } from './bot.js';
+import { detectChatIdCommand } from './detect-chat-id.js';
 import { finalizeProcess } from './_finalize.js';
 import { updateCommand } from './update.js';
 
@@ -65,6 +66,7 @@ program.addCommand(injectWorkerCommand);
 program.addCommand(importAgentCommand);
 program.addCommand(botCommand);
 program.addCommand(updateCommand);
+program.addCommand(detectChatIdCommand);
 
 // crash-alert: SessionEnd hook — cross-platform replacement for crash-alert.sh
 const crashAlertCommand = new Command('crash-alert')
@@ -82,7 +84,10 @@ program.addCommand(crashAlertCommand);
 // without truncating un-flushed piped stdout. See ./_finalize.ts.
 program
   .parseAsync(process.argv)
-  .then(() => finalizeProcess(0))
+  // Respect a handler-set non-zero exit code (e.g. emitResult / fail-loud
+  // handlers set process.exitCode = 1 instead of a raw process.exit so the
+  // piped stdout envelope is drained before exit — see ./_finalize.ts).
+  .then(() => finalizeProcess(typeof process.exitCode === 'number' ? process.exitCode : 0))
   .catch((err: unknown) => {
     console.error(err instanceof Error ? err.message : String(err));
     finalizeProcess(1);

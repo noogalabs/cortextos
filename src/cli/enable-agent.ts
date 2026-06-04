@@ -4,6 +4,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI, formatValidateError } from '../telegram/api.js';
+import { atomicWriteSync } from '../utils/atomic.js';
 
 /**
  * BUG-035 fix: discover the cortextOS framework root without depending on
@@ -116,7 +117,11 @@ function writeEnabledAgents(instanceId: string, agents: Record<string, any>): vo
   const path = getEnabledAgentsPath(instanceId);
   const dir = join(homedir(), '.cortextos', instanceId, 'config');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(path, JSON.stringify(agents, null, 2) + '\n', 'utf-8');
+  // atomicWriteSync writes via temp-file + rename so a torn/interrupted
+  // write can't corrupt the fleet registry (a truncated enabled-agents.json
+  // resets every agent to disabled on next boot). It also appends the
+  // trailing newline, so the manual `+ '\n'` is dropped here.
+  atomicWriteSync(path, JSON.stringify(agents, null, 2));
 }
 
 export const enableAgentCommand = new Command('enable')
@@ -251,6 +256,11 @@ export const enableAgentCommand = new Command('enable')
       const response = await ipc.send({ type: 'start-agent', agent, source: 'cortextos enable' });
       if (response.success) {
         console.log(`  Started via daemon: ${response.data}`);
+      } else {
+        // Fail loud: enabled-in-config-but-not-running is the worst silent state.
+        // Drain-safe — human-readable line only, set exitCode + let finalizeProcess drain.
+        console.error(`  Error: failed to start via daemon: ${response.error}`);
+        process.exitCode = 1;
       }
     } else {
       console.log('  Daemon not running. Start with: cortextos start');
@@ -283,7 +293,10 @@ export const disableAgentCommand = new Command('disable')
       if (response.success) {
         console.log(`Agent "${agent}" disabled and stopped.`);
       } else {
+        // Fail loud: "disabled but still running" is a broken state worth
+        // surfacing. Keep the human-readable message; drain-safe exitCode.
         console.log(`Agent "${agent}" disabled. Stop failed: ${response.error}`);
+        process.exitCode = 1;
       }
     } else {
       console.log(`Agent "${agent}" disabled.`);

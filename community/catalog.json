@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-04-06T00:00:00Z",
+  "updated_at": "2026-06-03T17:52:14Z",
   "items": [
     {
       "name": "agentic-crm-assistant",
@@ -325,6 +325,174 @@
       "dependencies": [],
       "install_path": "community/skills/nighttime-mode",
       "submitted_at": "2026-04-06T00:00:00Z"
+    },
+    {
+      "name": "pm-check-meld",
+      "description": "Pull meld status and full message thread via pm-get-comments.py before taking any action on a meld. Single-meld context fetch.",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["pm", "propertymeld", "meld", "triage"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/pm/pm-check-meld",
+      "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "pm-cli-harness",
+      "description": "CLI for Property Meld work order management. snapcli (pm) is the primary tool for all PM operations — use it first. Nexus API is secondary (reads + maintenance_notes). Manual UI is last resort only if snapcli itself is broken.",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["pm", "propertymeld", "cli", "work-orders"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/pm/pm-cli-harness",
+      "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "pm-dane-iq-playbook",
+      "description": "Dane IQ operational reference for Blue. Triage decision tree, vendor scoring, escalation thresholds, habitability rules — distilled from the TriageSupervisor, VendorSelectionSupervisor, and their worker agents.",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["pm", "propertymeld", "triage", "vendor", "escalation"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/pm/pm-dane-iq-playbook",
+      "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "pm-inspections",
+      "description": "Property Meld inspection workflows — integration partners (zInspector, Inspectify, Seek Now), inspection types, scheduling, templates, completion workflow, move-in/move-out comparison, resident and owner visibility, and connection to turnover Melds. No native PM inspection module — all inspection tools are third-party via the Nexus program.",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["pm", "propertymeld", "inspections", "turnover"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/pm/pm-inspections",
+      "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "pm-meld-triage",
+      "description": "Triage rules playbook for Property Meld work orders. Determines urgency, routing, and suppression rules before any action is taken.",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["pm", "propertymeld", "triage", "routing"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/pm/pm-meld-triage",
+      "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "pm-morning-scan",
+      "description": "Morning meld review workflow. Pull all open melds, apply triage rules, check threads for genuinely unhandled items, surface only what needs action.",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["pm", "propertymeld", "triage", "review", "scan"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/pm/pm-morning-scan",
+      "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "pm-propertymeld-platform",
+      "description": "Property Meld platform deep reference for Blue. Full feature coverage: Projects, make-ready/turnover lifecycle, workflow automation, three-way chat, vendor portal, integrations, KPIs, MAX On-Call, resident portal, scheduling.",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["pm", "propertymeld", "platform", "reference"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/pm/pm-propertymeld-platform",
+      "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "pm-session-recapture",
+      "description": "When pm probe returns 401/403 (session expired), automatically recapture PropertyMeld session cookies. macOS agents use the AX+CDP script; Linux/cloud agents use the Playwright headless script.",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["pm", "propertymeld", "auth", "session", "recapture"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/pm/pm-session-recapture",
+      "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "planning-decompose",
+      "description": "When a meld contains multiple interdependent or multi-trade work items, decompose it into parallel and sequential workstreams before acting. Prevents dispatching trade A before trade B's prerequisite work is done.",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["pm", "propertymeld", "planning", "decompose", "workflow"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/pm/planning-decompose",
+      "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "self-evaluation-triage",
+      "description": "After every meld decision, capture what was decided and why (trajectory). Weekly: scan all trajectories for override patterns, surface refinement candidates to Dane.",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["pm", "propertymeld", "triage", "evaluation", "review"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/pm/self-evaluation-triage",
+      "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "skill-auto-discovery",
+      "description": "After completing a complex task, check whether the sequence of steps used represents a recurring pattern worth codifying into a skill. Logs skill candidates to the bus for weekly review by Dane.",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["general", "meta", "workflow", "discovery"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/pm/skill-auto-discovery",
+      "submitted_at": "2026-06-03T17:52:14Z"
+    },
+    {
+      "name": "business-development",
+      "description": "Business development agent — outbound prospecting, lead qualification, and pipeline management using the NEPQ sales methodology",
+      "author": "ascendops",
+      "type": "agent",
+      "version": "1.0.0",
+      "tags": ["business-development", "sales", "prospecting", "nepq", "pipeline"],
+      "review_status": "community",
+      "dependencies": ["nepq"],
+      "install_path": "community/agents/business-development",
+      "submitted_at": "2026-06-03T00:00:00Z"
+    },
+    {
+      "name": "leasing-coordinator",
+      "description": "Leasing coordinator agent — manages prospective-tenant inquiries, showings, applications, and lease coordination",
+      "author": "ascendops",
+      "type": "agent",
+      "version": "1.0.0",
+      "tags": ["leasing", "coordinator", "tenants", "showings", "applications"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/leasing-coordinator",
+      "submitted_at": "2026-06-03T00:00:00Z"
+    },
+    {
+      "name": "nepq",
+      "description": "NEPQ sales methodology bundle — framework, cold outreach, discovery notes, follow-up cadence, objection handling, and the verbatim Black Book question bank (6 sub-skills)",
+      "author": "ascendops",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["nepq", "sales", "prospecting", "objection-handling", "question-bank"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/skills/nepq",
+      "submitted_at": "2026-06-03T00:00:00Z"
     }
   ]
 }

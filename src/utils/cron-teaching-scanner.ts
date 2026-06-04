@@ -21,9 +21,10 @@
  *     short-lived session-scoped /loop.
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync } from 'fs';
 import type { Dirent } from 'fs';
 import { join } from 'path';
+import { atomicWriteSync } from './atomic.js';
 
 /** Top-level agent files always scanned, in order. */
 const AGENT_TOP_FILES = ['CLAUDE.md', 'AGENTS.md', 'ONBOARDING.md'] as const;
@@ -185,7 +186,9 @@ export function scanFile(filePath: string, opts: ScanOptions = {}): FileScanResu
       }
     }
     if (applied > 0 && next !== content) {
-      writeFileSync(filePath, next, 'utf-8');
+      // Atomic temp-file + rename so a crash/ENOSPC mid-write can't truncate
+      // an agent's CLAUDE.md/AGENTS.md/SKILL.md (no .bak otherwise).
+      atomicWriteSync(filePath, next);
     }
   }
 

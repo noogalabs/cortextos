@@ -38,13 +38,19 @@ export function listAgents(ctxRoot: string, org?: string): AgentInfo[] {
   // 2. ALWAYS scan org agent directories (BUG-028 fix).
   // The directory scan is now the primary source for "what agents exist".
   // The enabled-agents.json entries are merged in as metadata.
-  const cliProjectRoot = process.env.CTX_FRAMEWORK_ROOT;
+  // Honor CORTEXTOS_DIR with the SAME precedence resolveEnv() uses for the
+  // framework root (CORTEXTOS_DIR || CTX_FRAMEWORK_ROOT, see utils/env.ts). A
+  // CORTEXTOS_DIR-configured install (no CTX_FRAMEWORK_ROOT) must resolve the
+  // same agent universe resolveEnv() sees — otherwise the recipient-existence
+  // gate (agentExists) would treat a real universe as unresolvable and silently
+  // degrade to warn+proceed, or reject valid recipients by scanning the wrong cwd.
+  const cliProjectRoot = process.env.CORTEXTOS_DIR || process.env.CTX_FRAMEWORK_ROOT;
   const scanRoots: string[] = [];
   if (cliProjectRoot && existsSync(join(cliProjectRoot, 'orgs'))) {
     scanRoots.push(cliProjectRoot);
   }
-  // Fallback: cwd, but ONLY when CTX_FRAMEWORK_ROOT is completely unset.
-  // If CTX_FRAMEWORK_ROOT is set (even to a path without orgs/), respect it and
+  // Fallback: cwd, but ONLY when neither CORTEXTOS_DIR nor CTX_FRAMEWORK_ROOT is
+  // set. If a root is configured (even to a path without orgs/), respect it and
   // do not scan cwd — the caller explicitly configured a root that has no agents.
   // This prevents test contamination when cwd happens to be the framework repo.
   if (scanRoots.length === 0 && !cliProjectRoot) {
@@ -108,6 +114,58 @@ export function listAgents(ctxRoot: string, org?: string): AgentInfo[] {
   }
 
   return agents;
+}
+
+/**
+ * Result of an agent-existence probe.
+ *
+ *   - `exists: true`                 → the name resolves to an on-disk / registered agent.
+ *   - `exists: false, resolvable:true`→ a non-empty agent list was resolved and the
+ *                                       name is NOT in it (genuine "unknown recipient").
+ *   - `exists: false, resolvable:false`→ the agent list could not be resolved at all
+ *                                       (fresh install, no orgs dir, empty registry).
+ *                                       Callers MUST degrade safely here and NOT block
+ *                                       a send to a real agent (fleet-brick guard).
+ */
+export interface AgentExistsResult {
+  exists: boolean;
+  /** Whether a non-empty agent universe was resolvable for this probe. */
+  resolvable: boolean;
+  /** Names that WERE resolvable, for an actionable error message. */
+  available: string[];
+}
+
+/**
+ * Check whether an agent EXISTS (on disk / in the registry) — NOT whether it is
+ * enabled. A disabled-but-present agent is a valid message/assign target (its
+ * inbox queues for re-enable), so existence is the only gate here.
+ *
+ * Implemented on top of `listAgents()` so it shares the single authoritative
+ * existence source (merged enabled-agents.json + orgs/<org>/agents dir scan).
+ *
+ * Returns a tri-state (see AgentExistsResult): the `resolvable` flag lets CLI
+ * callers distinguish "this name is genuinely unknown" (resolvable list, name
+ * absent → fail loud) from "I can't see ANY agents from here" (fresh install /
+ * no orgs dir → degrade safely, do NOT block). This is the fleet-brick guard:
+ * a brand-new install with no resolvable agent universe must still be able to
+ * `send-message` to a real agent.
+ */
+export function agentExists(agentName: string, ctxRoot: string, org?: string): AgentExistsResult {
+  let all: AgentInfo[];
+  try {
+    all = listAgents(ctxRoot, org);
+  } catch {
+    // listAgents is defensive and shouldn't throw, but if it does we cannot
+    // verify — degrade safely rather than block.
+    return { exists: false, resolvable: false, available: [] };
+  }
+  const available = all.map((a) => a.name);
+  if (available.length === 0) {
+    // No agent universe resolvable from here (fresh install, no orgs dir, empty
+    // registry). Cannot verify — caller degrades safely.
+    return { exists: false, resolvable: false, available: [] };
+  }
+  return { exists: available.includes(agentName), resolvable: true, available };
 }
 
 /**
