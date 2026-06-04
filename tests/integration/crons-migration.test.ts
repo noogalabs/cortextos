@@ -584,3 +584,115 @@ describe('disk round-trip via readCrons()', () => {
     expect(wk!.enabled).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// F1: read-merge-fail-loud — migration must never blind-overwrite a populated
+// crons.json (e.g. runtime-added crons via `bus add-cron`), and must fail loud
+// (preserve, not wipe) on corrupt config OR corrupt state.
+// See reports/2026-06-03-fix-specs-roadmap.md PR-3 / fix-spec F1.
+// ---------------------------------------------------------------------------
+describe('F1: read-merge-fail-loud (no blind overwrite)', () => {
+  function seedCronsJson(agentName: string, crons: CronDefinition[]): void {
+    const dir = join(tmpCtxRoot, CRONS_DIR, agentName);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, CRONS_FILE),
+      JSON.stringify({ updated_at: '2026-01-01T00:00:00.000Z', crons }),
+      'utf-8',
+    );
+  }
+
+  const runtimeCron = {
+    name: 'runtime-only',
+    prompt: 'Added at runtime via bus add-cron.',
+    schedule: '30m',
+    enabled: true,
+    created_at: '2026-01-01T00:00:00.000Z',
+    last_fired_at: '2026-01-02T03:04:05.000Z',
+  } as CronDefinition;
+
+  it('preserves runtime-added crons not present in config.json', () => {
+    const agentDir = join(tmpFrameworkRoot, 'orgs', 'testorg', 'agents', 'merge1');
+    seedCronsJson('merge1', [runtimeCron]);
+    writeConfigJson(agentDir, [
+      { name: 'config-cron', interval: '6h', prompt: 'From config.' },
+    ]);
+    const configPath = join(agentDir, 'config.json');
+
+    const result = migrateCronsForAgent('merge1', configPath, tmpCtxRoot);
+    expect(result.status).toBe('migrated');
+
+    const crons = readCrons('merge1');
+    expect(crons.map(c => c.name).sort()).toEqual(['config-cron', 'runtime-only']);
+
+    const preserved = crons.find(c => c.name === 'runtime-only')!;
+    expect(preserved.created_at).toBe('2026-01-01T00:00:00.000Z');
+    expect(preserved.last_fired_at).toBe('2026-01-02T03:04:05.000Z');
+  });
+
+  it('force re-migration does not drop runtime crons', () => {
+    const agentDir = join(tmpFrameworkRoot, 'orgs', 'testorg', 'agents', 'merge2');
+    writeConfigJson(agentDir, [
+      { name: 'config-cron', interval: '6h', prompt: 'From config.' },
+    ]);
+    const configPath = join(agentDir, 'config.json');
+
+    migrateCronsForAgent('merge2', configPath, tmpCtxRoot);
+    const afterFirst = readCrons('merge2');
+    // Simulate an operator adding a runtime cron after the first migration.
+    seedCronsJson('merge2', [...afterFirst, runtimeCron]);
+
+    const forced = migrateCronsForAgent('merge2', configPath, tmpCtxRoot, { force: true });
+    expect(forced.status).toBe('migrated');
+    expect(readCrons('merge2').map(c => c.name).sort()).toEqual(['config-cron', 'runtime-only']);
+  });
+
+  it('empty crons[] in config preserves a populated crons.json (no wipe)', () => {
+    const agentDir = join(tmpFrameworkRoot, 'orgs', 'testorg', 'agents', 'merge3');
+    seedCronsJson('merge3', [runtimeCron]);
+    writeConfigJson(agentDir, []);
+    const configPath = join(agentDir, 'config.json');
+
+    const result = migrateCronsForAgent('merge3', configPath, tmpCtxRoot);
+    expect(result.status).toBe('no-crons');
+    expect(readCrons('merge3')).toHaveLength(1);
+    expect(readCrons('merge3')[0].name).toBe('runtime-only');
+    expect(markerExists(tmpCtxRoot, 'merge3')).toBe(true);
+  });
+
+  it('corrupt config.json does not wipe crons.json and does not write the marker', () => {
+    const agentDir = join(tmpFrameworkRoot, 'orgs', 'testorg', 'agents', 'merge4');
+    mkdirSync(agentDir, { recursive: true });
+    seedCronsJson('merge4', [runtimeCron]);
+    writeFileSync(join(agentDir, 'config.json'), '{ this is not valid json', 'utf-8');
+    const configPath = join(agentDir, 'config.json');
+
+    const result = migrateCronsForAgent('merge4', configPath, tmpCtxRoot);
+    expect(result.status).toBe('no-crons');
+    // Existing crons untouched; marker NOT written so a later boot retries.
+    expect(readCrons('merge4')).toHaveLength(1);
+    expect(readCrons('merge4')[0].name).toBe('runtime-only');
+    expect(markerExists(tmpCtxRoot, 'merge4')).toBe(false);
+  });
+
+  it('corrupt crons.json (no .bak) aborts migration loud — file left untouched', () => {
+    const agentDir = join(tmpFrameworkRoot, 'orgs', 'testorg', 'agents', 'merge5');
+    writeConfigJson(agentDir, [
+      { name: 'config-cron', interval: '6h', prompt: 'From config.' },
+    ]);
+    const configPath = join(agentDir, 'config.json');
+
+    // Populate crons.json with invalid JSON and NO .bak → readCronsWithStatus corrupt:true.
+    const dir = join(tmpCtxRoot, CRONS_DIR, 'merge5');
+    mkdirSync(dir, { recursive: true });
+    const cronsPath = join(dir, CRONS_FILE);
+    writeFileSync(cronsPath, '{ broken crons json', 'utf-8');
+
+    const result = migrateCronsForAgent('merge5', configPath, tmpCtxRoot);
+    expect(result.status).toBe('no-crons');
+    expect(markerExists(tmpCtxRoot, 'merge5')).toBe(false);
+    // The broken crons.json must be left exactly as-is (not overwritten with []).
+    const { readFileSync: fsRead } = require('fs') as typeof import('fs');
+    expect(fsRead(cronsPath, 'utf-8')).toBe('{ broken crons json');
+  });
+});
