@@ -636,7 +636,12 @@ export class IPCServer {
             response = { success: false, error: 'Agent name required', code: 'INVALID_INPUT' };
           } else {
             const insp = this.agentManager.inspectAgentOp('restart', request.agent);
-            this.agentManager.restartAgent(request.agent)
+            const isFleetRestart = request.source === 'cortextos bus soft-restart-all';
+            const fleetTotal = typeof request.data?.fleetTotal === 'number' ? request.data.fleetTotal : undefined;
+            const fleetIndex = typeof request.data?.fleetIndex === 'number' ? request.data.fleetIndex : undefined;
+            this.agentManager.restartAgent(request.agent, isFleetRestart
+              ? { partOfFleetStart: true, fleetTotal, fleetIndex }
+              : undefined)
               .catch(err => console.error(`Failed to restart ${request.agent}:`, err));
             if (insp.ok) {
               response = { success: true, data: `Restarting ${request.agent}` };

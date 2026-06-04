@@ -22,6 +22,7 @@ import {
   MIN_HEALTHY_SECONDS,
 } from './watchdog.js';
 type LogFn = (msg: string) => void;
+type StartOptions = { partOfFleetStart?: boolean };
 
 /**
  * Manages a single agent's lifecycle.
@@ -112,7 +113,7 @@ export class AgentProcess {
   /**
    * Start the agent. Spawns Claude Code in a PTY.
    */
-  async start(): Promise<void> {
+  async start(options: StartOptions = {}): Promise<void> {
     if (this.status === 'running') {
       this.log('Already running');
       return;
@@ -140,8 +141,8 @@ export class AgentProcess {
     const recoveryNote = readRecoveryNote(stateDir);
     const hadRateLimit = this.hasRateLimitMarker(stateDir);
     const prompt = mode === 'fresh'
-      ? this.buildStartupPrompt(recoveryNote)
-      : this.buildContinuePrompt(recoveryNote);
+      ? this.buildStartupPrompt(recoveryNote, options)
+      : this.buildContinuePrompt(recoveryNote, options);
 
     this.log(`Starting in ${mode} mode`);
     this.status = 'starting';
@@ -223,7 +224,7 @@ export class AgentProcess {
       // way claude-code does, so fire the back-online ping directly from the
       // daemon for that runtime. Skipped on handoff restart — the agent
       // sends its own contextual "back — ..." reply in that case.
-      this.maybeSendCodexBootNotification();
+      this.maybeSendCodexBootNotification(options);
 
       // Start session timer
       this.startSessionTimer();
@@ -915,7 +916,7 @@ export class AgentProcess {
     }
   }
 
-  private buildStartupPrompt(recoveryNote: string | null): string {
+  private buildStartupPrompt(recoveryNote: string | null, options: StartOptions = {}): string {
     const stateDir = join(this.env.ctxRoot, 'state', this.name);
     const onboardedPath = join(stateDir, '.onboarded');
     const onboardingPath = join(this.env.agentDir, 'ONBOARDING.md');
@@ -959,7 +960,7 @@ export class AgentProcess {
     const handoffUxOverride = isHandoffRestart
       ? ' HANDOFF UX: This is a context handoff restart — your memory is intact via the handoff doc. CRITICAL: After reading the handoff document, your VERY FIRST tool call MUST be a Bash call running: cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID \'back — [what you were just working on]\' — replace the brackets with one brief plain-English sentence about your current state. Do this BEFORE running heartbeat, BEFORE any other tool call. No cron IDs, no status report, no cold-boot phrasing. Do NOT send "Booting up... one moment" (skip AGENTS.md step 1 entirely).'
       : '';
-    const onlineMessage = isHandoffRestart
+    const onlineMessage = isHandoffRestart || options.partOfFleetStart
       ? ''
       : ' Send a Telegram message to the user saying you are back online.';
     return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock}${handoffBlock}${handoffUxOverride}${onlineMessage}${onboardingAppend}${recoveryBlock}${rateLimitBlock}`;
@@ -990,7 +991,7 @@ export class AgentProcess {
     }
   }
 
-  private buildContinuePrompt(recoveryNote: string | null): string {
+  private buildContinuePrompt(recoveryNote: string | null, options: StartOptions = {}): string {
     const stateDir = join(this.env.ctxRoot, 'state', this.name);
     const nowUtc = new Date().toISOString();
     const reminderBlock = this.buildReminderBlock();
@@ -1007,7 +1008,10 @@ export class AgentProcess {
     const deliverablesBlock = this.buildDeliverablesBlock();
     // Session refresh (--continue) is never a handoff restart.
     this.lastSpawnWasHandoff = false;
-    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock} Check inbox. Resume normal operations. After checking inbox, send a Telegram message to the user saying you are back online.${recoveryBlock}${rateLimitBlock}`;
+    const backOnlineInstruction = options.partOfFleetStart
+      ? ''
+      : ' After checking inbox, send a Telegram message to the user saying you are back online.';
+    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock} Check inbox. Resume normal operations.${backOnlineInstruction}${recoveryBlock}${rateLimitBlock}`;
   }
 
   /**
@@ -1099,7 +1103,8 @@ export class AgentProcess {
    *    sends its own contextual "back — ..." reply in that case),
    *  - no Telegram handle has been wired (no chat_id configured).
    */
-  private maybeSendCodexBootNotification(): void {
+  private maybeSendCodexBootNotification(options: StartOptions = {}): void {
+    if (options.partOfFleetStart) return;
     if (this.config.runtime !== 'codex-app-server') return;
     if (this.lastSpawnWasHandoff) return;
     if (!this.telegramApi || !this.telegramChatId) return;

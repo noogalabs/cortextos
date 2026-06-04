@@ -129,6 +129,33 @@ describe('AgentProcess codex-app-server runtime', () => {
     expect(mockCodexAppServerPty.setTelegramHandle).toHaveBeenCalledWith(api, '12345');
   });
 
+  it('sends one direct back-online Telegram notification for a lone codex-app-server start', async () => {
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const api = {
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    ap.setTelegramHandle(api as any, '12345');
+    await ap.start();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith('12345', 'Agent codex-app-agent is back online');
+  });
+
+  it('suppresses the direct codex-app-server back-online notification during a fleet start batch', async () => {
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const api = {
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    ap.setTelegramHandle(api as any, '12345');
+    await ap.start({ partOfFleetStart: true });
+
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
   it('uses direct kill path on stop, not Claude /exit choreography', async () => {
     const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
     await ap.start();
@@ -146,4 +173,3 @@ describe('AgentProcess codex-app-server runtime', () => {
     expect(mockCodexAppServerPty.kill).toHaveBeenCalled();
   }, 10000);
 });
-

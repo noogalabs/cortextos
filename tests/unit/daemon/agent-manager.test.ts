@@ -4,29 +4,50 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildReplyContext } from '../../../src/daemon/agent-manager.js';
 
+const telegramSendMessageMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
+const agentStatusCallbacks = vi.hoisted(() => new Map<string, (status: any) => void>());
+
 // Mock the PTY layer so we don't load native bindings or spawn real processes.
 // AgentManager → AgentProcess → AgentPTY → node-pty. We mock at AgentProcess.
 vi.mock('../../../src/daemon/agent-process.js', () => ({
   AgentProcess: class {
     name: string;
     dir: string;
+    telegramApi: { sendMessage: (chatId: string, text: string) => Promise<unknown> } | null = null;
+    telegramChatId: string | null = null;
     constructor(name: string, dir: string) {
       this.name = name;
       this.dir = dir;
     }
-    async start() { /* no-op */ }
+    async start(options?: { partOfFleetStart?: boolean }) {
+      // Fresh-start wire-boundary model: without the fleet marker, the
+      // agent-level back-online path may send an individual notification.
+      // Fleet batches must suppress that path and leave exactly one
+      // consolidated send to AgentManager.
+      if (!options?.partOfFleetStart && this.telegramApi && this.telegramChatId) {
+        await this.telegramApi.sendMessage(this.telegramChatId, `Agent ${this.name} is back online`);
+      }
+    }
     async stop() { /* no-op */ }
-    getStatus() { return { name: this.name, status: 'stopped' }; }
+    getStatus() { return { name: this.name, status: 'running' }; }
+    setTelegramHandle(api: { sendMessage: (chatId: string, text: string) => Promise<unknown> }, chatId: string) {
+      this.telegramApi = api;
+      this.telegramChatId = chatId;
+    }
     onExit() { /* no-op */ }
+    onStatusChanged(cb: (status: any) => void) {
+      agentStatusCallbacks.set(this.name, cb);
+    }
   },
 }));
 
 // Mock FastChecker so it doesn't try to spawn anything either.
 vi.mock('../../../src/daemon/fast-checker.js', () => ({
   FastChecker: class {
-    start() { /* no-op */ }
+    async start() { /* no-op */ }
     stop() { /* no-op */ }
     wake() { /* no-op */ }
+    resetWatchdogState() { /* no-op */ }
   },
 }));
 
@@ -34,6 +55,7 @@ vi.mock('../../../src/daemon/fast-checker.js', () => ({
 vi.mock('../../../src/telegram/api.js', () => ({
   TelegramAPI: class {
     constructor() { /* no-op */ }
+    sendMessage = telegramSendMessageMock;
   },
 }));
 
@@ -41,6 +63,9 @@ vi.mock('../../../src/telegram/poller.js', () => ({
   TelegramPoller: class {
     start() { /* no-op */ }
     stop() { /* no-op */ }
+    onMessage() { /* no-op */ }
+    onCallback() { /* no-op */ }
+    onReaction() { /* no-op */ }
   },
 }));
 
@@ -79,7 +104,7 @@ describe('AgentManager.discoverAndStart - BUG-028 fix', () => {
     // alice should be skipped (disabled in instance file), bob should be started
     expect(startSpy).toHaveBeenCalledTimes(1);
     // BUG-043: startAgent now accepts a 4th `org` argument
-    expect(startSpy).toHaveBeenCalledWith('bob', expect.any(String), expect.any(Object), 'acme');
+    expect(startSpy).toHaveBeenCalledWith('bob', expect.any(String), expect.any(Object), 'acme', { partOfFleetStart: true });
   });
 
   it('starts all discovered agents when enabled-agents.json is missing', async () => {
@@ -120,7 +145,7 @@ describe('AgentManager.discoverAndStart - BUG-028 fix', () => {
 
     expect(startSpy).toHaveBeenCalledTimes(1);
     // BUG-043: startAgent now accepts a 4th `org` argument
-    expect(startSpy).toHaveBeenCalledWith('bob', expect.any(String), expect.any(Object), 'acme');
+    expect(startSpy).toHaveBeenCalledWith('bob', expect.any(String), expect.any(Object), 'acme', { partOfFleetStart: true });
   });
 
   it('handles corrupt enabled-agents.json by defaulting to enabled-all', async () => {
@@ -267,7 +292,7 @@ describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', ()
     await am.restartAgent('alice');
 
     expect(stopSpy).toHaveBeenCalledWith('alice');
-    expect(startSpy).toHaveBeenCalledWith('alice', '');
+    expect(startSpy).toHaveBeenCalledWith('alice', '', undefined, undefined, { partOfFleetStart: undefined });
     // Verify call order: stop must complete before start, so the old poller
     // is fully torn down before the new one is constructed
     const stopOrder = stopSpy.mock.invocationCallOrder[0];
@@ -284,6 +309,115 @@ describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', ()
 
     expect(stopSpy).not.toHaveBeenCalled();
     expect(startSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentManager fleet back-online notification coalescing', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-fleet-online-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  function registerRunningAgent(am: InstanceType<typeof AgentManager>, name: string): void {
+    (am as any).agents.set(name, {
+      process: { getStatus: () => ({ name, status: 'running' }) },
+      checker: {},
+    });
+  }
+
+  function writeTelegramAgent(name: string): void {
+    const agentDir = join(frameworkRoot, 'orgs', 'acme', 'agents', name);
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      join(agentDir, '.env'),
+      'BOT_TOKEN=123:abc\nCHAT_ID=chat-1\nALLOWED_USER=42\n',
+    );
+    writeFileSync(
+      join(agentDir, 'config.json'),
+      JSON.stringify({ telegram_polling: false }),
+    );
+  }
+
+  it('suppresses fresh agent-level back-online sends during daemon boot and emits exactly one consolidated notification', async () => {
+    writeTelegramAgent('alice');
+    writeTelegramAgent('bob');
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+
+    telegramSendMessageMock.mockClear();
+    await am.discoverAndStart();
+
+    expect(telegramSendMessageMock).toHaveBeenCalledTimes(1);
+    expect(telegramSendMessageMock).toHaveBeenCalledWith('chat-1', 'Fleet back online (2/2 agents)');
+    expect(telegramSendMessageMock).not.toHaveBeenCalledWith('chat-1', 'Agent alice is back online');
+    expect(telegramSendMessageMock).not.toHaveBeenCalledWith('chat-1', 'Agent bob is back online');
+  });
+
+  it('sends exactly one consolidated notification after a near-simultaneous restart-all batch completes', async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const sendMessage = vi.fn().mockResolvedValue({ ok: true });
+    const api = { sendMessage };
+
+    for (const name of ['alice', 'bob', 'carol']) registerRunningAgent(am, name);
+    vi.spyOn(am, 'stopAgent').mockResolvedValue();
+    vi.spyOn(am, 'startAgent').mockImplementation(async () => {
+      (am as any).captureFleetNotifyHandle(api, 'chat-1');
+    });
+
+    await Promise.all([
+      am.restartAgent('alice', { partOfFleetStart: true, fleetTotal: 3, fleetIndex: 0 }),
+      am.restartAgent('bob', { partOfFleetStart: true, fleetTotal: 3, fleetIndex: 1 }),
+      am.restartAgent('carol', { partOfFleetStart: true, fleetTotal: 3, fleetIndex: 2 }),
+    ]);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith('chat-1', 'Fleet back online (3/3 agents)');
+  });
+
+  it('does not coalesce a lone single-agent restart through the fleet batch coordinator', async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    registerRunningAgent(am, 'alice');
+    vi.spyOn(am, 'stopAgent').mockResolvedValue();
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await am.restartAgent('alice');
+
+    expect((am as any).fleetStartBatch).toBeNull();
+    expect(startSpy).toHaveBeenCalledWith('alice', '', undefined, undefined, { partOfFleetStart: undefined });
+  });
+
+  it('keeps crash recovery on individual Telegram notifications outside the fleet batch coordinator', async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const agentDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      join(agentDir, '.env'),
+      'BOT_TOKEN=123:abc\nCHAT_ID=chat-1\nALLOWED_USER=42\n',
+    );
+
+    telegramSendMessageMock.mockClear();
+    agentStatusCallbacks.clear();
+    await am.startAgent('alice', agentDir, { telegram_polling: false }, 'acme');
+    telegramSendMessageMock.mockClear();
+
+    const statusChanged = agentStatusCallbacks.get('alice');
+    expect(statusChanged).toBeDefined();
+    statusChanged!({ status: 'crashed', crashCount: 1 });
+    statusChanged!({ status: 'running' });
+
+    expect((am as any).fleetStartBatch).toBeNull();
+    expect(telegramSendMessageMock).toHaveBeenCalledTimes(2);
+    expect(telegramSendMessageMock).toHaveBeenNthCalledWith(1, 'chat-1', 'Agent alice crashed (crash #1) — auto-restarting');
+    expect(telegramSendMessageMock).toHaveBeenNthCalledWith(2, 'chat-1', 'Agent alice recovered and is back online');
   });
 });
 

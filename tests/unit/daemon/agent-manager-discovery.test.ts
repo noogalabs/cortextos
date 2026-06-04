@@ -85,6 +85,7 @@ describe('AgentManager.discoverAndStart discovery behavior', () => {
       join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'),
       expect.objectContaining({ model: 'claude-test', enabled: true }),
       'acme',
+      { partOfFleetStart: true },
     );
   });
 
@@ -102,6 +103,7 @@ describe('AgentManager.discoverAndStart discovery behavior', () => {
       join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'),
       {},
       'acme',
+      { partOfFleetStart: true },
     );
   });
 
@@ -121,6 +123,7 @@ describe('AgentManager.discoverAndStart discovery behavior', () => {
       join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'),
       {},
       'acme',
+      { partOfFleetStart: true },
     );
   });
 
@@ -140,6 +143,7 @@ describe('AgentManager.discoverAndStart discovery behavior', () => {
       join(frameworkRoot, 'orgs', 'orgB', 'agents', 'bravo'),
       {},
       'orgB',
+      { partOfFleetStart: true },
     );
   });
 

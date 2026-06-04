@@ -2082,7 +2082,12 @@ busCommand
       writeFileSync(join(stateDir, '.user-restart'), opts.reason);
 
       // Send IPC restart signal
-      const resp = await ipc.send({ type: 'restart-agent', agent, source: 'cortextos bus soft-restart-all' });
+      const resp = await ipc.send({
+        type: 'restart-agent',
+        agent,
+        source: 'cortextos bus soft-restart-all',
+        data: { fleetTotal: targets.length, fleetIndex: i },
+      });
       if (resp.success) {
         console.log(`[${i + 1}/${targets.length}] Restarted ${agent}`);
       } else {

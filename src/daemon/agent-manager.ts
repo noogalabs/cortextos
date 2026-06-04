@@ -22,6 +22,19 @@ import { logEvent } from '../bus/event.js';
 import { stripBom } from '../utils/strip-bom.js';
 
 type LogFn = (msg: string) => void;
+type AgentStartOptions = { partOfFleetStart?: boolean };
+type AgentRestartOptions = {
+  partOfFleetStart?: boolean;
+  fleetTotal?: number;
+  fleetIndex?: number;
+};
+type FleetStartBatch = {
+  expected: number;
+  completed: Set<string>;
+  online: Set<string>;
+  notifyHandle: { api: TelegramAPI; chatId: string } | null;
+  source: 'daemon-boot' | 'restart-all';
+};
 
 /**
  * Manages all agents in a cortextOS instance.
@@ -38,6 +51,7 @@ export class AgentManager {
   private ctxRoot: string;
   private frameworkRoot: string;
   private org: string;
+  private fleetStartBatch: FleetStartBatch | null = null;
 
   // Set true at construction time if any agent in state/ has a stale
   // .daemon-crashed marker, meaning the previous daemon process died
@@ -117,6 +131,7 @@ export class AgentManager {
    */
   async discoverAndStart(): Promise<void> {
     const agentDirs = this.discoverAgents();
+    const startCandidates: Array<{ name: string; dir: string; org: string; config: AgentConfig }> = [];
 
     // BUG-028: read instance-level enabled-agents.json so the daemon respects
     // the user's explicit enable/disable choices written by the CLI
@@ -140,6 +155,11 @@ export class AgentManager {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json)`);
         continue;
       }
+      startCandidates.push({ name, dir, org, config });
+    }
+
+    this.beginFleetStartBatch(startCandidates.length, 'daemon-boot');
+    for (const { name, dir, org, config } of startCandidates) {
       // BUG-043 fix: pass the per-agent org so startAgent can use it instead
       // of falling back to `this.org` (the daemon's startup org).
       // Catch per-agent failures so one broken agent doesn't abort the whole
@@ -147,11 +167,14 @@ export class AgentManager {
       // and startAgent re-throws after cleanup; we log + continue here so
       // the rest of the fleet still comes online.
       try {
-        await this.startAgent(name, dir, config, org);
+        await this.startAgent(name, dir, config, org, { partOfFleetStart: true });
       } catch (err) {
         console.error(`[agent-manager] Failed to start ${name}: ${err}`);
+      } finally {
+        this.recordFleetStartAgent(name);
       }
     }
+    this.finishFleetStartBatch(true);
 
     // Successful startup pass — clear .daemon-crashed markers from disk
     // AND clear the in-memory daemonJustCrashed flag. After this point,
@@ -159,6 +182,58 @@ export class AgentManager {
     // are normal operation and should fire the real BUG-011 alarm if a
     // race ever does leak through PR #11's protection.
     this.clearDaemonCrashMarkers();
+  }
+
+  private beginFleetStartBatch(expected: number, source: FleetStartBatch['source']): void {
+    if (expected <= 0) return;
+    if (this.fleetStartBatch) {
+      console.warn(`[agent-manager] Fleet start batch already active (${this.fleetStartBatch.source}); keeping existing coordinator`);
+      return;
+    }
+    this.fleetStartBatch = {
+      expected,
+      completed: new Set(),
+      online: new Set(),
+      notifyHandle: null,
+      source,
+    };
+  }
+
+  private captureFleetNotifyHandle(api: TelegramAPI, chatId: string): void {
+    if (!this.fleetStartBatch || this.fleetStartBatch.notifyHandle) return;
+    this.fleetStartBatch.notifyHandle = { api, chatId };
+  }
+
+  private recordFleetStartAgent(name: string): void {
+    const batch = this.fleetStartBatch;
+    if (!batch) return;
+    batch.completed.add(name);
+    if (this.getAgentStatus(name)?.status === 'running') {
+      batch.online.add(name);
+    } else {
+      batch.online.delete(name);
+    }
+  }
+
+  private finishFleetStartBatch(force = false): void {
+    const batch = this.fleetStartBatch;
+    if (!batch) return;
+    if (!force && batch.completed.size < batch.expected) return;
+
+    this.fleetStartBatch = null;
+    const message = `Fleet back online (${batch.online.size}/${batch.expected} agents)`;
+    if (!batch.notifyHandle) {
+      console.warn(`[agent-manager] ${message}, but no Telegram handle was available for consolidated notification`);
+      return;
+    }
+
+    try {
+      batch.notifyHandle.api.sendMessage(batch.notifyHandle.chatId, message).catch((err: unknown) => {
+        console.error(`[agent-manager] Fleet back-online notification failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    } catch (err) {
+      console.error(`[agent-manager] Fleet back-online notification failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**
@@ -278,7 +353,7 @@ export class AgentManager {
     return { ok: true };
   }
 
-  async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
+  async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string, options: AgentStartOptions = {}): Promise<void> {
     if (this.agents.has(name)) {
       // BUG-031: this branch was the workaround for the BUG-011 PTY race
       // (restart-all could send stop+start simultaneously, and the new
@@ -411,6 +486,9 @@ export class AgentManager {
     // claude-code / hermes runtimes — those still use fast-checker.
     if (telegramApi && chatId) {
       agentProcess.setTelegramHandle(telegramApi, chatId);
+      if (options.partOfFleetStart) {
+        this.captureFleetNotifyHandle(telegramApi, chatId);
+      }
     }
 
     // Build gmail_watch option if configured
@@ -528,7 +606,7 @@ export class AgentManager {
     // map entry before re-throwing so we don't leave a half-registered
     // zombie that blocks future startAgent() retries.
     try {
-      await agentProcess.start();
+      await agentProcess.start({ partOfFleetStart: options.partOfFleetStart });
     } catch (err) {
       // Only delete if we are still the canonical entry — a concurrent
       // stop+start could have replaced the map entry while we were awaiting.
@@ -1054,15 +1132,32 @@ export class AgentManager {
    * agentDir is auto-discovered by startAgent() from frameworkRoot/orgs/{org}/agents/{name}.
    * Participates in the pendingRestarts race protection used by restart-all.
    */
-  async restartAgent(name: string): Promise<void> {
+  async restartAgent(name: string, options: AgentRestartOptions = {}): Promise<void> {
+    if (options.partOfFleetStart && !this.fleetStartBatch) {
+      // `soft-restart-all` restarts child agent sessions only. The daemon and
+      // this AgentManager instance are not part of that restart set, so this
+      // in-memory coordinator persists until every requested child settles.
+      this.beginFleetStartBatch(options.fleetTotal ?? 1, 'restart-all');
+    }
     if (!this.agents.has(name)) {
       console.log(`[agent-manager] Agent ${name} not found — cannot restart`);
+      if (options.partOfFleetStart) {
+        this.recordFleetStartAgent(name);
+        this.finishFleetStartBatch();
+      }
       return;
     }
     console.log(`[agent-manager] Restarting ${name}`);
-    await this.stopAgent(name);
-    await this.startAgent(name, '');
-    console.log(`[agent-manager] Restart complete for ${name}`);
+    try {
+      await this.stopAgent(name);
+      await this.startAgent(name, '', undefined, undefined, { partOfFleetStart: options.partOfFleetStart });
+      console.log(`[agent-manager] Restart complete for ${name}`);
+    } finally {
+      if (options.partOfFleetStart) {
+        this.recordFleetStartAgent(name);
+        this.finishFleetStartBatch();
+      }
+    }
   }
 
   /**
