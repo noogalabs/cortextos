@@ -152,6 +152,8 @@ export async function processMediaMessage(
     fs.writeFileSync(localFile, data);
     const transcript = await transcribeVoice(localFile);
 
+    const transcript = await transcribeVoice(localFile);
+
     return {
       type: 'voice',
       chat_id: chatId,

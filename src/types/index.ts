@@ -161,6 +161,12 @@ export interface AgentConfig {
   startup_delay?: number;
   max_session_seconds?: number;
   max_crashes_per_day?: number;
+  /**
+   * Sliding-window crash-loop detector. When N crashes occur within the window,
+   * the agent auto-pauses (status: 'halted') instead of retrying. Absent = legacy
+   * daily counter only.
+   */
+  crash_window?: { seconds: number; max_crashes?: number };
   model?: string;
   /**
    * Cost tier for model routing: 'haiku' | 'sonnet' | 'opus'.
@@ -230,6 +236,12 @@ export interface AgentConfig {
    */
   codex_context_cap?: number;
   /**
+   * Fallback context window cap (tokens) for codex-app-server agents when the
+   * server's `thread/tokenUsage/updated` event reports `modelContextWindow=null`.
+   * Defaults to 256000 when unset. Only applied to the codex-app-server runtime.
+   */
+  codex_context_cap?: number;
+  /**
    * Agent runtime. Defaults to 'claude-code' when absent.
    * 'hermes' selects the HermesPTY spawn path (Python persistent REPL,
    * NousResearch/hermes-agent) with Hermes-specific bootstrap, session
@@ -248,7 +260,8 @@ export interface AgentConfig {
    * Whether this agent runs a Telegram poller. Defaults to true when absent
    * (preserves existing behaviour). Set to false on specialist agents that
    * should not own a Telegram bot — only the designated orchestrator agent
-   * should poll.
+   * should poll. Requires BOT_TOKEN + CHAT_ID to already be unset or the
+   * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
 }
