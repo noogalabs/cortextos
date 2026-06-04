@@ -13,16 +13,6 @@ type RuntimeKind = typeof VALID_RUNTIMES[number];
 // (`.claude/skills/`, `CLAUDE_CODE_OAUTH_TOKEN`, `/loop` references) into a
 // codex agent — degrading on first boot. Reject the combo until codex
 // variants exist (PR 11+).
-const NON_CODEX_TEMPLATES = ['orchestrator', 'analyst', 'm2c1-worker', 'hermes'] as const;
-
-const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
-type RuntimeKind = typeof VALID_RUNTIMES[number];
-
-// Templates that don't have a codex variant yet. Pairing any of these with
-// --runtime codex-app-server used to silently scaffold claude-only bootstrap
-// (`.claude/skills/`, `CLAUDE_CODE_OAUTH_TOKEN`, `/loop` references) into a
-// codex agent — degrading on first boot. Reject the combo until codex
-// variants exist (PR 11+).
 const NON_CODEX_TEMPLATES = [
   'orchestrator',
   'analyst',
