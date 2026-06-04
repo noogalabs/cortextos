@@ -1095,9 +1095,22 @@ export class AgentProcess {
     if (this.config.runtime !== 'codex-app-server') return;
     if (this.lastSpawnWasHandoff) return;
     if (!this.telegramApi || !this.telegramChatId) return;
-    this.telegramApi
-      .sendMessage(this.telegramChatId, `Agent ${this.name} is back online`)
-      .catch(() => { /* non-fatal: notification is observability only */ });
+    // Fully defensive fire-and-forget: this runs inside start()'s try-block, so
+    // a malformed/partial Telegram handle (e.g. sendMessage missing or returning
+    // a non-promise) must NOT throw and abort agent startup. Guard the call and
+    // swallow both sync throws and async rejections — the boot ping is
+    // observability only and never load-bearing for the agent coming online.
+    try {
+      const result = this.telegramApi.sendMessage(
+        this.telegramChatId,
+        `Agent ${this.name} is back online`,
+      );
+      if (result && typeof (result as Promise<unknown>).catch === 'function') {
+        (result as Promise<unknown>).catch(() => { /* non-fatal */ });
+      }
+    } catch {
+      /* non-fatal: notification is observability only */
+    }
   }
 
   private startSessionTimer(): void {
