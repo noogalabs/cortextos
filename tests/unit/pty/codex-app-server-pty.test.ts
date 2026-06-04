@@ -370,7 +370,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     });
     expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1',
-      model: 'gpt-5-codex',
+      model: 'gpt-5.5',
       input: [
         { type: 'skill', name: 'imagegen', path: '/skill.md' },
         { type: 'text', text: 'make a logo', text_elements: [] },
@@ -401,7 +401,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     });
     expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1',
-      model: 'gpt-5-codex',
+      model: 'gpt-5.5',
       input: [
         { type: 'skill', name: 'imagegen', path: '/skill.md' },
         { type: 'text', text: 'make a logo', text_elements: [] },
@@ -437,7 +437,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     });
     expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1',
-      model: 'gpt-5-codex',
+      model: 'gpt-5.5',
       input: [{ type: 'skill', name: 'heartbeat', path: '/h.md' }],
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'dangerFullAccess' },
@@ -491,7 +491,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
 
     expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1',
-      model: 'gpt-5-codex',
+      model: 'gpt-5.5',
       input: [
         { type: 'skill', name: 'heartbeat', path: '/h.md' },
         { type: 'text', text: 'extra context here', text_elements: [] },
@@ -544,7 +544,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
 
     expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1',
-      model: 'gpt-5-codex',
+      model: 'gpt-5.5',
       input: [{ type: 'skill', name: 'heartbeat', path: '/h.md' }],
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'dangerFullAccess' },
@@ -563,7 +563,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     expect(requestMock).toHaveBeenCalledTimes(1);
     expect(requestMock).toHaveBeenLastCalledWith('turn/start', {
       threadId: 'thread-1',
-      model: 'gpt-5-codex',
+      model: 'gpt-5.5',
       input: [{ type: 'text', text: 'first', text_elements: [] }],
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'dangerFullAccess' },
@@ -581,7 +581,7 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     expect(requestMock).toHaveBeenCalledTimes(2);
     expect(requestMock).toHaveBeenLastCalledWith('turn/start', {
       threadId: 'thread-1',
-      model: 'gpt-5-codex',
+      model: 'gpt-5.5',
       input: [{ type: 'text', text: 'second', text_elements: [] }],
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'dangerFullAccess' },
@@ -890,7 +890,7 @@ describe('CodexAppServerPTY thread lifecycle', () => {
 
     expect(requestMock).toHaveBeenCalledWith('thread/start', {
       cwd: '/tmp/fw/orgs/acme/agents/codex-app-agent',
-      model: 'gpt-5-codex',
+      model: 'gpt-5.5',
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',
       config: { features: { goals: true } },
@@ -921,7 +921,7 @@ describe('CodexAppServerPTY thread lifecycle', () => {
     expect(requestMock).toHaveBeenCalledWith('thread/resume', {
       threadId: 'persisted-thread',
       cwd: '/tmp/fw/orgs/acme/agents/codex-app-agent',
-      model: 'gpt-5-codex',
+      model: 'gpt-5.5',
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',
       config: { features: { goals: true } },
@@ -1193,7 +1193,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', (
     expect(typeof entry.timestamp).toBe('string');
   });
 
-  it('defaults model to gpt-5-codex when config.model is unset', () => {
+  it('defaults model to gpt-5.5 when config.model is unset', () => {
     const pty = new CodexAppServerPTY(mockEnv, {});
     (pty as unknown as { _threadId: string })._threadId = 'thread-9';
     feedTokenUsage(pty, {
@@ -1203,7 +1203,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', (
     });
 
     const entry = lastAppendedEntry()!;
-    expect(entry.model).toBe('gpt-5-codex');
+    expect(entry.model).toBe('gpt-5.5');
   });
 
   it('preserves an allowlisted config.model override when set', () => {
@@ -1221,9 +1221,9 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', (
 
   it('gates an unsafe/unentitled config.model override back to the safe default', () => {
     // The SAFE_MODELS allowlist intentionally narrows override flexibility: an
-    // unentitled model (incl. the outage model gpt-5.3-codex) can never be sent
-    // or logged — it falls back to gpt-5-codex. The token-log label tracks the
-    // model actually sent, not the raw config.
+    // unentitled model (the outage model gpt-5.3-codex) can never be sent or
+    // logged — it falls back to the default safe model (gpt-5.5). The token-log
+    // label tracks the model actually sent, not the raw config.
     const pty = new CodexAppServerPTY(mockEnv, { model: 'gpt-5.3-codex' });
     (pty as unknown as { _threadId: string })._threadId = 'thread-9';
     feedTokenUsage(pty, {
@@ -1233,7 +1233,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', (
     });
 
     const entry = lastAppendedEntry()!;
-    expect(entry.model).toBe('gpt-5-codex');
+    expect(entry.model).toBe('gpt-5.5');
   });
 
   it('warns once (dashboard event) when config.model is gated to the safe default', () => {
@@ -1246,7 +1246,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', (
       'action',
       'codex_model_gated_to_safe_default',
       'warning',
-      expect.objectContaining({ configured_model: 'gpt-5.3-codex', used_model: 'gpt-5-codex' }),
+      expect.objectContaining({ configured_model: 'gpt-5.3-codex', used_model: 'gpt-5.5' }),
     );
   });
 

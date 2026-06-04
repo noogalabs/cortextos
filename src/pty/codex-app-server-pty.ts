@@ -89,8 +89,18 @@ const TURN_PERMISSION_OVERRIDES = {
 // down 2026-06-04 (every turn 400). We therefore ALWAYS send an explicit,
 // allowlisted model on every thread/turn request (never null). Mirrors the
 // hermes codex adapter's SAFE_MODELS gate for the app-server path.
+//
+// ENTITLEMENT NOTE (2026-06-04, proven by billed live turns): this ChatGPT
+// account is NOT entitled to the codex-specialized models — BOTH gpt-5.3-codex
+// AND gpt-5-codex return 400 "not supported when using Codex with a ChatGPT
+// account". gpt-5.5 (general) is the only entitled/working executor model here,
+// so it is the DEFAULT. gpt-5-codex is kept in SAFE_MODELS deliberately as the
+// one-config-edit switch-back: if the Codex plan is upgraded to entitle it, set
+// an agent's config.model=gpt-5-codex (the better executor) and resolveSafeModel
+// will pass it through. The DEFAULT must always be an entitled model — an earlier
+// gpt-5-codex default was an unproven assumption that 400'd; gpt-5.5 is proven.
 const SAFE_MODELS: readonly string[] = ['gpt-5.5', 'gpt-5-codex'];
-const DEFAULT_SAFE_MODEL = 'gpt-5-codex';
+const DEFAULT_SAFE_MODEL = 'gpt-5.5';
 
 /**
  * Resolve the model to send on a codex-app-server thread/turn request.
