@@ -27,7 +27,7 @@
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import type { CronDefinition, CronEntry } from '../types/index.js';
-import { readCrons, writeCrons, withCronLock } from '../bus/crons.js';
+import { readCrons, readCronsWithStatus, writeCrons, withCronLock } from '../bus/crons.js';
 import { CRONS_DIRECTORY } from '../bus/crons-schema.js';
 import { scanAgentDir } from '../utils/cron-teaching-scanner.js';
 
@@ -330,10 +330,26 @@ function runMigrationCore(
     return { agentName, status: 'skipped-already-migrated' };
   }
 
-  // Read config.json — no-op on missing file
+  // Read existing crons.json state FIRST so we never blind-overwrite
+  // runtime-added crons (bus add-cron) that aren't represented in config.json.
+  // Fail loud on catastrophic corruption (primary + .bak both unparseable):
+  // skip this agent entirely rather than zeroing a real schedule, and do NOT
+  // write the marker so a later boot retries after the operator restores it.
+  const existingRead = readCronsWithStatus(agentName);
+  if (existingRead.corrupt) {
+    log(
+      `ERROR: crons.json for "${agentName}" is corrupt (primary + .bak unparseable) — ` +
+        `aborting migration, leaving file untouched and NOT writing marker so a later ` +
+        `boot retries after the operator restores it`,
+    );
+    return { agentName, status: 'no-crons' };
+  }
+  const existingByName = new Map(existingRead.crons.map((c) => [c.name, c]));
+
+  // Read config.json — preserve existing crons on a missing file
   if (!existsSync(configJsonPath)) {
-    log(`No config.json found for "${agentName}" at ${configJsonPath} — writing empty crons.json + marker`);
-    writeCrons(agentName, []);
+    log(`No config.json found for "${agentName}" at ${configJsonPath} — preserving ${existingRead.crons.length} existing crons.json entries + marker`);
+    writeCrons(agentName, existingRead.crons);
     writeMarker(ctxRoot, agentName);
     return { agentName, status: 'no-config' };
   }
@@ -342,14 +358,13 @@ function runMigrationCore(
   try {
     rawConfig = JSON.parse(readFileSync(configJsonPath, 'utf-8'));
   } catch (err) {
-    // Unreadable / corrupt config.json: write empty crons.json + marker so we
-    // don't retry on every boot with the same broken file
+    // Unreadable / corrupt config.json: fail loud — leave existing crons.json
+    // untouched and do NOT write the marker, so migration retries next boot
+    // rather than permanently wiping a real schedule from one bad parse.
     log(
-      `WARNING: failed to parse config.json for "${agentName}" — writing empty crons.json + marker. ` +
-        `Error: ${err instanceof Error ? err.message : String(err)}`,
+      `ERROR: failed to parse config.json for "${agentName}" — leaving existing crons.json untouched, ` +
+        `NOT writing marker (will retry next boot). Error: ${err instanceof Error ? err.message : String(err)}`,
     );
-    writeCrons(agentName, []);
-    writeMarker(ctxRoot, agentName);
     return { agentName, status: 'no-crons' };
   }
 
@@ -365,29 +380,49 @@ function runMigrationCore(
   }
 
   if (configCrons.length === 0) {
-    log(`No crons array in config.json for "${agentName}" — writing empty crons.json + marker`);
-    writeCrons(agentName, []);
+    log(`No crons array in config.json for "${agentName}" — preserving ${existingRead.crons.length} existing crons.json entries + marker`);
+    writeCrons(agentName, existingRead.crons);
     writeMarker(ctxRoot, agentName);
     return { agentName, status: 'no-crons' };
   }
 
-  // Convert each entry
-  const converted: CronDefinition[] = [];
+  // Convert + merge each config entry over existing state. Start the merge map
+  // from existing-by-name so runtime-added crons not present in config are kept
+  // (orphan-tolerant, matching reloadCronsForAgent). For names present in both,
+  // overlay only the config-authoritative fields and preserve runtime fields
+  // (created_at, last_fired_at, fire_count, …) from the prior on-disk entry.
   const skipped: string[] = [];
+  const mergedByName = new Map<string, CronDefinition>(existingByName);
 
   for (const entry of configCrons) {
     const result = convertEntry(entry, agentName);
     if ('cron' in result) {
-      converted.push(result.cron);
-      log(`  Migrated cron "${entry.name}" for "${agentName}" (schedule: ${result.cron.schedule})`);
+      const newDef = result.cron;
+      const prior = existingByName.get(newDef.name);
+      if (prior) {
+        const merged: CronDefinition = { ...prior };
+        for (const field of CONFIG_AUTHORITATIVE_FIELDS) {
+          (merged as unknown as Record<string, unknown>)[field] = newDef[field];
+        }
+        if (newDef.description !== undefined) merged.description = newDef.description;
+        mergedByName.set(newDef.name, merged);
+      } else {
+        mergedByName.set(newDef.name, newDef);
+      }
+      log(`  Migrated cron "${entry.name}" for "${agentName}" (schedule: ${newDef.schedule})`);
     } else {
       skipped.push(entry.name);
       log(`  Skipped cron for "${agentName}": ${result.skip}`);
     }
   }
 
-  // Write crons.json atomically and set marker
-  writeCrons(agentName, converted);
+  const converted = Array.from(mergedByName.values());
+
+  // Write crons.json atomically and set marker under the agent cron lock to
+  // serialize against addCron/removeCron writers — same discipline as reload.
+  withCronLock(agentName, () => {
+    writeCrons(agentName, converted);
+  });
   writeMarker(ctxRoot, agentName);
 
   log(

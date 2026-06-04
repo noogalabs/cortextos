@@ -161,6 +161,12 @@ export interface AgentConfig {
   startup_delay?: number;
   max_session_seconds?: number;
   max_crashes_per_day?: number;
+  /**
+   * Sliding-window crash-loop detector. When N crashes occur within the window,
+   * the agent auto-pauses (status: 'halted') instead of retrying. Absent = legacy
+   * daily counter only.
+   */
+  crash_window?: { seconds: number; max_crashes?: number };
   model?: string;
   /**
    * Cost tier for model routing: 'haiku' | 'sonnet' | 'opus'.
@@ -248,7 +254,8 @@ export interface AgentConfig {
    * Whether this agent runs a Telegram poller. Defaults to true when absent
    * (preserves existing behaviour). Set to false on specialist agents that
    * should not own a Telegram bot — only the designated orchestrator agent
-   * should poll.
+   * should poll. Requires BOT_TOKEN + CHAT_ID to already be unset or the
+   * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
 }

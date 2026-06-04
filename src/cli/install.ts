@@ -290,6 +290,7 @@ export const installCommand = new Command('install')
       console.log('  ✓ ffmpeg: installed');
     }
 
+    // GGML whisper model — idempotent download via shipped script.
     const modelScript = join(frameworkRoot, 'scripts', 'install-whisper-model.sh');
     if (existsSync(modelScript)) {
       const modelResult = spawnSync('bash', [modelScript], { stdio: 'inherit', timeout: 5 * 60 * 1000 });

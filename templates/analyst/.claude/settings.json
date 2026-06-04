@@ -59,12 +59,12 @@
         ]
       }
     ],
-    "SessionStart": [
+    "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "cortextos bus hook-session-restore",
+            "command": "cortextos bus hook-idle-flag",
             "timeout": 5
           }
         ]

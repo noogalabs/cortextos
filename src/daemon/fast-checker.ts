@@ -664,13 +664,18 @@ export class FastChecker {
     let messageBlock = '';
     const ackIds: string[] = [];
 
-    // Process queued Telegram messages
-    let hasTelegramMessage = false;
+    // Process queued Telegram messages. Drain into a local buffer rather than
+    // discarding outright — if injection fails (agent mid-restart / NOT_RUNNING,
+    // or DEDUPED) we must re-queue, since the in-memory queue is the ONLY backing
+    // store for Telegram (no inbox-style ACK/redelivery). Mirrors the inbox
+    // ACK-after-inject recovery model below.
+    const drainedTelegram: typeof this.telegramMessages = [];
     while (this.telegramMessages.length > 0) {
       const msg = this.telegramMessages.shift()!;
       messageBlock += msg.formatted;
-      hasTelegramMessage = true;
+      drainedTelegram.push(msg);
     }
+    const hasTelegramMessage = drainedTelegram.length > 0;
 
     // Check agent inbox
     const inboxMessages = checkInbox(this.paths);
@@ -696,6 +701,14 @@ export class FastChecker {
         }
         // Cooldown after injection
         await sleep(5000);
+      } else if (drainedTelegram.length > 0) {
+        // Inject failed (agent not running mid-restart, or deduped). Re-queue the
+        // drained Telegram messages at the FRONT so they are retried next cycle and
+        // preserve original order. Inbox messages need no action — they were never
+        // ACK'd, so checkInbox redelivers them. Without this, mid-restart inbound
+        // Telegram is silently and permanently lost (offset already advanced).
+        this.telegramMessages.unshift(...drainedTelegram);
+        this.log(`Inject failed; re-queued ${drainedTelegram.length} Telegram message(s)`);
       }
     }
 
