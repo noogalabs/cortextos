@@ -127,4 +127,69 @@ describe('Sprint 6: Fast-Checker Completeness', () => {
       expect(elapsed).toBeLessThan(1000); // Should resolve in <1s, not 10s
     });
   });
+
+  describe('Telegram re-queue on inject failure', () => {
+    // pollCycle is private + tightly coupled to a live agent, so model the exact
+    // drain/unshift contract from src/daemon/fast-checker.ts pollCycle here.
+    // Locks the no-loss + FIFO-order invariant the re-queue depends on: a failed
+    // inject (agent mid-restart / NOT_RUNNING, or DEDUPED) must NOT discard the
+    // drained Telegram messages — they are the only backing store.
+    type QMsg = { formatted: string; ackIds: string[] };
+
+    function drain(queue: QMsg[]): { messageBlock: string; drained: QMsg[] } {
+      let messageBlock = '';
+      const drained: QMsg[] = [];
+      while (queue.length > 0) {
+        const msg = queue.shift()!;
+        messageBlock += msg.formatted;
+        drained.push(msg);
+      }
+      return { messageBlock, drained };
+    }
+
+    it('inject SUCCESS leaves the queue empty (no re-queue)', () => {
+      const queue: QMsg[] = [{ formatted: 'A', ackIds: [] }];
+      const { drained } = drain(queue);
+      const injected = true;
+      if (!injected && drained.length > 0) queue.unshift(...drained);
+      expect(queue.length).toBe(0);
+    });
+
+    it('inject FAILURE re-queues the same messages (no loss)', () => {
+      const queue: QMsg[] = [
+        { formatted: 'A', ackIds: [] },
+        { formatted: 'B', ackIds: [] },
+      ];
+      const { drained } = drain(queue);
+      expect(queue.length).toBe(0); // fully drained before inject
+      const injected = false;
+      if (!injected && drained.length > 0) queue.unshift(...drained);
+      expect(queue.length).toBe(2);
+      expect(queue.map((m) => m.formatted)).toEqual(['A', 'B']);
+    });
+
+    it('re-queue preserves FIFO order [A,B,C], not reversed', () => {
+      const queue: QMsg[] = [
+        { formatted: 'A', ackIds: [] },
+        { formatted: 'B', ackIds: [] },
+        { formatted: 'C', ackIds: [] },
+      ];
+      const { drained } = drain(queue);
+      queue.unshift(...drained);
+      expect(queue.map((m) => m.formatted)).toEqual(['A', 'B', 'C']);
+    });
+
+    it('messages arriving during inject stay AFTER re-queued ones', () => {
+      const queue: QMsg[] = [
+        { formatted: 'A', ackIds: [] },
+        { formatted: 'B', ackIds: [] },
+      ];
+      const { drained } = drain(queue);
+      // A new message arrives (pushed to tail) while inject was in flight.
+      queue.push({ formatted: 'D', ackIds: [] });
+      // Inject failed → re-queue drained at the FRONT; the new message stays last.
+      queue.unshift(...drained);
+      expect(queue.map((m) => m.formatted)).toEqual(['A', 'B', 'D']);
+    });
+  });
 });
