@@ -103,7 +103,7 @@ export class TelegramAPI {
    * Processing order (matters — do not reorder):
    *   1. HTML-escape & < > in raw text (& first, then < >). Backticks, *,
    *      _ are not HTML-special so they survive intact for step 2+.
-   *   2. Fenced code blocks (``` ... ```) → <pre><code>...</code></pre>
+   *   2. Fenced code blocks (3+ backticks) → <pre><code>...</code></pre>
    *   3. Inline code (`...`) → <code>...</code>
    *   4. Bold (*...*) → <b>...</b>
    *   5. Italic (_..._) — word-boundary aware to avoid snake_case false positives
@@ -130,7 +130,7 @@ export class TelegramAPI {
       .replace(/>/g, '&gt;');
 
     // Step 2: Fenced code blocks — multiline, processed before inline `
-    html = html.replace(/```(?:\w*\n?)?([\s\S]*?)```/g, (_, code) =>
+    html = html.replace(/(`{3,})(?:\w*\n?)?([\s\S]*?)(?<!`)\1(?!`)/g, (_, _fence, code) =>
       `<pre><code>${code.trimEnd()}</code></pre>`,
     );
 

@@ -229,6 +229,42 @@ describe('TelegramAPI.validateCredentials', () => {
   });
 });
 
+describe('TelegramAPI.sendMessage Markdown conversion', () => {
+  it('converts triple-backtick fenced code blocks to Telegram HTML', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('222', 'before\n```ts\nconst n = 1;\n```\nafter');
+
+    expect(callLog).toHaveLength(1);
+    expect(callLog[0].url).toContain('/sendMessage');
+    expect(callLog[0].body.parse_mode).toBe('HTML');
+    expect(callLog[0].body.text).toContain('before\n<pre><code>const n = 1;</code></pre>\nafter');
+  });
+
+  it('converts matching 4-backtick fenced code blocks without treating inner triples as the close', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('222', '````\nouter\n```\ninner\n````');
+
+    expect(callLog).toHaveLength(1);
+    expect(callLog[0].body.parse_mode).toBe('HTML');
+    expect(callLog[0].body.text).toBe('<pre><code>outer\n```\ninner</code></pre>');
+  });
+
+  it('does not close a 4-backtick fence on the prefix of a longer backtick run', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('222', '````\nouter\n`````\ninner\n````');
+
+    expect(callLog).toHaveLength(1);
+    expect(callLog[0].body.parse_mode).toBe('HTML');
+    expect(callLog[0].body.text).toBe('<pre><code>outer\n`````\ninner</code></pre>');
+  });
+});
+
 describe('formatValidateError', () => {
   it('bad_token: does not leak token or detail in user-facing text', () => {
     const msg = formatValidateError({
