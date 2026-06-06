@@ -121,6 +121,7 @@ vi.mock('../../../src/bus/event.js', () => ({
 }));
 
 const { CodexAppServerPTY } = await import('../../../src/pty/codex-app-server-pty.js');
+const { FastChecker } = await import('../../../src/daemon/fast-checker.js');
 
 const mockEnv = {
   instanceId: 'test',
@@ -697,6 +698,56 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
 `;
     const out = extract(inject);
     expect(out).toBe('just a chat message');
+  });
+
+  it('round-trips dynamic-fenced Telegram text that contains a triple-backtick run', () => {
+    const body = [
+      'please inspect this',
+      '```',
+      'and keep this after the inner fence',
+    ].join('\n');
+    const inject = FastChecker.formatTelegramTextMessage(
+      'James',
+      '7940429114',
+      body,
+      '/tmp/framework',
+    );
+
+    expect(inject).toContain(['````', body, '````'].join('\n'));
+    expect(extract(inject)).toBe(body);
+  });
+
+  it('round-trips dynamic-fenced media captions and transcripts that contain triple-backtick runs', () => {
+    const caption = [
+      'caption before',
+      '```',
+      'caption after',
+    ].join('\n');
+    const photo = FastChecker.formatTelegramPhotoMessage(
+      'James',
+      '7940429114',
+      caption,
+      'telegram-images/photo.jpg',
+    );
+
+    expect(photo).toContain(['````', caption, '````'].join('\n'));
+    expect(extract(photo)).toContain(`caption: ${caption}`);
+
+    const transcript = [
+      'transcript before',
+      '```',
+      'transcript after',
+    ].join('\n');
+    const voice = FastChecker.formatTelegramVoiceMessage(
+      'James',
+      '7940429114',
+      'telegram-images/voice.ogg',
+      5,
+      transcript,
+    );
+
+    expect(voice).toContain(['````', transcript, '````'].join('\n'));
+    expect(extract(voice)).toContain(`transcript: ${transcript}`);
   });
 
   it('reply_to with no outbound log: appends bare in-reply-to marker', () => {

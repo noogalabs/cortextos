@@ -420,9 +420,9 @@ export class CodexAppServerPTY {
       break;
     }
 
-    const fencedBlocks = [...beforeReply.matchAll(/```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)\n```/g)];
+    const fencedBlocks = [...beforeReply.matchAll(/(`{3,})(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)\n\1/g)];
     if (fencedBlocks.length > 0) {
-      return wrap(fencedBlocks[fencedBlocks.length - 1]?.[1]?.trim() || null);
+      return wrap(fencedBlocks[fencedBlocks.length - 1]?.[2]?.trim() || null);
     }
 
     for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -438,11 +438,14 @@ export class CodexAppServerPTY {
   }
 
   private buildMediaPayload(mediaType: string, beforeReply: string): string | null {
-    const captionMatch = beforeReply.match(/caption:\s*\n```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)\n```/);
-    const caption = captionMatch?.[1]?.trim() ?? '';
+    // Match a dynamically-sized fence (3+ backticks): wrapFenceSafe grows the
+    // fence to outlast any backtick run in the body, so the close must be the
+    // same length as the open (backreference \1). Group 2 is the body.
+    const captionMatch = beforeReply.match(/caption:\s*\n(`{3,})(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)\n\1/);
+    const caption = captionMatch?.[2]?.trim() ?? '';
 
-    const transcriptMatch = beforeReply.match(/transcript:\s*\n```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)\n```/);
-    const transcript = transcriptMatch?.[1]?.trim() ?? '';
+    const transcriptMatch = beforeReply.match(/transcript:\s*\n(`{3,})(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)\n\1/);
+    const transcript = transcriptMatch?.[2]?.trim() ?? '';
 
     const localFileMatch = beforeReply.match(/^local_file:\s*(.+)$/m);
     const localFile = localFileMatch?.[1]?.trim() ?? '';
