@@ -20,6 +20,10 @@ interface SupportAccessOptions {
   instance?: string;
 }
 
+interface ResolveEnvTargetOptions {
+  requireInstanceRoot: boolean;
+}
+
 function findProjectRoot(): string {
   const candidates = [
     process.env.CORTEXTOS_DIR,
@@ -60,7 +64,10 @@ function resolveAgentDir(projectRoot: string, agentName: string, org?: string): 
   return null;
 }
 
-function resolveEnvTarget(opts: SupportAccessOptions): { envPath: string; ctxRoot: string | null } {
+function resolveEnvTarget(
+  opts: SupportAccessOptions,
+  { requireInstanceRoot }: ResolveEnvTargetOptions,
+): { envPath: string; ctxRoot: string | null } {
   const agentName = opts.agent || resolveCurrentAgentName();
   if (!agentName) {
     console.error('Error: pass --agent <name> or run inside an agent context with CTX_AGENT_NAME set.');
@@ -80,7 +87,7 @@ function resolveEnvTarget(opts: SupportAccessOptions): { envPath: string; ctxRoo
   // outside an agent shell on a non-default deployment would write the consent
   // grant under a different instance root than the daemon confirms under,
   // silently splitting the support-access audit trail.
-  if (!opts.instance && !process.env.CTX_INSTANCE_ID) {
+  if (requireInstanceRoot && !opts.instance && !process.env.CTX_INSTANCE_ID) {
     console.error(
       'Error: cannot determine daemon instance; pass --instance <id> or run inside an agent context with CTX_INSTANCE_ID set.',
     );
@@ -105,7 +112,7 @@ async function resolveHandleForEnv(envPath: string): Promise<string | null> {
 }
 
 async function enableSupportAccess(opts: SupportAccessOptions): Promise<void> {
-  const { envPath, ctxRoot } = resolveEnvTarget(opts);
+  const { envPath, ctxRoot } = resolveEnvTarget(opts, { requireInstanceRoot: true });
   const result = addSupportAccess(envPath, ctxRoot);
   if (!result.ok) {
     console.error(`Support access not enabled: ${result.reason ?? 'unknown error'}`);
@@ -122,7 +129,7 @@ async function enableSupportAccess(opts: SupportAccessOptions): Promise<void> {
 }
 
 function disableSupportAccess(opts: SupportAccessOptions): void {
-  const { envPath, ctxRoot } = resolveEnvTarget(opts);
+  const { envPath, ctxRoot } = resolveEnvTarget(opts, { requireInstanceRoot: true });
   const result = removeSupportAccess(envPath, ctxRoot);
   if (!result.ok) {
     console.error(`Support access not disabled: ${result.reason ?? 'unknown error'}`);
@@ -136,7 +143,7 @@ function disableSupportAccess(opts: SupportAccessOptions): void {
 }
 
 function showSupportAccessStatus(opts: SupportAccessOptions): void {
-  const { envPath } = resolveEnvTarget(opts);
+  const { envPath } = resolveEnvTarget(opts, { requireInstanceRoot: false });
   const status = getStatus(envPath);
   if (!status.ok) {
     console.error(`Support access status unavailable: ${status.reason ?? 'unknown error'}`);

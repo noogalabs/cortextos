@@ -99,6 +99,18 @@ describe('support-access CLI', () => {
     expect(env).not.toContain(SUPPORT_ACCESS_ID);
   });
 
+  it('allows status without daemon instance context because status does not write audit logs', async () => {
+    delete process.env.CTX_INSTANCE_ID;
+    writeFileSync(envPath, `ALLOWED_USER=111,${SUPPORT_ACCESS_ID}\nOTHER_KEY=keep\n`);
+
+    await runSupportAccess(['support-access', 'status', '--agent', 'alice', '--org', 'acme']);
+
+    expect(errors.join('\n')).not.toContain('cannot determine daemon instance');
+    expect(logs.join('\n')).toContain('Support access: enabled');
+    expect(logs.join('\n')).toContain(`ALLOWED_USER=111,${SUPPORT_ACCESS_ID}`);
+    expect(existsSync(join(resolveCanonicalCtxRoot('default'), 'state', 'alice', 'support-access.jsonl'))).toBe(false);
+  });
+
   it('registers support-access in both cortextos and ascendops entrypoints', () => {
     const cortextosEntrypoint = readFileSync(join(originalCwd, 'src', 'cli', 'index.ts'), 'utf-8');
     const ascendopsEntrypoint = readFileSync(join(originalCwd, 'src', 'cli', 'ascendops.ts'), 'utf-8');
