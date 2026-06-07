@@ -16,17 +16,18 @@ Run the intake gate on the Property Meld passed in `$ARGUMENTS` (a meld ID like 
 
 1. **Read the meld** named in `$ARGUMENTS` — tenant notes, description, work_location, any attached media, current status.
 2. **Classify emergency vs routine first** — against habitability/safety criteria (see hard rule 3), NOT against the subject line.
-3. **Check for photos / eyes on the problem.** Does the meld carry photos (or an equivalent clear description that lets us pick the right trade with confidence)?
-4. **If it is a true emergency** — route immediate mitigation now with the confirmed emergency facts. If photos are missing, request them from the tenant in parallel; do NOT park an active emergency waiting on photos.
-5. **If it is routine and no photos / clear detail are present** — request photos from the tenant and WAIT. The meld is PARKED at the intake gate as "awaiting tenant photos," not advanced.
-6. **If it is routine and the evidence gate passes** — return `CLEAR_TO_ASSIGN` to the main session with the classification + confirmed problem. The main session then uses the approved assignment workflow for its runtime; this intake template does not invoke a hard-coded downstream skill dependency.
+3. **If gas smell / gas leak is reported** — return `GAS_UTILITY_REFERRAL` with the standard response: tell the tenant to call the gas company. Do NOT request photos first, do NOT classify as `EMERGENCY_NOW`, and do NOT route property-side emergency mitigation.
+4. **Check for photos / eyes on the problem.** Does the meld carry photos (or an equivalent clear description that lets us pick the right trade with confidence)?
+5. **If it is a true emergency** — route immediate mitigation now with the confirmed emergency facts. If photos are missing, request them from the tenant in parallel; do NOT park an active emergency waiting on photos.
+6. **If it is routine and no photos / clear detail are present** — request photos from the tenant and WAIT. The meld is PARKED at the intake gate as "awaiting tenant photos," not advanced.
+7. **If it is routine and the evidence gate passes** — return `CLEAR_TO_ASSIGN` to the main session with the classification + confirmed problem. The main session then uses the approved assignment workflow for its runtime; this intake template does not invoke a hard-coded downstream skill dependency.
 
 ## Hard rules — these fire EVERY time (the slippage these prevent is real)
 
 1. **Photos-and-notes-before-routine-assign — HARD GATE.** No routine assignment until we have eyes on the problem (photos, or detail clear enough to pick the trade right). Blind assignment → wrong trade → wasted truck roll. David: "we know it's right and we rarely do it" — so this gate fires automatically, not when we remember it. If photos are missing on routine work, request + wait; do not advance the meld.
 2. **Tenant photo-request uses generic, plain language.** Ask for "a photo of the problem" in plain words; do NOT name a trade or prescribe a cause in the request. (Generic-noun rule: TUUJCPB 5/24 — David edited my "plumber" → "someone." Default to "someone"/"a tech," never a trade noun, in any tenant-facing intake line.)
-3. **Classify, don't assume — the subject line is not the signal.** An "Emergency meld" subject is an intake CATEGORY, not an urgency signal. Emergency classification requires real habitability/safety criteria from the meld CONTENT (water/gas/electrical/lockout/no-heat/no-AC/habitability), verified against the body — not the subject. (PM "Emergency meld" subject = intake category: caught twice 5/19; verify the activity body before treating as urgent.)
-4. **Emergency dispatch is not photo-blocked.** If the full meld content already proves active water, gas, electrical hazard, lockout, no-heat/no-AC in extreme conditions, or another habitability/safety threat, request missing photos in parallel but route mitigation immediately. Photos improve scope; they do not delay emergency response.
+3. **Classify, don't assume — the subject line is not the signal.** An "Emergency meld" subject is an intake CATEGORY, not an urgency signal. Emergency classification requires real habitability/safety criteria from the meld CONTENT (water/electrical/lockout/no-heat/no-AC/habitability), verified against the body — not the subject. Gas smell is not `EMERGENCY_NOW`; it returns `GAS_UTILITY_REFERRAL` with the standard "call the gas company" response. (PM "Emergency meld" subject = intake category: caught twice 5/19; verify the activity body before treating as urgent.)
+4. **Emergency dispatch is not photo-blocked.** If the full meld content already proves active water, electrical hazard, lockout, no-heat/no-AC in extreme conditions, or another non-gas habitability/safety threat, request missing photos in parallel but route mitigation immediately. Photos improve scope; they do not delay emergency response. Gas smell is different: tell the tenant to call the gas company, not property-side emergency mitigation, and do not add other action wording.
 
 ## Invocation example
 
@@ -35,4 +36,4 @@ Run the intake gate on the Property Meld passed in `$ARGUMENTS` (a meld ID like 
 /meld-intake-triage T76DZIB tenant says water under sink, no photos attached
 ```
 
-The text after the command replaces `$ARGUMENTS`. The main agent stays on its lean model; this gate runs on Sonnet in its own window. It returns exactly one of: `EMERGENCY_NOW` (route mitigation immediately, photos parallel if needed), `AWAITING_TENANT_PHOTOS` (routine work parked), or `CLEAR_TO_ASSIGN` (routine work has enough evidence and classification for the main session's live assignment path).
+The text after the command replaces `$ARGUMENTS`. The main agent stays on its lean model; this gate runs on Sonnet in its own window. It returns exactly one of: `GAS_UTILITY_REFERRAL` (tell tenant to call the gas company), `EMERGENCY_NOW` (route non-gas mitigation immediately, photos parallel if needed), `AWAITING_TENANT_PHOTOS` (routine work parked), or `CLEAR_TO_ASSIGN` (routine work has enough evidence and classification for the main session's live assignment path).
