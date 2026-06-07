@@ -70,7 +70,7 @@ export class FastChecker {
   private frameworkRoot: string;
   private telegramApi?: TelegramAPI;
   private chatId?: string;
-  private allowedUserId?: number;
+  private allowedUserIds?: number[];
 
   // External Telegram handler (set by daemon)
   private telegramMessages: Array<{ formatted: string; ackIds: string[] }> = [];
@@ -262,6 +262,7 @@ export class FastChecker {
       telegramApi?: TelegramAPI;
       chatId?: string;
       allowedUserId?: number;
+      allowedUserIds?: number[];
       gmailWatch?: { query: string; intervalMs: number; processedLabelId?: string };
       slackWatch?: {
         channel: string;
@@ -280,7 +281,7 @@ export class FastChecker {
     this.log = options.log || ((msg) => console.log(`[fast-checker/${agent.name}] ${msg}`));
     this.telegramApi = options.telegramApi;
     this.chatId = options.chatId;
-    this.allowedUserId = options.allowedUserId;
+    this.allowedUserIds = options.allowedUserIds ?? (options.allowedUserId !== undefined ? [options.allowedUserId] : undefined);
     this.ctxThresholdPct = options.ctxRestartThreshold ?? 70;
 
     // Initialize persistent dedup
@@ -312,6 +313,11 @@ export class FastChecker {
     // Load persisted circuit breaker state so --continue restarts don't reset it
     this.ctxCircuitFile = join(paths.stateDir, '.ctx-circuit.json');
     this.loadCtxCircuit();
+  }
+
+  private isAllowedTelegramUser(fromUserId: number | undefined): boolean {
+    if (!this.allowedUserIds || this.allowedUserIds.length === 0) return true;
+    return typeof fromUserId === 'number' && this.allowedUserIds.includes(fromUserId);
   }
 
   /**
@@ -1584,13 +1590,10 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     // SECURITY: callbacks must come from the whitelisted user. Identical
     // check to handleCallback — approval clicks are as sensitive as
     // permission clicks and the same gate applies.
-    if (this.allowedUserId !== undefined) {
-      const fromUserId = query.from?.id;
-      if (fromUserId !== this.allowedUserId) {
-        this.log(`SECURITY: activity-channel callback from unauthorized user ${fromUserId} - rejecting`);
-        try { await activityApi.answerCallbackQuery(callbackQueryId, 'Not authorized'); } catch { /* ignore */ }
-        return;
-      }
+    if (!this.isAllowedTelegramUser(query.from?.id)) {
+      this.log(`SECURITY: activity-channel callback from unauthorized user ${query.from?.id} - rejecting`);
+      try { await activityApi.answerCallbackQuery(callbackQueryId, 'Not authorized'); } catch { /* ignore */ }
+      return;
     }
 
     const apprMatch = data.match(/^appr_(allow|deny)_(approval_\d+_[a-zA-Z0-9]+)$/);
@@ -1668,12 +1671,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
     // SECURITY: callbacks must come from the whitelisted user. Without this,
     // anyone who sees a button (forwarded message, group, etc.) could click it.
-    if (this.allowedUserId !== undefined) {
-      const fromUserId = query.from?.id;
-      if (fromUserId !== this.allowedUserId) {
-        this.log(`SECURITY: callback from unauthorized user ${fromUserId} - rejecting`);
-        return;
-      }
+    if (!this.isAllowedTelegramUser(query.from?.id)) {
+      this.log(`SECURITY: callback from unauthorized user ${query.from?.id} - rejecting`);
+      return;
     }
 
     // Approval callbacks: appr_(allow|deny)_{approvalId}

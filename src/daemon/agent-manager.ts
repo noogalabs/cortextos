@@ -20,6 +20,8 @@ import { processMediaMessage } from '../telegram/media.js';
 import { evaluateShift } from './shift.js';
 import { logEvent } from '../bus/event.js';
 import { stripBom } from '../utils/strip-bom.js';
+import { normalizeAllowedUser } from './allowed-user.js';
+import { confirmSupportAccessOnFirstContact } from '../cli/support-access-notify.js';
 
 type LogFn = (msg: string) => void;
 type AgentStartOptions = { partOfFleetStart?: boolean };
@@ -449,13 +451,13 @@ export class AgentManager {
       // Comma-separated for multi-user (e.g. group chats with Sam + a collaborator).
       // Whitespace tolerated; any non-numeric token rejects the whole list.
       if (allowedUserId) {
-        const ids = allowedUserId.split(',').map((s) => s.trim()).filter(Boolean);
-        if (ids.length === 0 || !ids.every((id) => /^\d+$/.test(id))) {
+        const normalizedAllowedUser = normalizeAllowedUser(allowedUserId);
+        if (!normalizedAllowedUser) {
           log(`SECURITY: ALLOWED_USER must be a comma-separated list of numeric Telegram user IDs (e.g. 123456789,987654321). Refusing to enable Telegram. Fix the .env file.`);
           allowedUserId = undefined;
         } else {
           // Normalize to comma-joined form so downstream gate splits on it
-          allowedUserId = ids.join(',');
+          allowedUserId = normalizedAllowedUser;
         }
       }
 
@@ -565,8 +567,10 @@ export class AgentManager {
       telegramApi,
       chatId,
       // FastChecker only needs the first ID for its single-recipient typing
-      // indicator / quick-checks. Multi-user is enforced by the gates above.
+      // indicator / quick-checks. Callback authorization needs the full
+      // normalized list because callbacks route through FastChecker.
       allowedUserId: allowedUserId ? parseInt(allowedUserId.split(',')[0].trim(), 10) : undefined,
+      allowedUserIds: allowedUserId ? allowedUserId.split(',').map((s) => parseInt(s.trim(), 10)) : undefined,
       gmailWatch: gmailWatchOption,
       slackWatch: slackWatchOption,
       ctxRestartThreshold: config.ctx_restart_threshold,
@@ -736,6 +740,16 @@ export class AgentManager {
         // Message passed ALLOWED_USER gate — reset rejection counter.
         const agentEntry = this.agents.get(name);
         if (agentEntry) agentEntry.telegramRejectCount = 0;
+
+        confirmSupportAccessOnFirstContact({
+          agentEnvPath: agentEnvFile,
+          ctxRoot: this.ctxRoot,
+          api: telegramApi,
+          fromId: msg.from?.id,
+          log,
+        }).catch((err) => {
+          log(`Support access live-confirmation failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
 
         const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
         const msgChatId = msg.chat?.id;

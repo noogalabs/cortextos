@@ -3,8 +3,8 @@ import { IPCServer } from './ipc-server.js';
 import { readdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { join } from 'path';
-import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';
+import { resolveCanonicalCtxRoot } from '../utils/paths.js';
 
 // Each fast-checker registers a process-level SIGUSR1 handler (see
 // fast-checker.ts:102). With >10 active agents the default Node listener cap
@@ -279,7 +279,7 @@ class Daemon {
   constructor() {
     this.instanceId = process.env.CTX_INSTANCE_ID || 'default';
     // Always derive ctxRoot from instanceId to avoid inheriting a parent cortextOS's CTX_ROOT
-    this.ctxRoot = join(homedir(), '.cortextos', this.instanceId);
+    this.ctxRoot = resolveCanonicalCtxRoot(this.instanceId);
   }
 
   async start(): Promise<void> {

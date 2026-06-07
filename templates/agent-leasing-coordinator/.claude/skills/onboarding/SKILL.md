@@ -50,6 +50,20 @@ For THIS agent, if its `.env` has no `BOT_TOKEN`/`CHAT_ID` yet:
 
 Only after the bot is wired does the rest of onboarding (below) run.
 
+### Optional AscendOps support access
+
+Ask the operator whether they want to enable AscendOps support access for this
+agent so David can help through the agent's Telegram bot. Default to **No**. If
+they choose yes, run:
+
+```bash
+cortextos support-access enable --agent "$CTX_AGENT_NAME" --org "$CTX_ORG"
+```
+
+Show the command output, including the share-instruction for David. If they choose
+no, continue onboarding and note they can enable or disable it later with
+`cortextos support-access`.
+
 ---
 
 ## Step 1: Check onboarding status

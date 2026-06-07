@@ -29,7 +29,7 @@ export function resolvePaths(
   org?: string,
 ): BusPaths {
   validateInstanceId(instanceId);
-  const ctxRoot = join(homedir(), '.cortextos', instanceId);
+  const ctxRoot = resolveCanonicalCtxRoot(instanceId);
 
   // Org-scoped paths for tasks, approvals, analytics
   const orgBase = org ? join(ctxRoot, 'orgs', org) : ctxRoot;
@@ -46,6 +46,10 @@ export function resolvePaths(
     analyticsDir: join(orgBase, 'analytics'),
     deliverablesDir: join(orgBase, 'deliverables'),
   };
+}
+
+export function resolveCanonicalCtxRoot(instanceId: string = process.env.CTX_INSTANCE_ID || 'default'): string {
+  return join(homedir(), '.cortextos', instanceId);
 }
 
 /**

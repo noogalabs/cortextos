@@ -562,6 +562,25 @@ describe('FastChecker', () => {
       expect(api.editMessageText).toHaveBeenCalledWith(999, 42, 'Approved');
     });
 
+    it('allows callbacks from any configured ALLOWED_USER id', async () => {
+      const agent = createMockAgent();
+      const api = createMockTelegramApi();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: api,
+        chatId: '999',
+        allowedUserId: 42,
+        allowedUserIds: [42, 99],
+      });
+
+      const query = createCallbackQuery('perm_allow_abcd99', { from: { id: 99, first_name: 'Support' } });
+      await checker.handleCallback(query);
+
+      const responseFile = join(paths.stateDir, 'hook-response-abcd99.json');
+      expect(existsSync(responseFile)).toBe(true);
+      const content = JSON.parse(readFileSync(responseFile, 'utf-8'));
+      expect(content.decision).toBe('allow');
+    });
+
     it('perm_deny writes correct response file', async () => {
       const agent = createMockAgent();
       const api = createMockTelegramApi();
