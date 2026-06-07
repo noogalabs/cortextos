@@ -130,7 +130,8 @@ describe('AgentProcess codex-app-server runtime', () => {
   });
 
   it('sends one direct back-online Telegram notification for a lone codex-app-server start', async () => {
-    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const log = vi.fn();
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' }, log);
     const api = {
       sendChatAction: vi.fn().mockResolvedValue(undefined),
       sendMessage: vi.fn().mockResolvedValue({ ok: true }),
@@ -141,6 +142,7 @@ describe('AgentProcess codex-app-server runtime', () => {
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
     expect(api.sendMessage).toHaveBeenCalledWith('12345', 'Agent codex-app-agent is back online');
+    expect(log).toHaveBeenCalledWith('Telegram back-online notification sent for codex-app-agent');
   });
 
   it('suppresses the direct codex-app-server back-online notification during a fleet start batch', async () => {

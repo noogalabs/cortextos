@@ -228,7 +228,9 @@ export class AgentManager {
     }
 
     try {
-      batch.notifyHandle.api.sendMessage(batch.notifyHandle.chatId, message).catch((err: unknown) => {
+      batch.notifyHandle.api.sendMessage(batch.notifyHandle.chatId, message).then(() => {
+        console.log(`[agent-manager] Telegram fleet back-online notification sent: ${message}`);
+      }).catch((err: unknown) => {
         console.error(`[agent-manager] Fleet back-online notification failed: ${err instanceof Error ? err.message : String(err)}`);
       });
     } catch (err) {
@@ -592,7 +594,9 @@ export class AgentManager {
         } else if (status.status === 'halted') {
           tgApi.sendMessage(tgChatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`).catch(logSendFail('halt'));
         } else if (status.status === 'running' && prevStatusForReset === 'crashed') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`).catch(logSendFail('recovery'));
+          tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`).then(() => {
+            log(`Telegram recovery back-online alert for ${name} sent successfully`);
+          }).catch(logSendFail('recovery'));
         }
       }
       prevStatusForReset = status.status;

@@ -410,6 +410,9 @@ export class FastChecker {
               this.chatId,
               `⚠️ ${agentName} watchdog tripped — ${this.watchdogRestarts.length} auto-restarts in ${winMin}min. Restart loop paused ${resetMin}min. Likely upstream issue. Manual fix: pm2 restart cortextos-daemon`,
             )
+            .then(() => {
+              this.log(`Telegram watchdog circuit-breaker notification sent for ${agentName}`);
+            })
             .catch(() => {});
         }
         this.lastPollCycleCompletedAt = now;
@@ -869,6 +872,9 @@ export class FastChecker {
     if (this.telegramApi && this.chatId) {
       this.telegramApi
         .sendMessage(this.chatId, `Got stuck (${reason}). Hard-restarting now.`)
+        .then(() => {
+          this.log(`Telegram watchdog hard-restart notification sent: ${reason}`);
+        })
         .catch(() => { /* non-critical */ });
     }
     const currentMarker = this.readWatchdogRestartMarker();

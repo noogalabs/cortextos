@@ -349,38 +349,52 @@ describe('AgentManager fleet back-online notification coalescing', () => {
   }
 
   it('suppresses fresh agent-level back-online sends during daemon boot and emits exactly one consolidated notification', async () => {
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     writeTelegramAgent('alice');
     writeTelegramAgent('bob');
     const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
 
-    telegramSendMessageMock.mockClear();
-    await am.discoverAndStart();
+    try {
+      telegramSendMessageMock.mockClear();
+      await am.discoverAndStart();
+      await Promise.resolve();
 
-    expect(telegramSendMessageMock).toHaveBeenCalledTimes(1);
-    expect(telegramSendMessageMock).toHaveBeenCalledWith('chat-1', 'Fleet back online (2/2 agents)');
-    expect(telegramSendMessageMock).not.toHaveBeenCalledWith('chat-1', 'Agent alice is back online');
-    expect(telegramSendMessageMock).not.toHaveBeenCalledWith('chat-1', 'Agent bob is back online');
+      expect(telegramSendMessageMock).toHaveBeenCalledTimes(1);
+      expect(telegramSendMessageMock).toHaveBeenCalledWith('chat-1', 'Fleet back online (2/2 agents)');
+      expect(telegramSendMessageMock).not.toHaveBeenCalledWith('chat-1', 'Agent alice is back online');
+      expect(telegramSendMessageMock).not.toHaveBeenCalledWith('chat-1', 'Agent bob is back online');
+      expect(consoleLogSpy).toHaveBeenCalledWith('[agent-manager] Telegram fleet back-online notification sent: Fleet back online (2/2 agents)');
+    } finally {
+      consoleLogSpy.mockRestore();
+    }
   });
 
   it('sends exactly one consolidated notification after a near-simultaneous restart-all batch completes', async () => {
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
     const sendMessage = vi.fn().mockResolvedValue({ ok: true });
     const api = { sendMessage };
 
-    for (const name of ['alice', 'bob', 'carol']) registerRunningAgent(am, name);
-    vi.spyOn(am, 'stopAgent').mockResolvedValue();
-    vi.spyOn(am, 'startAgent').mockImplementation(async () => {
-      (am as any).captureFleetNotifyHandle(api, 'chat-1');
-    });
+    try {
+      for (const name of ['alice', 'bob', 'carol']) registerRunningAgent(am, name);
+      vi.spyOn(am, 'stopAgent').mockResolvedValue();
+      vi.spyOn(am, 'startAgent').mockImplementation(async () => {
+        (am as any).captureFleetNotifyHandle(api, 'chat-1');
+      });
 
-    await Promise.all([
-      am.restartAgent('alice', { partOfFleetStart: true, fleetTotal: 3, fleetIndex: 0 }),
-      am.restartAgent('bob', { partOfFleetStart: true, fleetTotal: 3, fleetIndex: 1 }),
-      am.restartAgent('carol', { partOfFleetStart: true, fleetTotal: 3, fleetIndex: 2 }),
-    ]);
+      await Promise.all([
+        am.restartAgent('alice', { partOfFleetStart: true, fleetTotal: 3, fleetIndex: 0 }),
+        am.restartAgent('bob', { partOfFleetStart: true, fleetTotal: 3, fleetIndex: 1 }),
+        am.restartAgent('carol', { partOfFleetStart: true, fleetTotal: 3, fleetIndex: 2 }),
+      ]);
+      await Promise.resolve();
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith('chat-1', 'Fleet back online (3/3 agents)');
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith('chat-1', 'Fleet back online (3/3 agents)');
+      expect(consoleLogSpy).toHaveBeenCalledWith('[agent-manager] Telegram fleet back-online notification sent: Fleet back online (3/3 agents)');
+    } finally {
+      consoleLogSpy.mockRestore();
+    }
   });
 
   it('does not coalesce a lone single-agent restart through the fleet batch coordinator', async () => {
@@ -413,6 +427,7 @@ describe('AgentManager fleet back-online notification coalescing', () => {
     expect(statusChanged).toBeDefined();
     statusChanged!({ status: 'crashed', crashCount: 1 });
     statusChanged!({ status: 'running' });
+    await Promise.resolve();
 
     expect((am as any).fleetStartBatch).toBeNull();
     expect(telegramSendMessageMock).toHaveBeenCalledTimes(2);

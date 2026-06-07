@@ -1595,6 +1595,23 @@ describe('FastChecker', () => {
       expect(agent.hardRestartSelf).toHaveBeenCalledTimes(1);
     });
 
+    it('logs successful watchdog hard-restart Telegram notification delivery', async () => {
+      const agent = makeAgentWithDir(join(testDir, 'agent'));
+      const telegramApi = createMockTelegramApi();
+      const log = vi.fn();
+      const checker = new FastChecker(agent, paths, '/framework', {
+        log,
+        telegramApi,
+        chatId: '123',
+      });
+
+      (checker as any).triggerHardRestart('ctx threshold fallback: agent ignored graceful restart');
+      await Promise.resolve();
+
+      expect(telegramApi.sendMessage).toHaveBeenCalledWith('123', 'Got stuck (ctx threshold fallback: agent ignored graceful restart). Hard-restarting now.');
+      expect(log).toHaveBeenCalledWith('Telegram watchdog hard-restart notification sent: ctx threshold fallback: agent ignored graceful restart');
+    });
+
     it('suppresses stale survey-prompt re-fire by high-water and fires on new survey output', () => {
       const nowSpy = vi.spyOn(Date, 'now');
       try {

@@ -1118,8 +1118,12 @@ export class AgentProcess {
         this.telegramChatId,
         `Agent ${this.name} is back online`,
       );
-      if (result && typeof (result as Promise<unknown>).catch === 'function') {
-        (result as Promise<unknown>).catch(() => { /* non-fatal */ });
+      if (result && typeof (result as Promise<unknown>).then === 'function') {
+        (result as Promise<unknown>)
+          .then(() => {
+            this.log(`Telegram back-online notification sent for ${this.name}`);
+          })
+          .catch(() => { /* non-fatal */ });
       }
     } catch {
       /* non-fatal: notification is observability only */
