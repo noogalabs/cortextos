@@ -17,18 +17,23 @@ triggers: ["dane iq rules", "how does triage work", "vendor scoring", "escalatio
 
 Run description through the safety pattern list. First match wins. Order matters: critical before high before medium before low.
 
-#### CRITICAL (riskLevel: critical — evacuate/call immediately)
+#### CRITICAL (riskLevel: critical — act immediately)
 
 | Trigger | Action |
 |---------|--------|
 | sparking / spark from outlet / smoking outlet / electrical burning / burning smell from outlet | Turn off main breaker. Call electrician. |
 | electric shock / got shocked / tingling from outlet | Do not touch. Power off at breaker. |
-| gas smell / smell gas / rotten egg smell / propane smell / natural gas leak | Evacuate. Call gas company. Do not use switches. |
 | flooding / water everywhere / burst pipe / gushing water / pipe burst | Turn off main water valve. Call plumber immediately. |
 | ceiling leak / water through ceiling / ceiling dripping | Move items below. Turn off water. Emergency plumber. |
 | ceiling falling / ceiling collapsed / wall cracking badly / floor sagging | Evacuate. Call emergency services. |
 
 **Exclusions:** "gas station", "gas can", "gas grill", "sparkler", "spark plug", "water bottle", "watering", "small crack" — these exclude their respective patterns.
+
+#### UTILITY REFERRAL (resident calls the utility directly — NOT an emergency vendor dispatch)
+
+| Trigger | Action |
+|---------|--------|
+| gas smell / smell gas / rotten egg smell / propane smell / natural gas leak | Tell the resident to call the gas company directly. This is a utility referral, NOT an emergency: do NOT set urgency "emergency", do NOT auto-dispatch, do NOT run parallel-vendor. Route normally. If the gas company later identifies an owner-side repair, that repair enters the normal work-order flow. |
 
 #### HIGH (riskLevel: high — same-day response, do not wait for next business day)
 
@@ -73,6 +78,8 @@ Priority: (1) safety risk type → (2) equipment in photo → (3) description ke
 | electrical_outlet / minor_electrical | electrician | simple/moderate |
 | door_stuck | window_door | simple |
 
+*Note — gas: `gas_leak` here is the trade for an owner-side repair surfaced AFTER the utility referral (the gas company finds a fault the owner must fix), routed at normal urgency. An initial gas smell is a UTILITY REFERRAL — resident calls the gas company, not an emergency dispatch (see Utility Referral above).*
+
 **Equipment photo → trade:** HVAC/furnace/thermostat → hvac; water heater → plumber; refrigerator/washer/dryer/oven → appliance_repair; toilet/faucet/disposal → plumber; electrical panel/outlet → electrician.
 
 ---
@@ -85,7 +92,7 @@ Priority: (1) safety risk type → (2) equipment in photo → (3) description ke
 | urgent | Impacts daily living but not dangerous (no hot water, AC out in summer) | sequential (#1 first, #2 if declined) |
 | routine | Can wait 24–48h (minor leak, cosmetic) | sequential |
 
-**Hard rule:** If safety riskLevel is "high" or "critical" → urgency must be "emergency".
+**Hard rule:** If safety riskLevel is "high" or "critical" → urgency must be "emergency". **Exception — gas:** a gas smell / suspected gas leak is a UTILITY REFERRAL (resident calls the gas company), not an emergency vendor dispatch — do NOT force "emergency" urgency or vendor dispatch for gas; route it normally (see Utility Referral above).
 
 ---
 
