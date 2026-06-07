@@ -195,9 +195,9 @@ Update the day/night placeholders and any autonomy rules:
 
 ```bash
 # Update day/night mode in SOUL.md
-sed -i '' 's/{{day_mode_start}}/<HH:MM>/g' \
+perl -i -pe 's/{{day_mode_start}}/<HH:MM>/g' \
   "$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/<new_name>/SOUL.md"
-sed -i '' 's/{{day_mode_end}}/<HH:MM>/g' \
+perl -i -pe 's/{{day_mode_end}}/<HH:MM>/g' \
   "$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/<new_name>/SOUL.md"
 ```
 

@@ -250,7 +250,7 @@ AGENT="assistant"
 ORG="myorg"
 
 # Edit .env (replace BOT_TOKEN line)
-sed -i '' "s/^BOT_TOKEN=.*/BOT_TOKEN=<new_token>/" \
+perl -i -pe "s/^BOT_TOKEN=.*/BOT_TOKEN=<new_token>/" \
   "$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT/.env"
 
 # Restart to pick up new token
