@@ -10,7 +10,7 @@
  *
  * The fix routes `--runtime codex-app-server` (with the default --template
  * agent) at templates/agent-codex/, which: (a) documents the bus reply rule
- * prominently in AGENTS.md and TOOLS.md, (b) ships the 24 codex-compatible
+ * prominently in AGENTS.md and TOOLS.md, (b) ships the codex-compatible
  * skills under plugins/cortextos-agent-skills/skills/, and (c) sets runtime
  * + model defaults in config.json.
  *
@@ -111,7 +111,7 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
     expect(cfg.agent_name).toBe('codex-cfg');
   });
 
-  it('copies the 24 codex skills into plugins/cortextos-agent-skills/skills', async () => {
+  it('copies the codex skills into plugins/cortextos-agent-skills/skills', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -128,10 +128,14 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
     const skills = readdirSync(skillsDir, { withFileTypes: true })
       .filter(d => d.isDirectory())
       .map(d => d.name);
-    expect(skills.length).toBe(24);
+    expect(skills.length).toBe(26);
     // Spot check: comms is the skill that teaches the Telegram reply pattern.
     expect(skills).toContain('comms');
     expect(skills).toContain('onboarding');
+    expect(skills).toContain('study-and-borrow');
+    expect(skills).toContain('trending-repo-scout');
+    expect(existsSync(join(skillsDir, 'study-and-borrow', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(skillsDir, 'trending-repo-scout', 'scripts', 'classify-trending.mjs'))).toBe(true);
   });
 
   it('creates ~/.codex/skills/<agent>__<skill> symlinks for every skill', async () => {
@@ -146,13 +150,21 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
     const codexSkillsDir = join(tempHome, '.codex', 'skills');
     expect(existsSync(codexSkillsDir)).toBe(true);
     const links = readdirSync(codexSkillsDir).filter(n => n.startsWith('codex-links__'));
-    expect(links.length).toBe(24);
+    expect(links.length).toBe(26);
+    expect(links).toContain('codex-links__study-and-borrow');
+    expect(links).toContain('codex-links__trending-repo-scout');
 
     // Each entry must be a symlink (not a copy), pointing at the agent's local skill dir.
     for (const link of links) {
       const linkPath = join(codexSkillsDir, link);
       expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
     }
+
+    expect(existsSync(
+      join(tempRoot, 'orgs', 'testorg', 'agents', 'codex-links',
+        'plugins', 'cortextos-agent-skills', 'skills', 'trending-repo-scout',
+        'scripts', 'classify-trending.mjs')
+    )).toBe(true);
   });
 
   it('AGENTS.md and TOOLS.md prominently teach the cortextos bus send-telegram reply rule', async () => {
