@@ -70,33 +70,59 @@ YEST="$(date -u -v-1d +%Y-%m-%d 2>/dev/null || date -u -d 'yesterday' +%Y-%m-%d)
 cat "$EVENTS_DIR/$YEST.jsonl" "$EVENTS_DIR/$TODAY.jsonl" 2>/dev/null \
   | python3 -c "
 import sys, json, collections
-# Only events that UNIQUELY identify one skill are mapped. General action/task
-# events (session_start, task_completed, briefing_sent, task_dispatched, ...) are
-# NOT skill-fires (or are logged by multiple skills) and are ignored. Extend this
-# map as new skill-invocation events are added.
+# Only events that UNIQUELY identify one skill are mapped. This map is derived
+# from templates/orchestrator/.claude/skills/*/SKILL.md log-event commands.
+# General action/task events (session_start, task_completed, briefing_sent,
+# task_dispatched, ...) are NOT skill-fires (or are logged by multiple skills)
+# and are ignored. Extend this map only when the event is owned by one skill.
 EVENT_TO_SKILL = {
+    # heartbeat/SKILL.md
     'agent_heartbeat': 'heartbeat',
+    # auto-skill/SKILL.md
     'skill_activated': 'auto-skill',
     'skill_draft_created': 'auto-skill',
     'skill_rejected': 'auto-skill',
+    # theta-wave/SKILL.md
     'theta_wave_start': 'theta-wave',
     'theta_wave_complete': 'theta-wave',
-    'worker_spawned': 'worker-agents',
+    # worker-agents/SKILL.md. worker_spawned is ambiguous with m2c1-worker.
     'worker_completed': 'worker-agents',
+    # nighttime-mode/SKILL.md
     'nighttime_mode_start': 'nighttime-mode',
     'morning_briefing_ready': 'nighttime-mode',
+    # env-management/SKILL.md
+    'secret_rotated': 'env-management',
+    # m2c1-worker/SKILL.md. worker_spawned is ambiguous with worker-agents.
+    'm2c1_complete': 'm2c1-worker',
+    'm2c1_failed': 'm2c1-worker',
+    # forge/SKILL.md durable candidate queue.
+    'forge_candidate': 'forge',
+}
+IGNORED_EVENTS = {
+    'session_start', 'session_end', 'task_completed', 'task_blocked',
+    'task_created', 'task_dispatched', 'briefing_sent', 'approval_created',
+    'approval_resolved', 'message_sent', 'cron_completed', 'output_created',
+    'guardrail_triggered', 'research_complete', 'worker_spawned'
 }
 c = collections.Counter()
+unmapped = collections.Counter()
 for line in sys.stdin:
     try:
-        skill = EVENT_TO_SKILL.get(json.loads(line).get('event',''))
-        if skill: c[skill] += 1   # unmapped events are ignored, not mis-targeted
+        event = json.loads(line).get('event','')
+        skill = EVENT_TO_SKILL.get(event)
+        if skill:
+            c[skill] += 1
+        elif event and event not in IGNORED_EVENTS:
+            unmapped[event] += 1
     except: pass
 for skill, n in c.most_common(5): print(f'{n:>4}  {skill}')
+if unmapped:
+    skipped = ', '.join(f'{event}={n}' for event, n in unmapped.most_common(5))
+    print(f'WARN unmapped skill event(s) skipped: {skipped}', file=sys.stderr)
 "
 ```
 
-The counter prints **skill names** (already resolved from events via the map above). Pick the top skill, and verify its dir exists at `<agent>/.claude/skills/<skill>/SKILL.md` before auditing — if the resolved skill dir is missing (e.g. a mapped skill was renamed/removed), log a warning and skip rather than audit a wrong or nonexistent skill. If unambiguous (>2x runner-up), use the top skill as the target. If ambiguous, log a warning and skip the run — Dane can manually re-dispatch with explicit inputs.
+The counter prints **skill names** (already resolved from events via the map above). Raw event names such as `agent_heartbeat` must never be used directly as skill names; they resolve through the map first (`agent_heartbeat` -> `heartbeat`). Unmapped skill-like events are warned and skipped rather than guessed. Pick the top skill, and verify its dir exists at `<agent>/.claude/skills/<skill>/SKILL.md` before auditing — if the resolved skill dir is missing (e.g. a mapped skill was renamed/removed), log a warning and skip rather than audit a wrong or nonexistent skill. If unambiguous (>2x runner-up), use the top skill as the target. If ambiguous, log a warning and skip the run — Dane can manually re-dispatch with explicit inputs.
 
 **Override:** if `SKILL_OPTIMIZER_TARGET=<skill-name>` env var is set at invocation, use that instead of the activity-log inference.
 
