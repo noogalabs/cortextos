@@ -169,7 +169,15 @@ export interface EcosystemConfig {
 export interface CommsLintRuleSpec {
   /** Stable identifier used for allowlist removal. Must match /^[a-z0-9:_-]+$/. */
   id: string;
-  /** Regex source as a string (compiled by the loader). Max length 1000. */
+  /**
+   * Regex source as a string (compiled by the loader). Max length 1000.
+   *
+   * SECURITY: this is operator-authored and compiled with `new RegExp`, then run
+   * against every outbound message on the synchronous send path. Config authors
+   * are trusted; the 1000-char cap bounds memory/pattern size, NOT catastrophic
+   * backtracking. A pathological pattern can cause ReDoS and hang sends, so avoid
+   * nested quantifiers like `(a+)+`. Keep patterns simple.
+   */
   pattern: string;
   /** Regex flags; subset of "gimsuy". Defaults to "i" (case-insensitive) to match the hardcoded defaults. */
   flags?: string;

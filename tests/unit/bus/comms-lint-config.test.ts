@@ -283,6 +283,61 @@ describe('comms-lint-config loader', () => {
     expect(resolved.agentName!.id).toBe('agent-name:first');
   });
 
+  // F1: empty / all-invalid `replace` must NOT zero a rule group — it falls back
+  // to the prior layer's resolved set (master plan §4.3 last bullet).
+  it('F1: empty replace array retains the default banned group', () => {
+    writeOrgContext(tmp, 'acme', { banned: { replace: [] } });
+    const resolved = resolveCommsLintRules({ org: 'acme', frameworkRoot: tmp });
+    expect(resolved.banned).toHaveLength(10);
+    expect(ids(resolved.banned)).toEqual(ids(getDefaultCommsLintRules().banned));
+  });
+
+  it('F1: all-invalid replace specs retain the default banned group', () => {
+    writeOrgContext(tmp, 'acme', {
+      banned: {
+        replace: [
+          { id: 'BAD ID!!', pattern: '\\bx\\b', reason: 'bad id' },
+          { id: 'banned:badflags', pattern: '\\bx\\b', flags: 'zz', reason: 'bad flags' },
+          { id: 'banned:badregex', pattern: '([unclosed', reason: 'uncompilable' },
+        ],
+      },
+    });
+    const resolved = resolveCommsLintRules({ org: 'acme', frameworkRoot: tmp });
+    expect(resolved.banned).toHaveLength(10);
+    expect(ids(resolved.banned)).toEqual(ids(getDefaultCommsLintRules().banned));
+  });
+
+  it('F1: empty replace on agentName retains the default agent-name rule (not null)', () => {
+    writeOrgContext(tmp, 'acme', { agentName: { replace: [] } });
+    const resolved = resolveCommsLintRules({ org: 'acme', frameworkRoot: tmp });
+    expect(resolved.agentName).not.toBeNull();
+    expect(resolved.agentName!.id).toBe('agent-name:default');
+  });
+
+  it('F1 control: a single valid replace spec still replaces the whole group', () => {
+    writeOrgContext(tmp, 'acme', {
+      banned: { replace: [{ id: 'banned:only', pattern: '\\bzonk\\b', reason: 'only one' }] },
+    });
+    const resolved = resolveCommsLintRules({ org: 'acme', frameworkRoot: tmp });
+    expect(resolved.banned).toHaveLength(1);
+    expect(resolved.banned[0].id).toBe('banned:only');
+  });
+
+  it('F1 partial: a partially-valid replace uses only the valid specs (no fallback)', () => {
+    writeOrgContext(tmp, 'acme', {
+      banned: {
+        replace: [
+          { id: 'banned:valid', pattern: '\\bzonk\\b', reason: 'valid' },
+          { id: 'banned:badregex', pattern: '([unclosed', reason: 'uncompilable' },
+        ],
+      },
+    });
+    const resolved = resolveCommsLintRules({ org: 'acme', frameworkRoot: tmp });
+    expect(resolved.banned).toHaveLength(1);
+    expect(resolved.banned[0].id).toBe('banned:valid');
+    expect(ids(resolved.banned)).not.toContain('banned:badregex');
+  });
+
   it('never throws and returns defaults even on an internally bogus call', () => {
     // Pass shapes that could trip naive code; loader must stay fail-open.
     const resolved: ResolvedCommsLintRules = resolveCommsLintRules({

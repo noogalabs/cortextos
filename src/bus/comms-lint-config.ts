@@ -186,6 +186,15 @@ function compileRuleSpec(
 /**
  * Merge one group: start from defaults (or `replace` if present), append `add`,
  * then remove any rule whose id is in `allow`. Order: replace -> add -> allow.
+ *
+ * FAIL-OPEN on `replace` (master plan §4.3 last bullet): if `replace` is present
+ * but every spec is invalid/dropped (or the array is empty), the compiled result
+ * is empty and we fall back to the prior layer's resolved set (`defaults`) rather
+ * than zeroing the group. An empty/all-invalid replace is read as "the operator's
+ * replacement failed, keep protecting" — NOT "operator wants zero rules". The
+ * intentional zero-rules path is `allow`-listing rules by id (explicit). A
+ * partially-valid replace (≥1 spec compiles) replaces as normal — only a fully
+ * empty compiled result triggers the fallback.
  */
 function mergeGroup(
   defaults: CommsLintRule[],
@@ -196,9 +205,11 @@ function mergeGroup(
 
   let base: CommsLintRule[];
   if (Array.isArray(cfg.replace)) {
-    base = cfg.replace
+    const compiled = cfg.replace
       .map((spec) => compileRuleSpec(spec, group))
       .filter((r): r is CommsLintRule => r !== null);
+    // Empty/all-invalid replace → keep the prior layer's resolved set (fail open).
+    base = compiled.length > 0 ? compiled : defaults.map((r) => ({ ...r }));
   } else {
     base = defaults.map((r) => ({ ...r }));
   }
