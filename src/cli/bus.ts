@@ -29,6 +29,7 @@ import { createSkillPr } from '../bus/skill-autopr.js';
 import { atomicWriteSync } from '../utils/atomic.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
+import { resolveCommsLintRules, type ResolvedCommsLintRules } from '../bus/comms-lint-config.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
@@ -77,46 +78,38 @@ type OutboundLintResult = {
   ok: boolean;
   phrase?: string;
   reason?: string;
+  suggest?: string;
 };
 
-const BANNED_POSTURE_PATTERNS: RegExp[] = [
-  /\bsleep posture\b/i,
-  /\bstanding by\b/i,
-  /\bstandby\b/i,
-  /\bparked\b/i,
-  /\bon-?deck\b/i,
-  /\bidle\b/i,
-  /\basleep\b/i,
-  /\bsleeping\b/i,
-  /\bwaiting[- ]on[- ]\w+\b/i,
-  /\bholding\b/i,
-];
+// The banned/passive/telegram/agent-name rule data formerly lived as
+// module-level `const` arrays here. It now lives in the loader's defaults
+// (src/bus/comms-lint-config.ts). The lint functions below accept a resolved
+// rule set so per-org / per-agent config can override the defaults; with no
+// config, resolveCommsLintRules({}) returns the byte-for-byte defaults so
+// behavior is unchanged. See master plan §4.5 for the config schema.
 
-const PASSIVE_POSTURE_PATTERNS: RegExp[] = [
-  /\b(standing by|standby|parked|idle|asleep|sleeping|holding)\b/i,
-  /\bwaiting\b/i,
-];
-
-const ACTIVE_WORK_CONTEXT = /\b(working on|implementing|building|testing|reviewing|shipping|debugging|patching|running|opened pr|pr #|commit\b|merging|validating)\b/i;
-const NEXT_SIGNAL_CONTEXT = /\b(next dispatch|next heartbeat|when .* (lands|arrives|finishes)|after .* (lands|arrives|finishes)|upon .* (signal|review|feedback))\b/i;
-
-function lintOutboundMessage(text: string): OutboundLintResult {
-  for (const re of BANNED_POSTURE_PATTERNS) {
-    const m = text.match(re);
+function lintOutboundMessage(text: string, rules: ResolvedCommsLintRules): OutboundLintResult {
+  for (const rule of rules.banned) {
+    const m = text.match(rule.pattern);
     if (m) {
       return {
         ok: false,
         phrase: m[0],
         reason: 'banned jargon',
+        suggest: rule.suggest,
       };
     }
   }
 
-  const hasPassive = PASSIVE_POSTURE_PATTERNS.some((re) => re.test(text));
+  const hasPassive = rules.passive.some((r) => r.pattern.test(text));
   if (hasPassive) {
-    const hasActiveContext = ACTIVE_WORK_CONTEXT.test(text) || NEXT_SIGNAL_CONTEXT.test(text);
+    const hasActiveContext = rules.activeContext.test(text) || rules.nextSignalContext.test(text);
     if (!hasActiveContext) {
-      const m = text.match(PASSIVE_POSTURE_PATTERNS[0]) || text.match(PASSIVE_POSTURE_PATTERNS[1]);
+      let m: RegExpMatchArray | null = null;
+      for (const r of rules.passive) {
+        m = text.match(r.pattern);
+        if (m) break;
+      }
       return {
         ok: false,
         phrase: m?.[0] ?? 'passive posture framing',
@@ -155,9 +148,57 @@ export function emitResult(result: unknown, extraFailStatuses: string[] = []): v
   }
 }
 
-function enforceOutboundLintOrExit(text: string, skipLint: boolean | undefined): void {
-  if (skipLint) return;
-  const result = lintOutboundMessage(text);
+/**
+ * Resolve the comms-lint rule set for the current agent/org context. Reads
+ * per-org and per-agent config (fail-open to defaults). Never throws.
+ */
+function resolveLintRules(): ResolvedCommsLintRules {
+  const env = resolveEnv();
+  return resolveCommsLintRules({
+    org: env.org,
+    agentDir: env.agentDir,
+    frameworkRoot: env.frameworkRoot,
+  });
+}
+
+/**
+ * Print a --suggest dry-run report to stdout and never send. On a would-be
+ * block, surface the offending phrase + the rewrite hint (suggest) or reason.
+ * On a clean message, print a "would pass" confirmation. Either way the caller
+ * must NOT proceed to send (dry-run means dry-run).
+ */
+function printSuggestReport(result: OutboundLintResult): void {
+  if (!result.ok) {
+    const phrase = result.phrase ?? 'unknown';
+    const hint = result.suggest ?? result.reason ?? 'policy violation';
+    console.log(
+      `[--suggest] Would be BLOCKED. Offending phrase: "${phrase}". Suggestion: ${hint}`,
+    );
+  } else {
+    console.log('[--suggest] Would pass comms-lint cleanly (not sent — dry-run).');
+  }
+}
+
+/**
+ * Enforce the base outbound lint at a send site.
+ *
+ * Returns `true` when the caller should PROCEED to send, `false` when it must
+ * RETURN WITHOUT sending. `--skip-lint` short-circuits to proceed. `--suggest`
+ * prints a dry-run report and ALWAYS returns false (never sends). Default
+ * (no flags): block + process.exit(1) on fail, proceed on pass.
+ */
+function enforceOutboundLintOrExit(
+  text: string,
+  skipLint: boolean | undefined,
+  opts?: { suggest?: boolean },
+): boolean {
+  if (skipLint) return true;
+  const rules = resolveLintRules();
+  const result = lintOutboundMessage(text, rules);
+  if (opts?.suggest) {
+    printSuggestReport(result);
+    return false;
+  }
   if (!result.ok) {
     const phrase = result.phrase ?? 'unknown';
     const reason = result.reason ?? 'policy violation';
@@ -168,91 +209,53 @@ function enforceOutboundLintOrExit(text: string, skipLint: boolean | undefined):
     );
     process.exit(1);
   }
+  return true;
 }
 
 // ─── Telegram-only plain-talk patterns (locked 2026-05-22 by Dane C5 dispatch) ───
 // These fire ONLY on send-telegram (outbound to David). Agent-to-agent bus
-// comms stay technical/jargon-permissive — the new patterns catch engineer-
-// speak that confuses non-technical recipients.
-
-type TelegramLintRule = {
-  pattern: RegExp;
-  reason: string;
-  suggest?: string;
-};
-
-const TELEGRAM_BANNED_PATTERNS: TelegramLintRule[] = [
-  {
-    pattern: /\bpr #\d+\b/i,
-    reason: 'PR number leak (David tracks features not PR numbers)',
-    suggest: 'reference the feature/fix by what it does, e.g. "the migration" not "PR #45"',
-  },
-  {
-    pattern: /\bpull request #\d+\b/i,
-    reason: 'PR number leak',
-    suggest: 'reference the feature/fix by what it does',
-  },
-  {
-    // SHA shape: 7-40 hex chars AND must contain at least one a-f letter.
-    // Without the letter requirement the regex matched plain numeric IDs
-    // (phone numbers, dollar amounts, version codes) and blocked valid
-    // Telegram messages. (Aussie + Codex bot catch on PR #51, 2026-05-23.)
-    pattern: /\b(?=[0-9a-f]{7,40}\b)[0-9a-f]*[a-f][0-9a-f]*\b/i,
-    reason: 'commit SHA leak (engineer-speak)',
-    suggest: 'drop the SHA — describe the change instead',
-  },
-  {
-    pattern: /\bcortextos\b/i,
-    reason: 'framework brand leak (cortextos is the internal framework name)',
-    suggest: 'use "AscendOps" (the product David knows)',
-  },
-  {
-    // Em-dash, en-dash, and horizontal bar. David hard rule 2026-05-30:
-    // "we do not use em dashes ever in human communication and writing" —
-    // they read as machine-written and break trust. Regular hyphen-minus
-    // (U+002D) is intentionally NOT matched, so compounds and ranges are fine.
-    pattern: /[–—―]/,
-    reason: 'em-dash banned (reads as AI-written, David hard rule 2026-05-30)',
-    suggest: 'use a comma, period, or parentheses instead, never a long dash',
-  },
-];
-
-const AGENT_NAME_PATTERN: TelegramLintRule = {
-  pattern: /\b(codie|collie|dane|aussie|blue|codex)\b/i,
-  reason: 'agent name in outbound Telegram (David usually wants the outcome not which agent shipped it)',
-  suggest: 'rephrase to describe the work, OR pass --explicit-naming to allow when naming is intentional',
-};
+// comms stay technical/jargon-permissive — the patterns catch engineer-speak
+// that confuses non-technical recipients. Rule data now lives in the loader
+// defaults (rules.telegram, rules.agentName); see src/bus/comms-lint-config.ts.
 
 function lintOutboundTelegramMessage(
   text: string,
   explicitNaming: boolean,
+  rules: ResolvedCommsLintRules,
 ): OutboundLintResult {
   // First run the standard outbound lint (banned jargon + passive posture).
-  const baseResult = lintOutboundMessage(text);
+  const baseResult = lintOutboundMessage(text, rules);
   if (!baseResult.ok) return baseResult;
 
   // Then run Telegram-only banned patterns.
-  for (const rule of TELEGRAM_BANNED_PATTERNS) {
+  for (const rule of rules.telegram) {
     const m = text.match(rule.pattern);
     if (m) {
       return {
         ok: false,
         phrase: m[0],
+        // Fold suggest into reason for backward-compatible stderr text (the
+        // em-dash here is internal CLI output, not a David-facing send), AND
+        // surface suggest separately for --suggest.
         reason: rule.suggest ? `${rule.reason} — ${rule.suggest}` : rule.reason,
+        suggest: rule.suggest,
       };
     }
   }
 
-  // Agent names: BLOCK by default, but allow when caller asserts --explicit-naming.
-  if (!explicitNaming) {
-    const m = text.match(AGENT_NAME_PATTERN.pattern);
+  // Agent names: BLOCK by default, but allow when caller asserts
+  // --explicit-naming. If the agent-name rule was allowlisted away
+  // (rules.agentName === null), skip the gate entirely.
+  if (!explicitNaming && rules.agentName) {
+    const m = text.match(rules.agentName.pattern);
     if (m) {
       return {
         ok: false,
         phrase: m[0],
-        reason: AGENT_NAME_PATTERN.suggest
-          ? `${AGENT_NAME_PATTERN.reason} — ${AGENT_NAME_PATTERN.suggest}`
-          : AGENT_NAME_PATTERN.reason,
+        reason: rules.agentName.suggest
+          ? `${rules.agentName.reason} — ${rules.agentName.suggest}`
+          : rules.agentName.reason,
+        suggest: rules.agentName.suggest,
       };
     }
   }
@@ -260,13 +263,23 @@ function lintOutboundTelegramMessage(
   return { ok: true };
 }
 
+/**
+ * Enforce the Telegram outbound lint at a send site. Same proceed/return-false
+ * contract as enforceOutboundLintOrExit (see its docstring).
+ */
 function enforceTelegramLintOrExit(
   text: string,
   skipLint: boolean | undefined,
   explicitNaming: boolean | undefined,
-): void {
-  if (skipLint) return;
-  const result = lintOutboundTelegramMessage(text, !!explicitNaming);
+  opts?: { suggest?: boolean },
+): boolean {
+  if (skipLint) return true;
+  const rules = resolveLintRules();
+  const result = lintOutboundTelegramMessage(text, !!explicitNaming, rules);
+  if (opts?.suggest) {
+    printSuggestReport(result);
+    return false;
+  }
   if (!result.ok) {
     const phrase = result.phrase ?? 'unknown';
     const reason = result.reason ?? 'policy violation';
@@ -276,6 +289,7 @@ function enforceTelegramLintOrExit(
     );
     process.exit(1);
   }
+  return true;
 }
 
 function resolveAgentBusPaths(agentOverride?: string) {
@@ -350,8 +364,9 @@ busCommand
   .argument('[reply-to]', 'Reply to message ID (optional positional form)')
   .option('--reply-to <id>', 'Reply to message ID')
   .option('--skip-lint', 'Skip outbound comms lint (for quoting/post-mortems only)', false)
+  .option('--suggest', 'Dry-run: print the offending phrase + a rewrite hint and exit 0 without sending', false)
   .option('--force', 'Send even if the recipient agent does not exist (intentional pre-provisioning)', false)
-  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string; skipLint?: boolean; force?: boolean }) => {
+  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string; skipLint?: boolean; suggest?: boolean; force?: boolean }) => {
     // Accept reply-to as either positional arg or --reply-to flag (P2 fix #9)
     const effectiveReplyTo = opts.replyTo ?? replyToArg;
     const validPriorities: Priority[] = ['urgent', 'high', 'normal', 'low'];
@@ -369,7 +384,7 @@ busCommand
 
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    enforceOutboundLintOrExit(text, opts.skipLint);
+    if (!enforceOutboundLintOrExit(text, opts.skipLint, { suggest: opts.suggest })) return;
 
     // Fail loud on an unknown recipient (no orphan inbox file, no event logged)
     // BEFORE the sendMessage() side effect. --force restores warn-and-proceed
@@ -1364,13 +1379,14 @@ busCommand
   .option('--file <path>', 'Send a document/file with caption (any file type)')
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
   .option('--skip-lint', 'Skip outbound comms lint (for quoting/post-mortems only)', false)
+  .option('--suggest', 'Dry-run: print the offending phrase + a rewrite hint and exit 0 without sending', false)
   .option('--explicit-naming', 'Allow agent names in the message body (e.g. when David explicitly asked which agent did something)', false)
-  .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean; skipLint?: boolean; explicitNaming?: boolean }) => {
+  .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean; skipLint?: boolean; suggest?: boolean; explicitNaming?: boolean }) => {
     // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
     // does not expand escapes, so they arrive at argv as 2-char literals and
     // Telegram renders them as visible text. Normalize before send + log.
     message = message.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
-    enforceTelegramLintOrExit(message, opts.skipLint, opts.explicitNaming);
+    if (!enforceTelegramLintOrExit(message, opts.skipLint, opts.explicitNaming, { suggest: opts.suggest })) return;
     // Resolve bot token: agent .env first, then process.env
     const env = resolveEnv();
     let botToken = '';
@@ -2113,10 +2129,11 @@ busCommand
   .argument('<reply>', 'Reply text')
   .argument('[msg-id]', 'Inbox message ID to ACK')
   .option('--skip-lint', 'Skip outbound comms lint (for quoting/post-mortems only)', false)
-  .action((agent: string, reply: string, msgId?: string, opts?: { skipLint?: boolean }) => {
+  .option('--suggest', 'Dry-run: print the offending phrase + a rewrite hint and exit 0 without sending', false)
+  .action((agent: string, reply: string, msgId?: string, opts?: { skipLint?: boolean; suggest?: boolean }) => {
     // Same literal '\n'/'\t' normalize as send-telegram (codex agent fix).
     reply = reply.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
-    enforceOutboundLintOrExit(reply, opts?.skipLint);
+    if (!enforceOutboundLintOrExit(reply, opts?.skipLint, { suggest: opts?.suggest })) return;
     const { mkdirSync, appendFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
