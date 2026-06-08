@@ -34,6 +34,55 @@ export type CapReadout = {
   meta?: Record<string, unknown>;
 };
 
+export type BillingSplitStatus = 'pre_split' | 'split_active';
+
+export type BillingPoolId = 'unified' | 'programmatic';
+
+export type BillingPoolReadout = {
+  pool: BillingPoolId;
+  label: string;
+  source: CapSource | 'unavailable';
+  five_hour_pct?: number;
+  weekly_pct?: number;
+  monthly_credit_pct?: number | null;
+};
+
+export type BillingPoolStrain = {
+  pool: 'programmatic';
+  source: 'programmatic_readout' | 'unavailable';
+  status: 'unavailable' | 'normal' | 'watch' | 'strain';
+  monthly_credit_pct: number | null;
+  watch_threshold_pct: 75;
+  strain_threshold_pct: 85;
+};
+
+export type ClaudeTokenSpendLog = {
+  source: 'codex-tokens-jsonl' | 'unavailable';
+  path: string;
+  entries: number;
+  malformed_lines: number;
+  sessions: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  latest_timestamp: string | null;
+};
+
+export type BillingMeta = {
+  effective_date: '2026-06-15';
+  status: BillingSplitStatus;
+  primary_pool: BillingPoolId;
+  source_binding_todo: string;
+  token_spend: ClaudeTokenSpendLog;
+  pool2_strain: BillingPoolStrain;
+  pools: {
+    unified: BillingPoolReadout;
+    programmatic: BillingPoolReadout;
+  };
+};
+
 export interface GetCurrentCapOpts {
   agent?: string;
   // Test/DI hooks — undocumented in public API.
@@ -55,6 +104,7 @@ const DASHBOARD_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage_summary';
 // estimate source never *under*-reports cap pressure.
 const ESTIMATE_5H_FULL_SECONDS = 5 * 60 * 60;
 const ESTIMATE_WEEKLY_FULL_SECONDS = 7 * 24 * 60 * 60;
+const BILLING_SPLIT_EFFECTIVE_MS = Date.UTC(2026, 5, 15, 0, 0, 0);
 
 // --- Path helpers ---
 
@@ -121,11 +171,11 @@ export async function readHeadersSource(opts?: GetCurrentCapOpts): Promise<CapRe
     ['anthropic-ratelimit-weekly-tokens-limit', 'anthropic-ratelimit-weekly-tokens-remaining'],
     ['anthropic-ratelimit-output-tokens-limit', 'anthropic-ratelimit-output-tokens-remaining'],
   ]);
-
-  // If neither bucket yielded a number, the file is stale/malformed.
+  // Pool-2 source binding is intentionally not guessed before the June 15
+  // billing split. Leave the observed headers shape as a post-split TODO.
   if (fiveHour === null && weekly === null) return null;
 
-  return {
+  return withBillingMeta({
     source: 'headers',
     five_hour_pct: fiveHour ?? 0,
     weekly_pct: weekly ?? 0,
@@ -135,7 +185,7 @@ export async function readHeadersSource(opts?: GetCurrentCapOpts): Promise<CapRe
       captured_at: parsed.captured_at,
       headers_path: path,
     },
-  };
+  }, opts);
 }
 
 function lowercaseKeys(h: Record<string, string | number>): Record<string, string | number> {
@@ -224,17 +274,20 @@ export async function readDashboardSource(opts?: GetCurrentCapOpts): Promise<Cap
     data.weeklyUtilization ??
     data.seven_day_utilization ??
     data.sevenDayUtilization;
+  // Do not guess the /api/oauth/usage_summary Pool-2 field shape before the
+  // real post-June-15 response is observable.
+  if (fiveHourRaw === undefined && weeklyRaw === undefined) {
+    return null;
+  }
 
-  if (fiveHourRaw === undefined && weeklyRaw === undefined) return null;
-
-  return {
+  return withBillingMeta({
     source: 'dashboard',
     five_hour_pct: clampPct(normalizeUtil(fiveHourRaw)),
     weekly_pct: clampPct(normalizeUtil(weeklyRaw)),
     timestamp: new Date().toISOString(),
     agent: resolveAgent(opts),
     meta: { endpoint: DASHBOARD_USAGE_URL },
-  };
+  }, opts);
 }
 
 function normalizeUtil(v: number | undefined): number {
@@ -278,7 +331,7 @@ export function readEstimateSource(opts?: GetCurrentCapOpts): CapReadout {
   const fiveHour = clampPct((uptime / ESTIMATE_5H_FULL_SECONDS) * 100);
   const weekly = clampPct((uptime / ESTIMATE_WEEKLY_FULL_SECONDS) * 100);
 
-  return {
+  return withBillingMeta({
     source: 'estimate',
     five_hour_pct: fiveHour,
     weekly_pct: weekly,
@@ -288,6 +341,169 @@ export function readEstimateSource(opts?: GetCurrentCapOpts): CapReadout {
       confidence: 'low',
       uptime_seconds: uptime,
       note: 'heuristic-only — headers + dashboard both unavailable',
+    },
+  }, opts);
+}
+
+function billingStatus(opts?: GetCurrentCapOpts): BillingSplitStatus {
+  const now = opts?.now?.() ?? Date.now();
+  return now >= BILLING_SPLIT_EFFECTIVE_MS ? 'split_active' : 'pre_split';
+}
+
+function buildBillingMeta(
+  readout: CapReadout,
+  opts?: GetCurrentCapOpts,
+  programmatic?: Pick<BillingPoolReadout, 'monthly_credit_pct' | 'source'>,
+): BillingMeta {
+  const status = billingStatus(opts);
+  const programmaticPct = programmatic?.monthly_credit_pct ?? null;
+  return {
+    effective_date: '2026-06-15',
+    status,
+    primary_pool: status === 'split_active' ? 'programmatic' : 'unified',
+    source_binding_todo:
+      'Observe Anthropic post-June-15 Pool-2 fields before binding /api/oauth/usage_summary or headers.',
+    token_spend: readClaudeTokenSpendLog(opts),
+    pool2_strain: {
+      pool: 'programmatic',
+      source: programmaticPct === null ? 'unavailable' : 'programmatic_readout',
+      status: classifyPool2Strain(programmaticPct),
+      monthly_credit_pct: programmaticPct,
+      watch_threshold_pct: 75,
+      strain_threshold_pct: 85,
+    },
+    pools: {
+      unified: {
+        pool: 'unified',
+        label: 'Pre-June-15 unified Claude usage cap',
+        source: readout.source,
+        five_hour_pct: readout.five_hour_pct,
+        weekly_pct: readout.weekly_pct,
+      },
+      programmatic: {
+        pool: 'programmatic',
+        label: 'Pool 2 — Agent SDK / programmatic monthly credit',
+        source: programmatic?.source ?? 'unavailable',
+        monthly_credit_pct: programmatic?.monthly_credit_pct ?? null,
+      },
+    },
+  };
+}
+
+export function classifyPool2Strain(pct: number | null): BillingPoolStrain['status'] {
+  if (pct === null) return 'unavailable';
+  if (pct >= 85) return 'strain';
+  if (pct >= 75) return 'watch';
+  return 'normal';
+}
+
+function tokenSpendLogPath(opts?: GetCurrentCapOpts): string {
+  return join(resolveCtxRoot(opts), 'logs', resolveAgent(opts), 'codex-tokens.jsonl');
+}
+
+function readClaudeTokenSpendLog(opts?: GetCurrentCapOpts): ClaudeTokenSpendLog {
+  const path = tokenSpendLogPath(opts);
+  const empty: ClaudeTokenSpendLog = {
+    source: 'unavailable',
+    path,
+    entries: 0,
+    malformed_lines: 0,
+    sessions: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    total_tokens: 0,
+    latest_timestamp: null,
+  };
+  if (!existsSync(path)) return empty;
+
+  try {
+    // codex-app-server writes tokenUsage.total, i.e. cumulative session totals,
+    // not per-turn deltas. For fleet spend we therefore keep the largest total
+    // per session; summing every turn row would double-count multi-turn threads.
+    const latestCumulativeBySession = new Map<string, {
+      timestamp: string | null;
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_tokens: number;
+      cache_write_tokens: number;
+      total_tokens: number;
+    }>();
+    let entries = 0;
+    let malformedLines = 0;
+    for (const line of readFileSync(path, 'utf-8').split('\n')) {
+      if (!line.trim()) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        malformedLines += 1;
+        continue;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        malformedLines += 1;
+        continue;
+      }
+      const record = parsed as Record<string, unknown>;
+      const sessionId = typeof record.session_id === 'string' && record.session_id
+        ? record.session_id
+        : `entry-${entries}`;
+      const input = numericField(record.input_tokens);
+      const output = numericField(record.output_tokens);
+      const cacheRead = numericField(record.cache_read_tokens);
+      const cacheWrite = numericField(record.cache_write_tokens);
+      // Codex cached-input counters are subsets of input_tokens (see
+      // CodexAppServerPTY.writeContextStatus); do not add them to spend total.
+      const total = numericField(record.total_tokens, input + output);
+      const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
+      const current = latestCumulativeBySession.get(sessionId);
+      if (!current || total >= current.total_tokens) {
+        latestCumulativeBySession.set(sessionId, {
+          timestamp,
+          input_tokens: input,
+          output_tokens: output,
+          cache_read_tokens: cacheRead,
+          cache_write_tokens: cacheWrite,
+          total_tokens: total,
+        });
+      }
+      entries += 1;
+    }
+
+    const out = { ...empty, source: 'codex-tokens-jsonl' as const, entries };
+    out.malformed_lines = malformedLines;
+    out.sessions = latestCumulativeBySession.size;
+    for (const entry of latestCumulativeBySession.values()) {
+      out.input_tokens += entry.input_tokens;
+      out.output_tokens += entry.output_tokens;
+      out.cache_read_tokens += entry.cache_read_tokens;
+      out.cache_write_tokens += entry.cache_write_tokens;
+      out.total_tokens += entry.total_tokens;
+      if (entry.timestamp && (!out.latest_timestamp || entry.timestamp > out.latest_timestamp)) {
+        out.latest_timestamp = entry.timestamp;
+      }
+    }
+    return out;
+  } catch {
+    return empty;
+  }
+}
+
+function numericField(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function withBillingMeta(
+  readout: CapReadout,
+  opts?: GetCurrentCapOpts,
+  programmatic?: Pick<BillingPoolReadout, 'monthly_credit_pct' | 'source'>,
+): CapReadout {
+  return {
+    ...readout,
+    meta: {
+      ...(readout.meta ?? {}),
+      billing: buildBillingMeta(readout, opts, programmatic),
     },
   };
 }
