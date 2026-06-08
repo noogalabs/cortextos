@@ -41,6 +41,31 @@ cortextos bus check-inbox
 
 ---
 
+## Phase 1B: Forge Weekly-Heavy Build Assembly (MANDATORY)
+
+Run the forge weekly-heavy hook before presenting the weekly review. This hook assembles the week's skill-drift candidates into specs and change-sets for Dane/David gating; it does not auto-merge or runtime-activate anything.
+
+Inputs:
+- `forge_candidate` events logged during daily-light passes or instant-on-miss moments.
+- `docs/ephemeral/forge-runs/candidates.md` if present.
+- Any skill drift surfaced by David corrections, PR review loops, or under-fired skills this week.
+
+Invoke the forge skill in build mode:
+
+```
+/forge --build
+```
+
+Output a `FORGE WEEKLY BUILD` section with:
+- `SKILLS TO SHIP` — new skill specs ready for source PR.
+- `SKILLS TO SHARPEN` — existing skills with proposed diffs.
+- `SKIP / WATCHLIST` — candidates that are not yet proven by a real incident or should wait.
+- For every item: tied incident, proposed hard rule, tracked source home, runtime activation target, validation gate, and dev-side owner.
+
+Hard stop: do not merge, edit live runtime, or auto-activate from this weekly hook. The weekly hook produces the spec/change-set for the gate; dev-side implementation and two-step registration happen only after approval.
+
+---
+
 ## Phase 2: Present Review to User
 
 Format into a comprehensive review and send as chunked Telegram messages:

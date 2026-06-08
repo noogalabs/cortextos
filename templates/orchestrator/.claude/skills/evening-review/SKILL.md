@@ -118,6 +118,29 @@ cat >> "memory/$TODAY.md" << MEMEOF
 MEMEOF
 ```
 
+### Phase 2C: Forge Daily-Light Skill Drift Detect (MANDATORY)
+
+Run the forge daily-light hook after Phase 2B and before Tomorrow Prep. This hook DETECTS only; it never builds or edits skills at night.
+
+Cost-guard first:
+```bash
+TODAY=$(date -u +%Y-%m-%d)
+EVENT_ROOT="${CTX_ROOT}/orgs/${CTX_ORG}/analytics/events"
+find "$EVENT_ROOT" -type f -name "${TODAY}.jsonl" -print0 2>/dev/null \
+  | xargs -0 grep -E "forge_candidate|skill|review|miss|correct|slip|David" 2>/dev/null \
+  | head -50
+```
+
+If there was no meaningful agent activity, no user correction, and no `forge_candidate` event, write `SKILL-DRIFT CANDIDATES: none (cost-guard skipped forge fork)` in the evening output and do not invoke forge.
+
+If the cost-guard finds meaningful activity, invoke the `forge` skill in detect mode for today's fleet activity:
+
+```
+/forge ascendops $(date -u +%Y-%m-%d)
+```
+
+Append a `SKILL-DRIFT CANDIDATES` block to the evening output with HIGH-confidence candidates only. Persist every HIGH candidate before returning by logging a `forge_candidate` event and/or appending to `docs/ephemeral/forge-runs/candidates.md`, so the weekly-heavy build can read it later. Do not build, edit, merge, or activate skills from the daily-light hook.
+
 ---
 
 ## Phase 3: Tomorrow Prep

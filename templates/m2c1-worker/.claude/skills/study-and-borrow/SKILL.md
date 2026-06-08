@@ -65,6 +65,7 @@ If `$ARGUMENTS` is empty, stop and ask for a repo URL or package spec.
 
 3. **Fetch local source only after approval.**
    ```bash
+   set -euo pipefail
    SOURCE_SPEC='<normalized-source-spec>'
    case "$SOURCE_SPEC" in
      *[!A-Za-z0-9._~:/@+-]*)
@@ -73,7 +74,16 @@ If `$ARGUMENTS` is empty, stop and ask for a repo URL or package spec.
        ;;
    esac
    export OPENSRC_HOME="${CTX_ROOT}/state/${CTX_AGENT_NAME}/opensrc-cache"
-   LOCAL_PATH=$(npx opensrc@0.7.2 path "$SOURCE_SPEC")
+   OPENSRC_BIN="${CTX_ROOT}/state/${CTX_AGENT_NAME}/opensrc-install/node_modules/.bin/opensrc"
+   if [ "$("$OPENSRC_BIN" --version 2>/dev/null)" != "opensrc 0.7.2" ]; then
+     echo "opensrc 0.7.2 is required at $OPENSRC_BIN; refusing to fetch source"
+     exit 1
+   fi
+   LOCAL_PATH=$("$OPENSRC_BIN" path "$SOURCE_SPEC")
+   if [ ! -d "$LOCAL_PATH" ]; then
+     echo "opensrc did not resolve a local source directory for $SOURCE_SPEC; refusing to continue"
+     exit 1
+   fi
    ```
    Replace `<normalized-source-spec>` with the normalized source spec. Keep it quoted. Do not run anything inside `LOCAL_PATH`.
 
