@@ -80,7 +80,9 @@ afterEach(() => {
 
 describe('readHeadersSource', () => {
   it('returns null when capture file is missing', async () => {
-    const result = await readHeadersSource({ ctxRoot: tmpRoot, org: ORG, agent: AGENT });
+    const result = await readHeadersSource({
+      ctxRoot: tmpRoot, org: ORG, agent: AGENT, now: () => BEFORE_BILLING_SPLIT,
+    });
     expect(result).toBeNull();
   });
 
@@ -89,7 +91,9 @@ describe('readHeadersSource', () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'last-ratelimit-headers.json'), 'not-json', 'utf-8');
 
-    const result = await readHeadersSource({ ctxRoot: tmpRoot, org: ORG, agent: AGENT });
+    const result = await readHeadersSource({
+      ctxRoot: tmpRoot, org: ORG, agent: AGENT, now: () => BEFORE_BILLING_SPLIT,
+    });
     expect(result).toBeNull();
   });
 
@@ -112,11 +116,14 @@ describe('readHeadersSource', () => {
     expect(result!.agent).toBe(AGENT);
     expect(billingMeta(result!).status).toBe('pre_split');
     expect(billingMeta(result!).primary_pool).toBe('unified');
-    expect(billingMeta(result!).source_binding_todo).toMatch(/post-June-15 Pool-2 fields/);
+    expect(billingMeta(result!).enforcing_pool).toBe('unified');
+    expect(billingMeta(result!).source_binding_todo).toMatch(/UNVERIFIED scaffold/);
     expect(billingMeta(result!).pools.unified.five_hour_pct).toBe(75);
     expect(billingMeta(result!).pools.programmatic.monthly_credit_pct).toBeNull();
     expect(billingMeta(result!).pool2_strain).toMatchObject({
       source: 'unavailable',
+      source_verified: false,
+      enforcement: 'non_enforcing_scaffold',
       status: 'unavailable',
       watch_threshold_pct: 75,
       strain_threshold_pct: 85,
@@ -129,7 +136,9 @@ describe('readHeadersSource', () => {
       'anthropic-ratelimit-input-tokens-remaining': '50',
     });
 
-    const result = await readHeadersSource({ ctxRoot: tmpRoot, org: ORG, agent: AGENT });
+    const result = await readHeadersSource({
+      ctxRoot: tmpRoot, org: ORG, agent: AGENT, now: () => BEFORE_BILLING_SPLIT,
+    });
     expect(result!.five_hour_pct).toBe(75);
   });
 
@@ -141,7 +150,9 @@ describe('readHeadersSource', () => {
       'anthropic-ratelimit-weekly-tokens-remaining': 800,
     });
 
-    const result = await readHeadersSource({ ctxRoot: tmpRoot, org: ORG, agent: AGENT });
+    const result = await readHeadersSource({
+      ctxRoot: tmpRoot, org: ORG, agent: AGENT, now: () => BEFORE_BILLING_SPLIT,
+    });
     expect(result!.five_hour_pct).toBe(10);
     expect(result!.weekly_pct).toBe(20);
     expect(billingMeta(result!).pools.unified.weekly_pct).toBe(20);
@@ -149,7 +160,9 @@ describe('readHeadersSource', () => {
 
   it('returns null when no recognised bucket headers present', async () => {
     writeHeadersFile({ 'x-unrelated': 'foo' });
-    const result = await readHeadersSource({ ctxRoot: tmpRoot, org: ORG, agent: AGENT });
+    const result = await readHeadersSource({
+      ctxRoot: tmpRoot, org: ORG, agent: AGENT, now: () => BEFORE_BILLING_SPLIT,
+    });
     expect(result).toBeNull();
   });
 
@@ -158,7 +171,9 @@ describe('readHeadersSource', () => {
       'anthropic-ratelimit-tokens-limit': 10,
       'anthropic-ratelimit-tokens-remaining': -999,
     });
-    const result = await readHeadersSource({ ctxRoot: tmpRoot, org: ORG, agent: AGENT });
+    const result = await readHeadersSource({
+      ctxRoot: tmpRoot, org: ORG, agent: AGENT, now: () => BEFORE_BILLING_SPLIT,
+    });
     expect(result!.five_hour_pct).toBe(100);
   });
 
@@ -167,7 +182,9 @@ describe('readHeadersSource', () => {
       'Anthropic-Ratelimit-Tokens-Limit': 1000,
       'Anthropic-Ratelimit-Tokens-Remaining': 100,
     });
-    const result = await readHeadersSource({ ctxRoot: tmpRoot, org: ORG, agent: AGENT });
+    const result = await readHeadersSource({
+      ctxRoot: tmpRoot, org: ORG, agent: AGENT, now: () => BEFORE_BILLING_SPLIT,
+    });
     expect(result!.five_hour_pct).toBe(90);
   });
 });
@@ -177,6 +194,7 @@ describe('readDashboardSource', () => {
     const result = await readDashboardSource({
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       fetchImpl: vi.fn() as unknown as typeof fetch,
+      now: () => BEFORE_BILLING_SPLIT,
     });
     expect(result).toBeNull();
   });
@@ -192,6 +210,7 @@ describe('readDashboardSource', () => {
     const result = await readDashboardSource({
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => BEFORE_BILLING_SPLIT,
     });
     expect(result).toBeNull();
     expect(fetchImpl).toHaveBeenCalledOnce();
@@ -204,6 +223,7 @@ describe('readDashboardSource', () => {
     const result = await readDashboardSource({
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => BEFORE_BILLING_SPLIT,
     });
     expect(result).toBeNull();
   });
@@ -219,6 +239,7 @@ describe('readDashboardSource', () => {
     const result = await readDashboardSource({
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => BEFORE_BILLING_SPLIT,
     });
     expect(result).not.toBeNull();
     expect(result!.source).toBe('dashboard');
@@ -238,6 +259,7 @@ describe('readDashboardSource', () => {
     const result = await readDashboardSource({
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => BEFORE_BILLING_SPLIT,
     });
     expect(result!.five_hour_pct).toBe(45);
     expect(result!.weekly_pct).toBe(12);
@@ -254,6 +276,7 @@ describe('readDashboardSource', () => {
     const result = await readDashboardSource({
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => BEFORE_BILLING_SPLIT,
     });
     expect(result!.source).toBe('dashboard');
     const callArgs = fetchImpl.mock.calls[0];
@@ -273,6 +296,7 @@ describe('readDashboardSource', () => {
     const result = await readDashboardSource({
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => BEFORE_BILLING_SPLIT,
     });
     expect(result).toBeNull();
   });
@@ -280,7 +304,9 @@ describe('readDashboardSource', () => {
 
 describe('readEstimateSource', () => {
   it('returns a valid CapReadout with source=estimate', () => {
-    const result = readEstimateSource({ agent: AGENT, uptimeSecs: () => 0 });
+    const result = readEstimateSource({
+      agent: AGENT, uptimeSecs: () => 0, now: () => BEFORE_BILLING_SPLIT,
+    });
     expect(result.source).toBe('estimate');
     expect(result.five_hour_pct).toBe(0);
     expect(result.weekly_pct).toBe(0);
@@ -322,7 +348,9 @@ describe('readEstimateSource', () => {
       },
     ]);
 
-    const result = readEstimateSource({ ctxRoot: tmpRoot, agent: AGENT, uptimeSecs: () => 0 });
+    const result = readEstimateSource({
+      ctxRoot: tmpRoot, agent: AGENT, uptimeSecs: () => 0, now: () => BEFORE_BILLING_SPLIT,
+    });
     const spend = billingMeta(result).token_spend;
     expect(spend.source).toBe('codex-tokens-jsonl');
     expect(spend.entries).toBe(3);
@@ -331,6 +359,8 @@ describe('readEstimateSource', () => {
     expect(spend.output_tokens).toBe(55);
     expect(spend.cache_read_tokens).toBe(40);
     expect(spend.cache_write_tokens).toBe(10);
+    // Cache counters are reported separately; they are subsets of input tokens
+    // and must not be added to the spend total.
     expect(spend.total_tokens).toBe(380);
     expect(spend.latest_timestamp).toBe('2026-06-08T10:10:00Z');
   });
@@ -351,7 +381,9 @@ describe('readEstimateSource', () => {
       },
     ]);
 
-    const result = readEstimateSource({ ctxRoot: tmpRoot, agent: AGENT, uptimeSecs: () => 0 });
+    const result = readEstimateSource({
+      ctxRoot: tmpRoot, agent: AGENT, uptimeSecs: () => 0, now: () => BEFORE_BILLING_SPLIT,
+    });
     const spend = billingMeta(result).token_spend;
     expect(spend.source).toBe('codex-tokens-jsonl');
     expect(spend.entries).toBe(1);
@@ -371,23 +403,45 @@ describe('readEstimateSource', () => {
     const billing = billingMeta(result);
     expect(billing.status).toBe('split_active');
     expect(billing.primary_pool).toBe('programmatic');
+    expect(billing.enforcing_pool).toBe('unified');
+    expect(billing.pool2_strain.enforcement).toBe('non_enforcing_scaffold');
+  });
+
+  it('freezes the clock to cover both billing split states deterministically', () => {
+    try {
+      vi.useFakeTimers();
+
+      vi.setSystemTime(new Date(BEFORE_BILLING_SPLIT));
+      expect(billingMeta(readEstimateSource({ agent: AGENT, uptimeSecs: () => 0 })).status)
+        .toBe('pre_split');
+
+      vi.setSystemTime(new Date(Date.UTC(2026, 5, 15, 0, 0, 1)));
+      expect(billingMeta(readEstimateSource({ agent: AGENT, uptimeSecs: () => 0 })).status)
+        .toBe('split_active');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('scales 5h pct linearly with uptime', () => {
     // Half the 5h window → ~50%
     const halfFiveHours = 2.5 * 60 * 60;
-    const result = readEstimateSource({ agent: AGENT, uptimeSecs: () => halfFiveHours });
+    const result = readEstimateSource({
+      agent: AGENT, uptimeSecs: () => halfFiveHours, now: () => BEFORE_BILLING_SPLIT,
+    });
     expect(result.five_hour_pct).toBeCloseTo(50, 1);
   });
 
   it('clamps to 100 when uptime exceeds the 5h window', () => {
-    const result = readEstimateSource({ agent: AGENT, uptimeSecs: () => 99999999 });
+    const result = readEstimateSource({
+      agent: AGENT, uptimeSecs: () => 99999999, now: () => BEFORE_BILLING_SPLIT,
+    });
     expect(result.five_hour_pct).toBe(100);
     expect(result.weekly_pct).toBe(100);
   });
 
   it('defaults agent to "fleet" when none provided', () => {
-    const result = readEstimateSource({ uptimeSecs: () => 0 });
+    const result = readEstimateSource({ uptimeSecs: () => 0, now: () => BEFORE_BILLING_SPLIT });
     expect(result.agent).toBe('fleet');
   });
 });
@@ -413,6 +467,7 @@ describe('getCurrentCap (fallback ordering)', () => {
     const result = await getCurrentCap({
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => BEFORE_BILLING_SPLIT,
     });
 
     expect(result.source).toBe('headers');
@@ -431,6 +486,7 @@ describe('getCurrentCap (fallback ordering)', () => {
     const result = await getCurrentCap({
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => BEFORE_BILLING_SPLIT,
     });
 
     expect(result.source).toBe('dashboard');
@@ -450,6 +506,7 @@ describe('getCurrentCap (fallback ordering)', () => {
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       fetchImpl: fetchImpl as unknown as typeof fetch,
       uptimeSecs: () => 0,
+      now: () => BEFORE_BILLING_SPLIT,
     });
 
     expect(result.source).toBe('estimate');
@@ -462,6 +519,7 @@ describe('getCurrentCap (fallback ordering)', () => {
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       fetchImpl: vi.fn() as unknown as typeof fetch,
       uptimeSecs: () => 60,
+      now: () => BEFORE_BILLING_SPLIT,
     });
 
     expect(result.source).toBe('estimate');
@@ -471,6 +529,7 @@ describe('getCurrentCap (fallback ordering)', () => {
     const result = await getCurrentCap({
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       uptimeSecs: () => 0,
+      now: () => BEFORE_BILLING_SPLIT,
     });
     expect(result).toBeDefined();
     expect(result.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
@@ -487,6 +546,7 @@ describe('getCurrentCap (fallback ordering)', () => {
     const result = await getCurrentCap({
       ctxRoot: tmpRoot, org: ORG, agent: AGENT,
       uptimeSecs: () => 0,
+      now: () => BEFORE_BILLING_SPLIT,
     });
     // Should fall through to estimate without throwing.
     expect(['dashboard', 'estimate']).toContain(result.source);

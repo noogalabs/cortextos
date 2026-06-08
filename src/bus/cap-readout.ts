@@ -50,6 +50,8 @@ export type BillingPoolReadout = {
 export type BillingPoolStrain = {
   pool: 'programmatic';
   source: 'programmatic_readout' | 'unavailable';
+  source_verified: false;
+  enforcement: 'non_enforcing_scaffold';
   status: 'unavailable' | 'normal' | 'watch' | 'strain';
   monthly_credit_pct: number | null;
   watch_threshold_pct: 75;
@@ -74,6 +76,7 @@ export type BillingMeta = {
   effective_date: '2026-06-15';
   status: BillingSplitStatus;
   primary_pool: BillingPoolId;
+  enforcing_pool: 'unified';
   source_binding_todo: string;
   token_spend: ClaudeTokenSpendLog;
   pool2_strain: BillingPoolStrain;
@@ -171,8 +174,8 @@ export async function readHeadersSource(opts?: GetCurrentCapOpts): Promise<CapRe
     ['anthropic-ratelimit-weekly-tokens-limit', 'anthropic-ratelimit-weekly-tokens-remaining'],
     ['anthropic-ratelimit-output-tokens-limit', 'anthropic-ratelimit-output-tokens-remaining'],
   ]);
-  // Pool-2 source binding is intentionally not guessed before the June 15
-  // billing split. Leave the observed headers shape as a post-split TODO.
+  // Pool-2 source binding is intentionally left unbound until the real
+  // post-June-15 header shape is observable.
   if (fiveHour === null && weekly === null) return null;
 
   return withBillingMeta({
@@ -274,8 +277,8 @@ export async function readDashboardSource(opts?: GetCurrentCapOpts): Promise<Cap
     data.weeklyUtilization ??
     data.seven_day_utilization ??
     data.sevenDayUtilization;
-  // Do not guess the /api/oauth/usage_summary Pool-2 field shape before the
-  // real post-June-15 response is observable.
+  // Pool-2 source binding is intentionally left unbound until the real
+  // post-June-15 /api/oauth/usage_summary shape is observable.
   if (fiveHourRaw === undefined && weeklyRaw === undefined) {
     return null;
   }
@@ -361,12 +364,17 @@ function buildBillingMeta(
     effective_date: '2026-06-15',
     status,
     primary_pool: status === 'split_active' ? 'programmatic' : 'unified',
+    // Gate the trust: until the real post-split Pool-2 source is observed and
+    // bound, the existing unified-window cap signal remains the enforcing one.
+    enforcing_pool: 'unified',
     source_binding_todo:
-      'Observe Anthropic post-June-15 Pool-2 fields before binding /api/oauth/usage_summary or headers.',
+      'UNVERIFIED scaffold: observe real Anthropic post-June-15 Pool-2 fields before binding /api/oauth/usage_summary or headers.',
     token_spend: readClaudeTokenSpendLog(opts),
     pool2_strain: {
       pool: 'programmatic',
       source: programmaticPct === null ? 'unavailable' : 'programmatic_readout',
+      source_verified: false,
+      enforcement: 'non_enforcing_scaffold',
       status: classifyPool2Strain(programmaticPct),
       monthly_credit_pct: programmaticPct,
       watch_threshold_pct: 75,
@@ -453,8 +461,9 @@ function readClaudeTokenSpendLog(opts?: GetCurrentCapOpts): ClaudeTokenSpendLog 
       const output = numericField(record.output_tokens);
       const cacheRead = numericField(record.cache_read_tokens);
       const cacheWrite = numericField(record.cache_write_tokens);
-      // Codex cached-input counters are subsets of input_tokens (see
-      // CodexAppServerPTY.writeContextStatus); do not add them to spend total.
+      // Codex convention: cachedInputTokens is a subset of inputTokens and
+      // total tokens = input + output (src/pty/codex-app-server-pty.ts L979-982).
+      // Do not add cache_read_tokens/cache_write_tokens here; that double-counts.
       const total = numericField(record.total_tokens, input + output);
       const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
       const current = latestCumulativeBySession.get(sessionId);
