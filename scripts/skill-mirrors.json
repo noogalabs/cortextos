@@ -1,0 +1,21 @@
+[
+  {
+    "skill": "trending-repo-scout",
+    "canonical": "templates/agent/.claude/skills/trending-repo-scout",
+    "mirrors": [
+      "templates/agent-codex/plugins/cortextos-agent-skills/skills/trending-repo-scout",
+      "templates/m2c1-worker/.claude/skills/trending-repo-scout",
+      "orgs/ascendops/agents/codie/plugins/cortextos-agent-skills/skills/trending-repo-scout"
+    ],
+    "note": "Shared trending scout skill; local tier checks Codie's deployed runtime copy."
+  },
+  {
+    "skill": "framework-upstream-auto-update",
+    "canonical": "templates/agent/.claude/skills/framework-upstream-auto-update",
+    "mirrors": [
+      "templates/agent-maintenance-director/.claude/skills/framework-upstream-auto-update",
+      "templates/agent-leasing-coordinator/.claude/skills/framework-upstream-auto-update"
+    ],
+    "note": "Template-variant parity only; deployed framework-upstream copies are personalized from placeholders and must not byte-compare against the generic template."
+  }
+]

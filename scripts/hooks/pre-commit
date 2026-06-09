@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+if [[ -f scripts/skill-drift-check.mjs && -f scripts/skill-mirrors.json ]]; then
+  echo "[pre-commit] checking tracked skill mirror drift (ci tier)"
+  node scripts/skill-drift-check.mjs --tier ci
+fi

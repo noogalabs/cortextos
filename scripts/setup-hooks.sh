@@ -4,9 +4,9 @@
 # Run once after cloning:
 #   bash scripts/setup-hooks.sh
 #
-# Installs a pre-push hook that runs npm run build && npm test before
-# any push. If either fails, the push is aborted and you fix it locally
-# rather than failing on CI.
+# Installs local hooks. The pre-commit hook catches declared shared skill drift
+# before template/runtime changes leave the working tree; the pre-push hook runs
+# npm run build && npm test before any push.
 
 set -euo pipefail
 
@@ -33,5 +33,6 @@ install_hook() {
 }
 
 echo "Installing cortextOS git hooks..."
+install_hook pre-commit
 install_hook pre-push
 echo "Done. Hooks active for this repo clone."

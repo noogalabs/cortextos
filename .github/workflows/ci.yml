@@ -22,6 +22,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check tracked skill mirror drift
+        run: node scripts/skill-drift-check.mjs --tier ci
+
       - name: Type check
         run: npm run typecheck
 
