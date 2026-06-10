@@ -26,13 +26,22 @@ import type { BusPaths, InboxMessage, TelegramCallbackQuery } from '../../../src
 
 // Minimal mock for AgentProcess
 function createMockAgent(name = 'test-agent') {
-  return {
+  const agent: any = {
     name,
     isBootstrapped: vi.fn().mockReturnValue(true),
     injectMessage: vi.fn().mockReturnValue(true),
     write: vi.fn(),
     getStatus: vi.fn().mockReturnValue({ status: 'running' }),
-  } as any;
+  };
+  // Mirrors AgentProcess: detailed result wraps the boolean path so tests that
+  // stub injectMessage keep working; tests can also stub injectMessageDetailed
+  // directly to exercise NOT_RUNNING vs DEDUPED handling.
+  agent.injectMessageDetailed = vi.fn((content: string) =>
+    agent.injectMessage(content)
+      ? { ok: true }
+      : { ok: false, code: 'NOT_RUNNING', message: 'not running' },
+  );
+  return agent;
 }
 
 // Minimal mock for TelegramAPI
@@ -967,6 +976,142 @@ describe('FastChecker', () => {
       );
       checker.stop();
       checker.wake();
+    });
+  });
+
+  describe('stop() during bootstrap wait (F5)', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+
+    it('arms no timers when stop() lands while start() is waiting for bootstrap', async () => {
+      const agent = createMockAgent('my-agent');
+      agent.isBootstrapped.mockReturnValue(false); // hold start() inside waitForBootstrap
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      const startPromise = checker.start();
+      // stop() lands during the (up to 30s) bootstrap wait — the common
+      // stop/restart-shortly-after-start case.
+      checker.stop();
+      // Let the bootstrap wait time out and start() resolve.
+      await vi.advanceTimersByTimeAsync(31_000);
+      await startPromise;
+
+      expect((checker as any).heartbeatTimer).toBeNull();
+      expect((checker as any).pollCycleWatchdog).toBeNull();
+      expect((checker as any).gmailWatchTimer).toBeNull();
+
+      // No orphaned heartbeat: a full heartbeat interval later, update-heartbeat
+      // was never invoked for a stopped agent.
+      const execMock = vi.mocked(execFile);
+      execMock.mockClear();
+      await vi.advanceTimersByTimeAsync(50 * 60 * 1000);
+      const heartbeatCalls = execMock.mock.calls.filter(
+        (c) => Array.isArray(c[1]) && (c[1] as string[]).includes('update-heartbeat'),
+      );
+      expect(heartbeatCalls.length).toBe(0);
+    });
+  });
+
+  describe('telegram inject-result handling (F6)', () => {
+    it('re-queues drained Telegram messages on NOT_RUNNING', async () => {
+      const agent = createMockAgent();
+      agent.injectMessageDetailed = vi.fn().mockReturnValue({ ok: false, code: 'NOT_RUNNING', message: 'agent not running' });
+      const checker = new FastChecker(agent, paths, '/tmp/framework') as any;
+      checker.queueTelegramMessage('=== TELEGRAM from Test (chat_id:1) ===\nhello\n');
+      await checker.pollCycle();
+      // Message preserved for retry next cycle
+      expect(checker.telegramMessages.length).toBe(1);
+      await checker.pollCycle();
+      expect(agent.injectMessageDetailed).toHaveBeenCalledTimes(2);
+    });
+
+    it('drops drained Telegram messages on DEDUPED instead of retrying forever', async () => {
+      const agent = createMockAgent();
+      agent.injectMessageDetailed = vi.fn().mockReturnValue({ ok: false, code: 'DEDUPED', message: 'duplicate content' });
+      const checker = new FastChecker(agent, paths, '/tmp/framework') as any;
+      checker.queueTelegramMessage('=== TELEGRAM from Test (chat_id:1) ===\nhello\n');
+      await checker.pollCycle();
+      // Dropped — not re-queued
+      expect(checker.telegramMessages.length).toBe(0);
+      // Next cycle is quiet: no further inject attempts for the dropped message
+      agent.injectMessageDetailed.mockClear();
+      await checker.pollCycle();
+      expect(agent.injectMessageDetailed).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('ctx-threshold watchdog regex (F7)', () => {
+    function primeWatchdog(checker: any): void {
+      // Past the 10-min bootstrap grace so Signal 3 is live
+      checker.bootstrappedAt = Date.now() - 11 * 60 * 1000;
+      checker.stdoutLastChangeAt = Date.now();
+    }
+
+    it('matches a non-Sonnet/Opus/Haiku model badge (e.g. Fable)', () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { ctxRestartThreshold: 70 }) as any;
+      primeWatchdog(checker);
+      writeFileSync(
+        join(paths.logDir, 'stdout.log'),
+        'tool output line\n\x1b[2m[Fable 5] main · 84% context used\x1b[0m\n',
+      );
+      checker.watchdogCheck();
+      expect(agent.injectMessage).toHaveBeenCalledWith(expect.stringContaining('Context window at 84%'));
+    });
+
+    it('still matches the legacy Sonnet-style badge (regression)', () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { ctxRestartThreshold: 70 }) as any;
+      primeWatchdog(checker);
+      writeFileSync(
+        join(paths.logDir, 'stdout.log'),
+        '\x1b[2m[Sonnet 4.5] feature-branch · 75% context used\x1b[0m\n',
+      );
+      checker.watchdogCheck();
+      expect(agent.injectMessage).toHaveBeenCalledWith(expect.stringContaining('Context window at 75%'));
+    });
+
+    it('ignores lowercase non-model bracket tags so log lines do not trigger restarts', () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { ctxRestartThreshold: 70 }) as any;
+      primeWatchdog(checker);
+      writeFileSync(
+        join(paths.logDir, 'stdout.log'),
+        '[info] download progress 85%\n[main] coverage at 92%\n',
+      );
+      checker.watchdogCheck();
+      expect(agent.injectMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('gmail watch decoupled from pollCycle (F8)', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+
+    it('pollCycle never invokes checkGmailWatch', async () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        gmailWatch: { query: 'is:unread', intervalMs: 1 },
+      }) as any;
+      const spy = vi.spyOn(checker, 'checkGmailWatch');
+      await checker.pollCycle();
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('runs checkGmailWatch from its own timer after start(), and stops on stop()', async () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        gmailWatch: { query: 'is:unread', intervalMs: 1 },
+      }) as any;
+      const spy = vi.spyOn(checker, 'checkGmailWatch').mockResolvedValue(undefined);
+      checker.start();
+      await vi.advanceTimersByTimeAsync(65_000); // two 30s gmail ticks
+      expect(spy).toHaveBeenCalled();
+      const callsAtStop = spy.mock.calls.length;
+      checker.stop();
+      checker.wake();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(spy.mock.calls.length).toBe(callsAtStop);
+      expect((checker as any).gmailWatchTimer).toBeNull();
     });
   });
 
