@@ -300,25 +300,24 @@ This is the knowledge you have synthesised over time. Not a log — a living doc
 
 Also update GUARDRAILS.md when you identify a pattern of behaviour that should be explicitly prohibited or corrected — not just for yourself but as a guardrail for future sessions.
 
-Update on every heartbeat and at session end. When you update MEMORY.md, ingest it to your `memory-{agent}` KB collection so it is semantically searchable.
+Update on every heartbeat and at session end. When you update MEMORY.md, ingest it to your `agent-{agent}` KB collection so it is semantically searchable.
 
 ### Layer 3: Knowledge Base — Associative Memory (RAG/ChromaDB)
 
 The knowledge base is a semantic vector store (ChromaDB, Gemini Embedding 2). Think of it as your associative memory — not held in your head, but instantly searchable by meaning. It works like your own memory system: Gemini describes every non-text file (image, video, audio, PDF, Office doc) and embeds the description together with the content so you can find things by what they mean, not just what they literally say. Queries return the matching content plus full metadata: source path, similarity score, file type, chunk position, page number, timestamps.
 
-**Three collections — different management models:**
+**Two collections — scope-routed:**
 
-| Collection | Scope | What goes in | How managed |
+| Collection | Scope route | What goes in | How managed |
 |---|---|---|---|
-| `memory-{agent}` | Private | MEMORY.md + daily memory files | **Auto** — re-indexed on every heartbeat |
-| `private-{agent}` | Private | Your outputs, research docs, workspace files | **Agent-managed** — ingest when you produce something worth keeping |
-| `shared-{org}` | Org-wide | Research findings, reports, org knowledge | **Agent-managed** — ingest when the whole org benefits |
+| `agent-{agent}` | `--scope private` + `--agent <agent>` | MEMORY.md, daily memory files, your outputs, research docs, workspace files | Memory files are re-indexed on every heartbeat; other private artifacts are agent-managed |
+| `shared-{org}` | `--scope shared` | Research findings, reports, org knowledge | Agent-managed — ingest when the whole org benefits |
 
-**memory-{agent} is automatic.** On every heartbeat cycle, re-ingest your memory files so they stay current and searchable:
+**agent-{agent} is automatic for memory and is also the private-scope destination.** On every heartbeat cycle, re-ingest your memory files so they stay current and searchable:
 ```bash
 # Run on every heartbeat
 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --force
 ```
 
 **When to query — before starting any task:**
@@ -326,13 +325,13 @@ cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
 - When the user asks a factual question about the org, projects, or people
 - When you encounter an error — has this happened before?
 - When referencing named entities (clients, projects, systems)
-- To recall your own past work: query `memory-{agent}` or `private-{agent}` specifically
+- To recall your own past work: query with `--agent $CTX_AGENT_NAME` (the default private route is `agent-{agent}`)
 
-**When to ingest private-{agent} and shared-{org} — your judgment:**
-- After completing a task with a notable output → `private-{agent}`
+**When to ingest private scope and shared scope — your judgment:**
+- After completing a task with a notable output → `--scope private` (lands in `agent-{agent}`)
 - After completing research → `shared-{org}` (the whole org benefits)
 - After producing a document, report, or significant file → appropriate scope
-- After the user shares a file with you → `private-{agent}`
+- After the user shares a file with you → `--scope private` (lands in `agent-{agent}`)
 - After a workflow completes → ingest the artifacts
 
 ```bash
@@ -340,7 +339,7 @@ cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
 cortextos bus kb-query "your question" --org $CTX_ORG --agent $CTX_AGENT_NAME
 
 # Query only your memory (past experiences, patterns)
-cortextos bus kb-query "question" --org $CTX_ORG --collection memory-$CTX_AGENT_NAME
+cortextos bus kb-query "question" --org $CTX_ORG --agent $CTX_AGENT_NAME
 
 # Ingest output to your private collection
 cortextos bus kb-ingest /path/to/output --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private

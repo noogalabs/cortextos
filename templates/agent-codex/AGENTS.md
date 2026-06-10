@@ -292,7 +292,7 @@ Knowledge synthesised over time. Patterns that work, user preferences, decisions
 
 ### Layer 3: Knowledge Base — Associative Memory (RAG/ChromaDB)
 
-Semantic vector store. Three collections: `agent-{agent}` (auto-reindexed at heartbeat), `private-{agent}` (your outputs), `shared-{org}` (org-wide).
+Semantic vector store. Two real collections: `agent-{agent}` for private scope (heartbeat memory and private outputs) and `shared-{org}` for shared org knowledge. Use `--agent $CTX_AGENT_NAME` with private scope; do not pass `--collection`.
 
 ```bash
 # Re-index memory at heartbeat

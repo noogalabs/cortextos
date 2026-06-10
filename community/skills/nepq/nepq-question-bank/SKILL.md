@@ -9,7 +9,7 @@ The exact, verbatim question library transcribed from *The NEPQ Black Book of Qu
 
 **Usage:** identify the stage (`../nepq-framework/`), pull the exact phrasing from the matching section, and adapt only the variable bits (prospect name, their stated problem, the offer). Keep the question structure verbatim — the wording is engineered to lower resistance. Verbal pacing matters: `...` marks a deliberate pause; tone notes (curious / concerned / skeptical / playful / challenging) are part of the technique.
 
-> The full 100-page book (every industry-specific script) is ingested to the `private-dane` KB collection. Query it for a specific industry: `cortextos bus kb-query "NEPQ <industry> <stage> questions" --org $CTX_ORG --collection private-dane`. This file carries the generic reusable engine plus representative examples.
+> The full 100-page book (every industry-specific script) is ingested to the `agent-dane` KB collection. Query it for a specific industry: `cortextos bus kb-query "NEPQ <industry> <stage> questions" --org $CTX_ORG --agent dane`. This file carries the generic reusable engine plus representative examples.
 
 ---
 
