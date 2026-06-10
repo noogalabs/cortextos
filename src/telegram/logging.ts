@@ -4,7 +4,19 @@
  * and last-sent cache (lines 111-113).
  */
 
-import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import {
+  appendFileSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  statSync,
+  renameSync,
+  openSync,
+  readSync,
+  closeSync,
+  fstatSync,
+} from 'fs';
 import { join, dirname } from 'path';
 import { logEvent } from '../bus/event.js';
 import { stripControlChars } from '../utils/validate.js';
@@ -21,6 +33,67 @@ import type { BusPaths, TelegramMessage } from '../types/index.js';
  */
 export interface OutboundLogMetadata {
   parseMode?: 'html' | 'none';
+}
+
+// ---------------------------------------------------------------------------
+// F13 disk-leak fix: size-based rotation + tail-reads for message JSONL logs
+// ---------------------------------------------------------------------------
+
+/**
+ * Size threshold (bytes) above which inbound/outbound-messages.jsonl is
+ * rotated to a single `.1` backup. Mirrors the size-check-on-append pattern
+ * in src/daemon/cron-execution-log.ts (rotateIfNeeded). 1 MB current + 1 MB
+ * backup bounds each log at ~2 MB (prod had grown to 4.9 MB unbounded).
+ */
+export const MESSAGE_LOG_ROTATION_BYTES = 1024 * 1024;
+
+/** How many bytes buildRecentHistory tail-reads from each JSONL log. */
+export const HISTORY_TAIL_BYTES = 64 * 1024;
+
+/**
+ * Rotate a JSONL log to `{file}.1` when it exceeds `maxBytes`.
+ * Keeps exactly one backup generation: rename atomically replaces any
+ * previous `.1`. Errors never propagate to the caller (logging must not
+ * crash the send path), matching cron-execution-log.ts rotation semantics.
+ */
+export function rotateMessageLogIfNeeded(
+  filePath: string,
+  maxBytes: number = MESSAGE_LOG_ROTATION_BYTES,
+): void {
+  try {
+    const stat = statSync(filePath);
+    if (stat.size <= maxBytes) return; // within budget
+    renameSync(filePath, filePath + '.1'); // atomic; replaces old backup
+  } catch {
+    // Missing file or rotation failure — never crash the write path.
+  }
+}
+
+/**
+ * Read up to the last `maxBytes` of a file (from the end, without loading
+ * the whole file). When the read starts mid-file, the first (almost
+ * certainly partial) line is dropped so callers only see whole JSONL lines.
+ * Files smaller than `maxBytes` are returned in full.
+ */
+export function readTailSync(filePath: string, maxBytes: number): string {
+  const fd = openSync(filePath, 'r');
+  try {
+    const size = fstatSync(fd).size;
+    if (size === 0) return '';
+    const start = Math.max(0, size - maxBytes);
+    const length = size - start;
+    const buf = Buffer.alloc(length);
+    readSync(fd, buf, 0, length, start);
+    let text = buf.toString('utf-8');
+    if (start > 0) {
+      // We cut at an arbitrary byte offset — drop the leading partial line.
+      const nl = text.indexOf('\n');
+      text = nl >= 0 ? text.slice(nl + 1) : '';
+    }
+    return text;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
@@ -52,7 +125,9 @@ export function logOutboundMessage(
     ...meta,
   });
 
-  appendFileSync(join(logDir, 'outbound-messages.jsonl'), entry + '\n', 'utf-8');
+  const logPath = join(logDir, 'outbound-messages.jsonl');
+  rotateMessageLogIfNeeded(logPath); // F13: bound unbounded JSONL growth
+  appendFileSync(logPath, entry + '\n', 'utf-8');
 }
 
 /**
@@ -73,7 +148,9 @@ export function logInboundMessage(
     agent: agentName,
   });
 
-  appendFileSync(join(logDir, 'inbound-messages.jsonl'), entry + '\n', 'utf-8');
+  const logPath = join(logDir, 'inbound-messages.jsonl');
+  rotateMessageLogIfNeeded(logPath); // F13: bound unbounded JSONL growth
+  appendFileSync(logPath, entry + '\n', 'utf-8');
 }
 
 /**
@@ -147,16 +224,11 @@ export function readLastSent(
 
 /**
  * Build a short recent conversation snippet for context injection.
- * Reads the last cputime         unlimited
-filesize        unlimited
-datasize        unlimited
-stacksize       7MB
-
-
-/**
- * Build a short recent conversation snippet for context injection.
- * Reads the last `limit` messages (combined inbound + outbound) for the
- * given agent/chatId, sorts by timestamp, and returns a formatted string.
+ * Tail-reads the last HISTORY_TAIL_BYTES of each JSONL log (F13: previously
+ * a full readFileSync of multi-MB files on EVERY inbound text), takes the
+ * last `limit` messages (combined inbound + outbound) for the given
+ * agent/chatId, sorts by timestamp, and returns a formatted string.
+ * Falls back to the rotated `.1` backup when the active log is short.
  * Returns null if no history is available.
  */
 export function buildRecentHistory(
@@ -174,12 +246,20 @@ export function buildRecentHistory(
   const entries: Entry[] = [];
 
   const readLines = (filePath: string, speaker: string) => {
-    if (!existsSync(filePath)) return;
+    const want = limit * 2;
     try {
-      const raw = readFileSync(filePath, 'utf-8').trim();
-      if (!raw) return;
-      const lines = raw.split('\n').filter(Boolean);
-      const tail = lines.slice(-(limit * 2));
+      let lines: string[] = [];
+      if (existsSync(filePath)) {
+        lines = readTailSync(filePath, HISTORY_TAIL_BYTES).split('\n').filter(Boolean);
+      }
+      // Just after rotation the active log may be near-empty; top up from
+      // the .1 backup so context survives the rotation boundary.
+      if (lines.length < want && existsSync(filePath + '.1')) {
+        const prev = readTailSync(filePath + '.1', HISTORY_TAIL_BYTES).split('\n').filter(Boolean);
+        lines = [...prev, ...lines];
+      }
+      if (lines.length === 0) return;
+      const tail = lines.slice(-want);
       for (const line of tail) {
         try {
           const obj = JSON.parse(line);

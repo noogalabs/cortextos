@@ -1,8 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'fs';
+import {
+  mkdtempSync,
+  rmSync,
+  readdirSync,
+  readFileSync,
+  mkdirSync,
+  writeFileSync,
+  utimesSync,
+  existsSync,
+  symlinkSync,
+} from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { sendMessage, checkInbox, ackInbox } from '../../../src/bus/message';
+import { sendMessage, checkInbox, ackInbox, pruneProcessed, PROCESSED_TTL_DAYS } from '../../../src/bus/message';
 import { resolvePaths } from '../../../src/utils/paths';
 import type { BusPaths } from '../../../src/types';
 
@@ -137,6 +147,150 @@ describe('Message Bus', () => {
 
       expect(inflightFiles.length).toBe(0);
       expect(processedFiles.length).toBe(1);
+    });
+  });
+
+  describe('pruneProcessed (F12)', () => {
+    /** Create a .json file in a processed dir with an mtime `ageDays` in the past. */
+    function plantProcessedFile(agent: string, name: string, ageDays: number): string {
+      const dir = join(testDir, 'processed', agent);
+      mkdirSync(dir, { recursive: true });
+      const filePath = join(dir, name);
+      writeFileSync(filePath, JSON.stringify({ id: name, text: 'x' }));
+      const past = (Date.now() - ageDays * 24 * 60 * 60 * 1000) / 1000;
+      utimesSync(filePath, past, past);
+      return filePath;
+    }
+
+    it('deletes files older than the TTL and keeps recent files', () => {
+      const oldFile = plantProcessedFile('receiver', '2-1-from-a-aaaaa.json', 45);
+      const recentFile = plantProcessedFile('receiver', '2-2-from-a-bbbbb.json', 5);
+      const todayFile = plantProcessedFile('receiver', '2-3-from-a-ccccc.json', 0);
+
+      const result = pruneProcessed(receiverPaths, PROCESSED_TTL_DAYS);
+
+      expect(existsSync(oldFile)).toBe(false);
+      expect(existsSync(recentFile)).toBe(true);
+      expect(existsSync(todayFile)).toBe(true);
+      expect(result.deleted).toBe(1);
+      expect(result.keptRecent).toBe(2);
+      expect(result.scanned).toBe(3);
+      expect(result.errors).toBe(0);
+    });
+
+    it('respects a custom TTL', () => {
+      const tenDays = plantProcessedFile('receiver', '2-1-from-a-aaaaa.json', 10);
+      const twoDays = plantProcessedFile('receiver', '2-2-from-a-bbbbb.json', 2);
+
+      const result = pruneProcessed(receiverPaths, 7);
+
+      expect(existsSync(tenDays)).toBe(false);
+      expect(existsSync(twoDays)).toBe(true);
+      expect(result.deleted).toBe(1);
+    });
+
+    it('rejects TTLs below the 1-day floor (never deletes recent files)', () => {
+      plantProcessedFile('receiver', '2-1-from-a-aaaaa.json', 0.5);
+      expect(() => pruneProcessed(receiverPaths, 0)).toThrow(/ttlDays/);
+      expect(() => pruneProcessed(receiverPaths, -5)).toThrow(/ttlDays/);
+      expect(() => pruneProcessed(receiverPaths, NaN)).toThrow(/ttlDays/);
+    });
+
+    it('returns zero counts when the processed dir does not exist', () => {
+      const result = pruneProcessed(receiverPaths);
+      expect(result).toEqual({ scanned: 0, deleted: 0, keptRecent: 0, errors: 0 });
+    });
+
+    it('only sweeps the calling agent by default; --all-agents sweeps every agent', () => {
+      const mine = plantProcessedFile('receiver', '2-1-from-a-aaaaa.json', 45);
+      const theirs = plantProcessedFile('other-agent', '2-2-from-b-bbbbb.json', 45);
+
+      pruneProcessed(receiverPaths);
+      expect(existsSync(mine)).toBe(false);
+      expect(existsSync(theirs)).toBe(true); // untouched by per-agent sweep
+
+      pruneProcessed(receiverPaths, PROCESSED_TTL_DAYS, { allAgents: true });
+      expect(existsSync(theirs)).toBe(false);
+    });
+
+    it('ignores non-json files, dotfiles, and subdirectories even when old', () => {
+      const dir = join(testDir, 'processed', 'receiver');
+      mkdirSync(dir, { recursive: true });
+      const past = (Date.now() - 90 * 24 * 60 * 60 * 1000) / 1000;
+
+      const txtFile = join(dir, 'notes.txt');
+      writeFileSync(txtFile, 'keep me');
+      utimesSync(txtFile, past, past);
+
+      const dotFile = join(dir, '.hidden.json');
+      writeFileSync(dotFile, '{}');
+      utimesSync(dotFile, past, past);
+
+      const subDir = join(dir, 'nested');
+      mkdirSync(subDir);
+      const nestedOld = join(subDir, 'old.json');
+      writeFileSync(nestedOld, '{}');
+      utimesSync(nestedOld, past, past);
+
+      const result = pruneProcessed(receiverPaths);
+
+      expect(existsSync(txtFile)).toBe(true);
+      expect(existsSync(dotFile)).toBe(true);
+      expect(existsSync(nestedOld)).toBe(true); // never recurses
+      expect(result.deleted).toBe(0);
+      expect(result.scanned).toBe(0);
+    });
+
+    it('refuses to sweep a processed path that escapes {ctxRoot}/processed/', () => {
+      const outsideDir = join(testDir, 'inbox', 'victim');
+      mkdirSync(outsideDir, { recursive: true });
+      const victim = join(outsideDir, 'msg.json');
+      writeFileSync(victim, '{}');
+      const past = (Date.now() - 90 * 24 * 60 * 60 * 1000) / 1000;
+      utimesSync(victim, past, past);
+
+      const evilPaths = { ...receiverPaths, processed: outsideDir };
+      expect(() => pruneProcessed(evilPaths)).toThrow(/outside processed root/);
+      expect(existsSync(victim)).toBe(true);
+
+      // Traversal via .. inside the configured path is also rejected
+      const traversal = { ...receiverPaths, processed: join(testDir, 'processed', 'receiver', '..', '..', 'inbox', 'victim') };
+      expect(() => pruneProcessed(traversal)).toThrow(/outside processed root/);
+      expect(existsSync(victim)).toBe(true);
+    });
+
+    it('does not follow symlinked agent dirs out of processed/ in --all-agents mode', () => {
+      // A symlink inside processed/ pointing at an external dir full of old files
+      const externalDir = join(testDir, 'external-data');
+      mkdirSync(externalDir, { recursive: true });
+      const externalFile = join(externalDir, 'precious.json');
+      writeFileSync(externalFile, '{}');
+      const past = (Date.now() - 90 * 24 * 60 * 60 * 1000) / 1000;
+      utimesSync(externalFile, past, past);
+
+      mkdirSync(join(testDir, 'processed'), { recursive: true });
+      symlinkSync(externalDir, join(testDir, 'processed', 'evil-link'));
+
+      const result = pruneProcessed(receiverPaths, PROCESSED_TTL_DAYS, { allAgents: true });
+
+      expect(existsSync(externalFile)).toBe(true); // symlinked dir was skipped
+      expect(result.deleted).toBe(0);
+    });
+
+    it('end-to-end: ack then prune removes only aged acked messages', () => {
+      const msgId = sendMessage(senderPaths, 'sender', 'receiver', 'normal', 'fresh');
+      checkInbox(receiverPaths);
+      ackInbox(receiverPaths, msgId);
+
+      // Age one extra planted file past the TTL
+      const aged = plantProcessedFile('receiver', '2-0-from-old-zzzzz.json', 60);
+
+      const result = pruneProcessed(receiverPaths);
+
+      expect(existsSync(aged)).toBe(false);
+      const remaining = readdirSync(receiverPaths.processed).filter(f => f.endsWith('.json'));
+      expect(remaining.length).toBe(1); // the just-acked message survives
+      expect(result.deleted).toBe(1);
     });
   });
 });
