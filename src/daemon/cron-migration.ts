@@ -27,7 +27,7 @@
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import type { CronDefinition, CronEntry } from '../types/index.js';
-import { readCrons, readCronsWithStatus, writeCrons, withCronLock } from '../bus/crons.js';
+import { readCronsWithStatus, writeCrons, withCronLock } from '../bus/crons.js';
 import { CRONS_DIRECTORY } from '../bus/crons-schema.js';
 import { scanAgentDir } from '../utils/cron-teaching-scanner.js';
 
@@ -641,8 +641,24 @@ export function reloadCronsForAgent(
   // 2-5. Serialize the read-modify-write cycle under the agent cron lock to
   // prevent races with `addCron` / `updateCron` / `removeCron` writers (Codex P1).
   withCronLock(agentName, () => {
-    // 2. Read existing state crons.json (may be empty if first-ever sync)
-    const existingState = readCrons(agentName);
+    // 2. Read existing state crons.json (may be empty if first-ever sync).
+    // Guard corrupt STATE the same way corrupt CONFIG is guarded above: a
+    // catastrophic parse failure (crons.json AND its .bak both unparseable)
+    // returns corrupt=true with an empty list. Proceeding would treat state as
+    // empty and OVERWRITE the unrecoverable file with config-only crons, wiping
+    // live-only orphans + runtime metadata (fire_count, last_fired_at). Fail
+    // loud, no write, preserve the file for manual recovery. (Single-file
+    // corruption self-heals earlier via the crons.json.bak fallback.)
+    const existingRead = readCronsWithStatus(agentName);
+    if (existingRead.corrupt) {
+      const msg =
+        `crons.json for "${agentName}" is corrupt (primary + .bak both unparseable) — ` +
+        `reload aborted, file preserved for recovery (no overwrite)`;
+      log(`ERROR: ${msg}`);
+      result.error = msg;
+      return;
+    }
+    const existingState = existingRead.crons;
     const existingByName = new Map(existingState.map(c => [c.name, c]));
 
     // 3. Build merged crons array: for each config entry, convert + merge runtime fields
@@ -716,4 +732,76 @@ export function reloadCronsForAgent(
   );
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// sync — boot-time config.json → crons.json synchronization
+//
+// Closes the cron-sync gap: migrateCronsForAgent is marker-gated and runs ONCE
+// per agent, so any cron added to config.json AFTER the first migration never
+// reached crons.json (the canonical live source the CronScheduler reads) unless
+// an operator manually ran `cortextos bus reload-crons`. syncCronsForAgent is
+// the daemon's boot-time entry point: first boot migrates exactly as before;
+// every subsequent boot reconciles config.json into crons.json via the
+// merge-aware reloadCronsForAgent (runtime fields preserved, orphans kept,
+// never prunes, fail-loud no-op on missing/corrupt config.json).
+// ---------------------------------------------------------------------------
+
+export interface SyncResult {
+  agentName: string;
+  /** Which path ran: first-boot migration or post-migration reconcile. */
+  mode: 'migrated' | 'reconciled';
+  /** Set when mode === 'migrated'. */
+  migration?: MigrationResult;
+  /** Set when mode === 'reconciled'. */
+  reload?: ReloadResult;
+}
+
+/**
+ * Ensure an agent's crons.json reflects its config.json `crons` array.
+ *
+ * - Not yet migrated (no `.crons-migrated` marker): runs the one-shot
+ *   migration (unchanged semantics, marker written).
+ * - Already migrated: runs {@link reloadCronsForAgent} with `prune: false` —
+ *   config-side adds/edits land in crons.json, runtime metadata
+ *   (`fire_count`, `last_fired_at`, `last_fire_attempted_at`, `created_at`)
+ *   is preserved on name matches, and live-only orphan crons (added via
+ *   `bus add-cron`, absent from config.json) are kept. Missing or unparseable
+ *   config.json is a logged no-op — crons.json is never wiped.
+ *
+ * Called by the daemon on every agent start (daemon boot starts each agent
+ * through `startAgent`, and restarts go stopAgent → startAgent), so editing
+ * config.json + restarting now reaches the live scheduler without a manual
+ * `bus reload-crons`.
+ */
+export function syncCronsForAgent(
+  agentName: string,
+  configJsonPath: string,
+  ctxRoot: string,
+  options: MigrationOptions = {},
+): SyncResult {
+  const log = options.log ?? ((msg: string) => console.log(`[cron-sync] ${msg}`));
+
+  const migration = migrateCronsForAgent(agentName, configJsonPath, ctxRoot, {
+    ...options,
+    log,
+  });
+
+  if (migration.status !== 'skipped-already-migrated') {
+    // First boot (or no-config / no-crons / corrupt-config dispositions) —
+    // migration core already handled merge/fail-loud semantics; nothing more
+    // to reconcile this boot.
+    return { agentName, mode: 'migrated', migration };
+  }
+
+  // Marker present: migration is permanently a no-op for this agent. Reconcile
+  // config.json into crons.json so post-migration config edits reach the live
+  // scheduler. prune:false — orphan removal stays an explicit operator action
+  // (`bus reload-crons --prune`), never an automatic boot side-effect.
+  const reload = reloadCronsForAgent(agentName, configJsonPath, {
+    prune: false,
+    log,
+  });
+
+  return { agentName, mode: 'reconciled', reload };
 }

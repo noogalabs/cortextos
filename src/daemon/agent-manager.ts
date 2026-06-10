@@ -7,7 +7,7 @@ import { FastChecker } from './fast-checker.js';
 import { SlackSocketListener } from './slack-socket-listener.js';
 import { resolveSlackInboundMode } from './slack-inbound-mode.js';
 import { CronScheduler } from './cron-scheduler.js';
-import { migrateCronsForAgent } from './cron-migration.js';
+import { syncCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -645,13 +645,29 @@ export class AgentManager {
       return;
     }
 
-    // Subtask 2.2: Auto-migrate crons from config.json → crons.json before
-    // starting the scheduler, so the scheduler always has a populated crons.json
-    // to read from.  The migration is idempotent (marker file prevents re-runs).
+    // Sync crons from config.json → crons.json before starting the scheduler,
+    // so the scheduler always has a populated, up-to-date crons.json to read.
+    // First boot: one-shot migration (marker-gated, unchanged semantics).
+    // Every later boot: merge-aware reconcile so crons added to config.json
+    // AFTER the first migration reach the live scheduler (cron-sync gap fix).
+    // Runtime metadata (fire_count, last_fired_at) and live-only orphan crons
+    // are preserved; missing/corrupt config.json is a logged no-op.
     const configJsonPath = join(agentDir, 'config.json');
-    migrateCronsForAgent(name, configJsonPath, this.ctxRoot, {
-      log: (msg) => log(`[migration] ${msg}`),
-    });
+    try {
+      syncCronsForAgent(name, configJsonPath, this.ctxRoot, {
+        log: (msg) => log(`[migration] ${msg}`),
+      });
+    } catch (err) {
+      // Never let a cron-sync failure abort agent startup — the scheduler
+      // below still starts from whatever crons.json currently holds.
+      log(`[migration] cron sync failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // If a scheduler was lazy-wired during the start-window gap (see
+    // reloadCrons), make it re-read the just-reconciled crons.json. In the
+    // normal path no scheduler exists yet and startAgentCronScheduler below
+    // reads the merged file fresh.
+    this.cronSchedulers.get(name)?.reload();
 
     // Wire daemon-level CronScheduler for this agent.
     // The scheduler reads crons.json, fires crons, and injects prompts into
