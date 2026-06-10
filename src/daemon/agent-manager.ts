@@ -970,7 +970,15 @@ export class AgentManager {
       // — follow-up task_1776054009969_099 tracks migrating to a dedicated
       // singleton or Telegram webhook if the coupling ever causes real
       // operator pain. Non-orchestrator agents skip this entirely.
-      await this.maybeStartActivityChannelPoller(name, org, agentDir, log);
+      //
+      // F3 fix: pass resolvedOrg, not the raw `org` parameter. Restart
+      // paths (restartAgent / queued pendingRestarts) call
+      // startAgent(name, '') with no org, so the raw value is empty and
+      // the poller early-returned — Approve/Deny activity-channel buttons
+      // silently died after every orchestrator restart until full daemon
+      // reboot. resolvedOrg is computed via resolveAgentOrg() above and
+      // is always non-empty.
+      await this.maybeStartActivityChannelPoller(name, resolvedOrg, agentDir, log);
     }
   }
 
@@ -1280,7 +1288,14 @@ export class AgentManager {
       frameworkRoot: this.frameworkRoot,
       agentName: name,
       agentDir: dir,
-      org: this.org,
+      // F4 fix (BUG-043 class): resolve the org through resolveAgentOrg()
+      // instead of the daemon's startup org. Workers are ephemeral and never
+      // exist under orgs/*/agents/, so resolve via the spawning parent agent
+      // when one is given (the common path — bus spawn-worker always passes
+      // the caller). Falls back to the worker's own name, whose resolution
+      // chain ends at this.org — identical to the old behavior for
+      // parentless workers on single-org installs.
+      org: this.resolveAgentOrg(parent ?? name),
       projectRoot: this.frameworkRoot,
     };
 
@@ -1429,8 +1444,12 @@ export class AgentManager {
       if (suppression) {
         console.log(`[daemon] cron suppressed off-shift for ${agentName}: ${cron.name} (mode=${suppression.mode})`);
         try {
-          const paths = resolvePaths(agentName, this.instanceId, this.org);
-          logEvent(paths, agentName, this.org || '', 'action', 'cron_suppressed_off_shift', 'info', {
+          // F4 fix (BUG-043 class): resolve the agent's true org instead of
+          // the daemon's startup org, so suppression events land in the
+          // correct org's event log on multi-org installs.
+          const resolvedOrg = this.resolveAgentOrg(agentName);
+          const paths = resolvePaths(agentName, this.instanceId, resolvedOrg);
+          logEvent(paths, agentName, resolvedOrg || '', 'action', 'cron_suppressed_off_shift', 'info', {
             agent: agentName,
             cron: cron.name,
             mode: suppression.mode,

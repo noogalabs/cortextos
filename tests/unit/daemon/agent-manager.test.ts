@@ -61,11 +61,26 @@ vi.mock('../../../src/telegram/api.js', () => ({
 
 vi.mock('../../../src/telegram/poller.js', () => ({
   TelegramPoller: class {
+    // 'stopped-externally' makes startAgent's Conflict-restart wrapper exit
+    // after the first (no-op) start() instead of looping with real 30s sleeps.
+    lastExitReason = 'stopped-externally';
     start() { /* no-op */ }
     stop() { /* no-op */ }
     onMessage() { /* no-op */ }
     onCallback() { /* no-op */ }
     onReaction() { /* no-op */ }
+  },
+}));
+
+// Mock WorkerProcess so spawnWorker tests don't spawn real PTY sessions.
+// workerSpawnMock captures the CtxEnv passed to spawn() for org assertions.
+const workerSpawnMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../../../src/daemon/worker-process.js', () => ({
+  WorkerProcess: class {
+    constructor() { /* no-op */ }
+    onDone() { /* no-op */ }
+    isFinished() { return true; }
+    spawn = workerSpawnMock;
   },
 }));
 
@@ -670,5 +685,141 @@ describe('AgentManager.evaluateCronShiftSuppression - wake_on_fire bypass', () =
     const am = makeManager(undefined);
     const result = (am as any).evaluateCronShiftSuppression('alice', baseCron);
     expect(result).toBeNull();
+  });
+});
+
+describe('AgentManager.startAgent - F3 fix (activity-channel poller gets resolved org on restart path)', () => {
+  // F3 regression target: restartAgent() and the queued pendingRestarts path
+  // call startAgent(name, '') — no org argument. startAgent computes
+  // resolvedOrg via resolveAgentOrg(), but the activity-channel poller call
+  // passed the RAW `org` parameter (undefined on restart), so
+  // maybeStartActivityChannelPoller early-returned and the orchestrator's
+  // Telegram Approve/Deny buttons silently died after every restart until a
+  // full daemon reboot. This test drives startAgent restart-style and pins
+  // that the poller receives the RESOLVED org.
+
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+  let prevCtxRoot: string | undefined;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-f3-activity-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    const agentDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+    mkdirSync(agentDir, { recursive: true });
+    // Telegram credentials + polling enabled so startAgent reaches the
+    // activity-channel poller call site (gated on telegram_polling !== false).
+    writeFileSync(
+      join(agentDir, '.env'),
+      'BOT_TOKEN=123:abc\nCHAT_ID=chat-1\nALLOWED_USER=42\n',
+    );
+    writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ telegram_polling: true }));
+    // Sandbox CronScheduler's crons.json lookup (honors CTX_ROOT).
+    prevCtxRoot = process.env.CTX_ROOT;
+    process.env.CTX_ROOT = ctxRoot;
+  });
+
+  afterEach(() => {
+    if (prevCtxRoot === undefined) {
+      delete process.env.CTX_ROOT;
+    } else {
+      process.env.CTX_ROOT = prevCtxRoot;
+    }
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('passes the resolved org (not the raw empty restart-path org) to maybeStartActivityChannelPoller', async () => {
+    // Daemon startup org deliberately differs from the agent's real org so
+    // the assertion can distinguish "resolved via resolveAgentOrg()" from
+    // "fell back to this.org".
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'daemonorg');
+    const activitySpy = vi
+      .spyOn(am as any, 'maybeStartActivityChannelPoller')
+      .mockResolvedValue(undefined);
+
+    try {
+      // Restart-style invocation: exactly what restartAgent (:startAgent(name, ''))
+      // and the queued pendingRestarts path use — no agentDir, no org.
+      await am.startAgent('alice', '');
+
+      expect(activitySpy).toHaveBeenCalledTimes(1);
+      const [calledName, calledOrg] = activitySpy.mock.calls[0];
+      expect(calledName).toBe('alice');
+      // Before the F3 fix this was `undefined` (the raw org parameter) and
+      // the poller early-returned. It must be the resolved org.
+      expect(calledOrg).toBe('acme');
+    } finally {
+      await am.stopAgent('alice');
+    }
+  });
+
+  it('still passes the explicit org through on the boot path (no regression)', async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'daemonorg');
+    const activitySpy = vi
+      .spyOn(am as any, 'maybeStartActivityChannelPoller')
+      .mockResolvedValue(undefined);
+
+    try {
+      // Boot path: discoverAndStart passes agentDir + org explicitly.
+      const agentDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+      await am.startAgent('alice', agentDir, undefined, 'acme');
+
+      expect(activitySpy).toHaveBeenCalledTimes(1);
+      expect(activitySpy.mock.calls[0][1]).toBe('acme');
+    } finally {
+      await am.stopAgent('alice');
+    }
+  });
+});
+
+describe('AgentManager.spawnWorker - F4 fix (CtxEnv.org resolved, not daemon startup org)', () => {
+  // F4 regression target (BUG-043 class): spawnWorker built CtxEnv with
+  // org: this.org — the daemon's startup org. On a multi-org install, a
+  // worker spawned on behalf of an agent in another org inherited the wrong
+  // CTX_ORG. The fix routes through resolveAgentOrg(parent ?? name).
+
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+
+  beforeEach(() => {
+    workerSpawnMock.mockClear();
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-f4-worker-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    // Daemon starts with org 'acme'; the spawning parent agent lives in widgetco.
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'orgs', 'widgetco', 'agents', 'parenty'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("resolves the worker's org from its parent agent on a multi-org install", async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+
+    await am.spawnWorker('w1', join(testDir, 'workdir'), 'do stuff', 'parenty');
+
+    expect(workerSpawnMock).toHaveBeenCalledTimes(1);
+    const env = workerSpawnMock.mock.calls[0][0];
+    // Before the F4 fix this was 'acme' (this.org) regardless of parent.
+    expect(env.org).toBe('widgetco');
+  });
+
+  it('falls back to the daemon startup org for parentless workers (old behavior preserved)', async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+
+    await am.spawnWorker('w2', join(testDir, 'workdir'), 'do stuff');
+
+    expect(workerSpawnMock).toHaveBeenCalledTimes(1);
+    const env = workerSpawnMock.mock.calls[0][0];
+    // Worker name 'w2' exists in no org dir → resolution chain falls back to
+    // this.org, identical to pre-fix behavior on single-org installs.
+    expect(env.org).toBe('acme');
   });
 });
