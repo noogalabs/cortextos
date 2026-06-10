@@ -63,9 +63,24 @@ export const MAX_PARTIAL_HOLDBACK = 2048;
  * A trailing substring that could be the PREFIX of a JWT split across a
  * chunk boundary: `eyJ` followed by up to two dot-separated base64url
  * segments, anchored at end-of-string. Note: segments here have no
- * minimum length — a boundary can fall anywhere inside the token.
+ * minimum length — a boundary can fall anywhere inside the token,
+ * INCLUDING inside the `eyJ` header prefix itself. The `ey?` alternative
+ * holds back a bare trailing `e` or `ey` so a token split after the
+ * first or second prefix byte (chunk 1 ends `...e`, chunk 2 starts
+ * `yJ...`) is still reassembled and redacted. Without it, neither chunk
+ * matches JWT_PATTERN on its own and the full token reaches the disk
+ * log once OutputBuffer's writes are concatenated. The cost is tiny: at
+ * most 2 extra bytes deferred to the next chunk (or flushed verbatim at
+ * close() — a bare prefix fragment carries no token material).
  */
-const PARTIAL_JWT_AT_END = /eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*){0,2}$/;
+const PARTIAL_JWT_AT_END = /(?:eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*){0,2}|ey?)$/;
+
+/**
+ * A held tail that is ONLY a fragment of the `eyJ` header prefix —
+ * contains no header/payload/signature bytes, so it is safe to emit
+ * verbatim if the stream ends while it is held (see OutputBuffer.close).
+ */
+export const BARE_PREFIX_FRAGMENT = /^(?:e|ey|eyJ)$/;
 
 /** A string that is, in its entirety, a complete JWT shape. */
 const COMPLETE_JWT = /^eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}$/;

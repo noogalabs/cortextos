@@ -176,6 +176,10 @@ export class AgentPTY {
     this.pty.onExit(({ exitCode, signal }) => {
       this._alive = false;
       this.pty = null;
+      // Flush any held-back partial-JWT tail — the stream is over, so the
+      // hold can never be resolved by a next chunk. Writes an explicit
+      // marker (or the bare prefix fragment) instead of dropping bytes.
+      this.outputBuffer.close();
       // Cancel pending trust-prompt timers — the PTY they targeted is gone,
       // and they must not fire against a future respawn on this instance.
       this.clearTrustPromptTimers();
@@ -297,6 +301,11 @@ export class AgentPTY {
         // The process may have exited between the null-check and the kill;
         // a throw here must not propagate into stop()/restart paths.
       }
+      // Belt-and-suspenders: onExit normally fires after kill and flushes
+      // the held tail, but if the event loop tears down first (daemon
+      // shutdown) the hold would be lost. close() is idempotent, so the
+      // subsequent onExit flush is a no-op.
+      this.outputBuffer.close();
     }
   }
 

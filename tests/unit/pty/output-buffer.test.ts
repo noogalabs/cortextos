@@ -192,3 +192,127 @@ describe('OutputBuffer redaction', () => {
     expect(written).not.toContain('[REDACTED_JWT]');
   });
 });
+
+describe('OutputBuffer redaction — split inside the eyJ prefix (P1 regression)', () => {
+  // The chunk boundary can fall INSIDE the `eyJ` header prefix. The old
+  // holdback regex required the full `eyJ` to be present, so a chunk
+  // ending `...e` or `...ey` was emitted to the disk log immediately;
+  // chunk 2 (starting `yJ...`/`J...`) never matched JWT_PATTERN either,
+  // and the concatenated log contained the full token unredacted. These
+  // tests exercise every split offset Codie called out and assert the
+  // disk log (allWrites) never contains the full synthetic JWT.
+
+  const allWrites = () =>
+    appendFileSyncMock.mock.calls.map(c => String(c[1])).join('');
+
+  it.each([
+    [1, 'after "e"'],
+    [2, 'after "ey"'],
+    [3, 'after "eyJ"'],
+  ])('JWT split at offset %i (%s) is redacted in the disk log', (offset) => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    buf.push(`token=${FAKE_JWT.slice(0, offset)}`);
+    buf.push(`${FAKE_JWT.slice(offset)}\n`);
+
+    const written = allWrites();
+    expect(written).not.toContain(FAKE_JWT);
+    expect(written).toContain('[REDACTED_JWT]');
+    expect(written).toBe('token=[REDACTED_JWT]\n');
+    // In-memory view must agree.
+    expect(buf.getRecent()).not.toContain(FAKE_JWT);
+  });
+
+  it('JWT split later in the token (5 chars into the signature) is redacted', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    // Boundary inside the third segment, before it reaches the {10,}
+    // minimum — the held candidate is a genuine partial, not yet a
+    // complete JWT shape, so the holdback path (not the emit-now
+    // complete-shape path) is exercised.
+    const offset = FAKE_JWT.lastIndexOf('.') + 1 + 5;
+    buf.push(`token=${FAKE_JWT.slice(0, offset)}`);
+    buf.push(`${FAKE_JWT.slice(offset)}\n`);
+
+    const written = allWrites();
+    expect(written).not.toContain(FAKE_JWT);
+    expect(written).toBe('token=[REDACTED_JWT]\n');
+  });
+
+  it('prefix split combined with a later split (three chunks: "e" | mid | rest)', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    buf.push('token=e');
+    buf.push(FAKE_JWT.slice(1, 50));
+    buf.push(`${FAKE_JWT.slice(50)}\n`);
+
+    const written = allWrites();
+    expect(written).not.toContain(FAKE_JWT);
+    expect(written).toBe('token=[REDACTED_JWT]\n');
+  });
+
+  it('ordinary text ending in "e"/"ey" flushes through losslessly on the next chunk', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    buf.push('build done'); // ends in "e" — briefly held
+    buf.push(' — all tests pass\n');
+    buf.push('they'); // ends in "ey" — briefly held
+    buf.push(' said so\n');
+
+    expect(allWrites()).toBe('build done — all tests pass\nthey said so\n');
+    expect(allWrites()).not.toContain('[REDACTED');
+  });
+});
+
+describe('OutputBuffer.close() — held-tail flush at PTY exit (P3 regression)', () => {
+  const allWrites = () =>
+    appendFileSyncMock.mock.calls.map(c => String(c[1])).join('');
+
+  it('writes [REDACTED_POSSIBLE_JWT_TAIL] when the stream dies mid-hold', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    const partial = FAKE_JWT.slice(0, 40); // header + start of payload
+    buf.push(`last output ${partial}`); // tail held, awaiting next chunk
+    buf.close(); // PTY exits — no next chunk ever comes
+
+    const written = allWrites();
+    // Bytes are not silently dropped: loss is recorded with the marker...
+    expect(written).toBe('last output [REDACTED_POSSIBLE_JWT_TAIL]');
+    // ...and no fragment of the held token reaches the disk log.
+    expect(written).not.toContain(partial);
+    expect(written).not.toContain('eyJ');
+  });
+
+  it('flushes a bare prefix fragment ("e"/"ey"/"eyJ") verbatim — no marker, no mangling', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    buf.push('session complete'); // ends in "e" — held as a possible prefix
+    buf.close();
+
+    // A bare fragment carries no token material; replacing the final "e"
+    // of ordinary output with a marker would corrupt the log.
+    expect(allWrites()).toBe('session complete');
+    expect(allWrites()).not.toContain('[REDACTED_POSSIBLE_JWT_TAIL]');
+  });
+
+  it('is idempotent — second close() writes nothing', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    buf.push(`tail ${FAKE_JWT.slice(0, 30)}`);
+    buf.close();
+    const callsAfterFirst = appendFileSyncMock.mock.calls.length;
+    buf.close();
+    expect(appendFileSyncMock.mock.calls.length).toBe(callsAfterFirst);
+    expect((allWrites().match(/\[REDACTED_POSSIBLE_JWT_TAIL\]/g) || []).length).toBe(1);
+  });
+
+  it('no-op when nothing is held', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    buf.push('clean output\n');
+    const callsBefore = appendFileSyncMock.mock.calls.length;
+    buf.close();
+    expect(appendFileSyncMock.mock.calls.length).toBe(callsBefore);
+  });
+
+  it('held tail appears in the in-memory ring buffer after close (marker form)', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    buf.push(`ends with ${FAKE_JWT.slice(0, 30)}`);
+    buf.close();
+    expect(buf.getRecent()).toContain('[REDACTED_POSSIBLE_JWT_TAIL]');
+    expect(buf.getRecent()).not.toContain('eyJ');
+    expect(buf.getSize()).toBe('ends with [REDACTED_POSSIBLE_JWT_TAIL]'.length);
+  });
+});

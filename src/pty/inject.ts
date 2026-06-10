@@ -48,9 +48,15 @@ export class MessageDedup {
   }
 }
 
-// C0 control characters (except \t \n \r) plus DEL. ESC (0x1b) is the
-// critical one — see sanitizeForInjection below.
-const CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+// C0 control characters (except \t \n \r), DEL, and the C1 control block
+// (\x80-\x9f). ESC (0x1b) is the critical C0 — see sanitizeForInjection
+// below. The C1 block matters because 8-bit CSI (\x9b, U+009B) is the
+// single-byte equivalent of ESC[ in some terminal modes: "\x9b201~" can
+// act as the bracketed-paste END marker exactly like "\x1b[201~", the
+// same paste-breakout class already closed for 7-bit ESC. Stripping
+// targets code points U+0080-U+009F only — printable Latin-1/Unicode
+// text (é, ñ, emoji, etc.) sits above U+009F and is untouched.
+const CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x80-\x9f]/g;
 
 /**
  * Strip control characters from message content before PTY injection.
@@ -64,7 +70,9 @@ const CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
  * navigate TUI menus, auto-approve permission prompts, or submit
  * arbitrary commands. Stripping ESC and the other C0 controls (keeping
  * \t \n \r, which are legitimate in multi-line messages) closes the
- * breakout: "\x1b[201~" becomes the harmless literal "[201~".
+ * breakout: "\x1b[201~" becomes the harmless literal "[201~". C1
+ * controls (\x80-\x9f) are stripped for the same reason — 8-bit CSI
+ * "\x9b201~" is an alternate encoding of the same paste-END breakout.
  */
 export function sanitizeForInjection(content: string): string {
   return content.replace(CONTROL_CHARS, '');

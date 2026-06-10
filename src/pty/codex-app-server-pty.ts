@@ -297,6 +297,9 @@ export class CodexAppServerPTY {
     if (this._exitFinalized) return;
     this._exitFinalized = true;
     this._alive = false;
+    // Flush any held-back partial-JWT tail — the stream is over, so the
+    // hold can never be resolved by a next chunk (see OutputBuffer.close).
+    this._outputBuffer.close();
     this._executing = false;
     this._writeBuffer = '';
     this._turnQueue = [];

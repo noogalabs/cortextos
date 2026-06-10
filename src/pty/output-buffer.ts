@@ -1,5 +1,5 @@
 import { appendFileSync, renameSync, statSync } from 'fs';
-import { redactSecrets, splitTrailingPartialJwt } from './redact.js';
+import { redactSecrets, splitTrailingPartialJwt, BARE_PREFIX_FRAGMENT } from './redact.js';
 
 // Dynamic import for strip-ansi (ESM module)
 let stripAnsi: (text: string) => string;
@@ -49,9 +49,10 @@ export class OutputBuffer {
    * Chunk-boundary handling: a trailing substring that looks like the
    * start of a JWT is held back (pendingTail) and prepended to the next
    * chunk, so a token split across two push() calls is reassembled and
-   * redacted before it reaches the disk log. If the stream ends while a
-   * tail is held, that tail never reaches the log — by construction it is
-   * JWT-prefix-shaped data, so dropping it errs on the safe side.
+   * redacted before it reaches the disk log. Held-tail contract: a tail
+   * is held only until the next push() proves it JWT-or-not, OR until
+   * close() flushes it at PTY exit — it is never silently dropped. See
+   * close() for the exit-time disposition.
    */
   push(data: string): void {
     const combined = this.pendingTail + data;
@@ -59,8 +60,14 @@ export class OutputBuffer {
     this.pendingTail = hold;
     if (!emit) return; // everything held back as a potential partial token
 
-    const safe = redactSecrets(emit);
+    this.commit(redactSecrets(emit));
+  }
 
+  /**
+   * Append already-redacted data to the in-memory ring buffer and stream
+   * it to the disk log. Shared by push() and close().
+   */
+  private commit(safe: string): void {
     this.chunks.push(safe);
     if (this.chunks.length > this.maxChunks) {
       this.chunks.shift();
@@ -80,6 +87,32 @@ export class OutputBuffer {
         // Ignore log write errors
       }
     }
+  }
+
+  /**
+   * Flush the held-back tail at end-of-stream (PTY exit/teardown).
+   *
+   * If the PTY dies while a potential partial-JWT tail is held, those
+   * bytes would otherwise vanish silently — not lossless for false
+   * positives (legitimate base64 JSON that merely starts with `eyJ`, or
+   * ordinary output ending in `e`/`ey`). Disposition:
+   *
+   * - Bare prefix fragment (`e`, `ey`, `eyJ`): emitted VERBATIM — it
+   *   contains no token header/payload/signature bytes, and replacing a
+   *   legit trailing `e` with a marker would mangle ordinary output.
+   * - Anything longer: may contain real JWT header/payload bytes that
+   *   redactSecrets cannot match (the token is incomplete), so the log
+   *   gets an explicit `[REDACTED_POSSIBLE_JWT_TAIL]` marker instead —
+   *   loss is recorded, secrets are not.
+   *
+   * Idempotent: the tail is cleared first, so a second close() (e.g.
+   * kill() followed by the onExit event) writes nothing.
+   */
+  close(): void {
+    const tail = this.pendingTail;
+    this.pendingTail = '';
+    if (!tail) return;
+    this.commit(BARE_PREFIX_FRAGMENT.test(tail) ? tail : '[REDACTED_POSSIBLE_JWT_TAIL]');
   }
 
   /**
