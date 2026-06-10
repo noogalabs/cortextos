@@ -22,6 +22,14 @@ export interface SlackSocketListenerOptions {
   signingSecret?: string;
   trustedSlackUsers?: string[];
   teamMembers?: TeamMember[];
+  /**
+   * Invoked once when the Socket Mode client hits a PERMANENT auth failure
+   * (invalid/revoked token — reconnection stopped). The daemon wires this to
+   * an operator-facing Telegram alert; the listener ALSO writes an urgent
+   * agent-inbox message itself, so the condition is surfaced even when the
+   * callback is not provided.
+   */
+  onFatalAuthError?: (errorCode: string) => void;
 }
 
 /**
@@ -64,6 +72,12 @@ export class SlackSocketListener {
   // doesn't add an auth.test call to every message either.
   private ownBotUserIdLastFailureAt = 0;
   private static readonly OWN_ID_RETRY_COOLDOWN_MS = 60_000;
+  // Operator-facing alert hook supplied by the daemon (see options doc).
+  private readonly onFatalAuthErrorOpt?: (errorCode: string) => void;
+  // Persistent fatal-error state: non-null = Slack Socket Mode is DOWN on a
+  // permanent auth failure and will NOT self-heal. Queryable via
+  // getLastFatalAuthError() so health/heartbeat surfaces can report it.
+  private lastFatalAuthError: string | null = null;
 
   constructor(opts: SlackSocketListenerOptions) {
     this.channel = opts.channel;
@@ -72,6 +86,7 @@ export class SlackSocketListener {
     this.log = opts.log;
     this.trustedSlackUsers = opts.trustedSlackUsers;
     this.teamMembers = opts.teamMembers;
+    this.onFatalAuthErrorOpt = opts.onFatalAuthError;
     this.slackApi = new SlackAPI(opts.botToken);
     this.client = new SlackSocketClient(
       {
@@ -82,12 +97,62 @@ export class SlackSocketListener {
       },
       (event) => this.handleMessage(event),
       opts.log,
+      (errorCode) => this.handleFatalAuthError(errorCode),
     );
   }
 
   /** Start the underlying Socket Mode connection. */
   async start(): Promise<void> {
+    // A fresh start gets a fresh slate (mirrors SlackSocketClient.start()
+    // clearing its own fatal latch): the operator's recovery path is
+    // fix-token-then-restart.
+    this.lastFatalAuthError = null;
     await this.client.start();
+  }
+
+  /**
+   * The permanent auth-failure code that took Slack inbound down, or null.
+   * Non-null = Socket Mode reconnection is STOPPED and will not recover
+   * without operator action. Exposed for health/heartbeat surfacing.
+   */
+  getLastFatalAuthError(): string | null {
+    return this.lastFatalAuthError;
+  }
+
+  /**
+   * Surface a PERMANENT Slack auth failure loudly. Called by the socket
+   * client exactly once when it stops reconnecting. PUBLIC for unit testing.
+   *
+   * Three surfaces, so a dead token cannot scroll past unnoticed:
+   * 1. persistent lastFatalAuthError state (heartbeat/health queryable);
+   * 2. an URGENT agent-inbox message — the agent sees it on its next turn and
+   *    relays it to the operator over Telegram;
+   * 3. the daemon-level onFatalAuthError callback (agent-manager wires this to
+   *    a direct operator Telegram alert, same mechanism as the ALLOWED_USER
+   *    reject watchdog).
+   *
+   * Never throws — a failing alert path must not take anything else down.
+   */
+  handleFatalAuthError(errorCode: string): void {
+    this.lastFatalAuthError = errorCode;
+    const inboxText =
+      `=== SLACK CONNECTION DEAD (permanent auth failure: ${errorCode}) ===\n` +
+      `Slack Socket Mode could not authenticate (channel:${this.channel}) and reconnection has been STOPPED — ` +
+      `the app token is invalid, revoked, expired, or missing the connections:write scope. ` +
+      `This will NOT self-heal: real-time Slack inbound is DOWN until the token is fixed and the agent restarts.\n` +
+      `ACTION REQUIRED: alert the operator NOW (send-telegram), then fix the Slack app token in .env and restart.`;
+    try {
+      sendMessage(this.paths, 'fast-checker', this.agentName, 'urgent', inboxText);
+    } catch (err) {
+      this.log('Slack fatal-auth inbox write failed: ' + err);
+    }
+    if (this.onFatalAuthErrorOpt) {
+      try {
+        this.onFatalAuthErrorOpt(errorCode);
+      } catch (err) {
+        this.log('Slack fatal-auth operator alert failed: ' + err);
+      }
+    }
   }
 
   /** Gracefully shut down the underlying Socket Mode connection. */

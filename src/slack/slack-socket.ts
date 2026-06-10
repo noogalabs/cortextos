@@ -25,6 +25,15 @@
 //   (7) a WebSocket open-timeout watchdog recycles connections that never
 //       reach 'open' (black-holed TCP / stalled TLS would otherwise hang the
 //       client forever with no event ever firing).
+//   (8) PERMANENT auth-class failures from apps.connections.open (invalid_auth,
+//       token_revoked, etc. — see SLACK_PERMANENT_AUTH_ERRORS) STOP the
+//       reconnect loop instead of retrying forever: a dead token returns HTTP
+//       200 ok:false and will NEVER self-heal, so retry-forever would just
+//       log-spam every 30s while silently masking a config error. The client
+//       latches a fatal state (getFatalAuthError), logs a loud ERROR, and
+//       invokes onFatalAuthError so the daemon can alert the operator.
+//       Transient failures (network, 5xx, 429, non-auth ok:false) keep the
+//       retry-forever behavior of (5).
 
 /**
  * Slack Socket Mode Client
@@ -491,6 +500,35 @@ const WS_OPEN_TIMEOUT_MS = 15_000;
 const MAX_RETRY_AFTER_MS = 120_000;
 
 /**
+ * apps.connections.open `ok:false` error codes that are PERMANENT auth-class
+ * failures. These mean the app-level token is invalid, revoked, expired, or
+ * lacks the connections:write scope — a condition that will NEVER self-heal,
+ * no matter how many times we retry. Reconnecting on these would log-spam
+ * forever while silently masking a configuration error, so the client STOPS
+ * and surfaces a fatal state instead.
+ *
+ * Codes (from Slack's apps.connections.open / common Web API error tables):
+ * - invalid_auth:     token is invalid (wrong/garbled/deleted app token)
+ * - account_inactive: the user/workspace behind the token was deactivated
+ * - token_revoked:    token was explicitly revoked
+ * - token_expired:    token has expired (refreshable app tokens)
+ * - not_authed:       no token was provided at all
+ * - no_permission:    token lacks the required scope (connections:write)
+ *
+ * Everything else (network errors, HTTP 5xx, 429 rate limits, transient
+ * ok:false codes like internal_error / fatal_error) is treated as TRANSIENT
+ * and keeps the persistent-reconnect behavior.
+ */
+export const SLACK_PERMANENT_AUTH_ERRORS: ReadonlySet<string> = new Set([
+  'invalid_auth',
+  'account_inactive',
+  'token_revoked',
+  'token_expired',
+  'not_authed',
+  'no_permission',
+]);
+
+/**
  * Minimal Slack Socket Mode client.
  *
  * Establishes a WebSocket connection to Slack's Socket Mode endpoint,
@@ -510,6 +548,11 @@ export class SlackSocketClient {
   // Floor (ms) for the next reconnect delay, set when apps.connections.open
   // returns HTTP 429 with a Retry-After header; consumed by scheduleReconnect.
   private rateLimitMinDelayMs = 0;
+  // Latched on a PERMANENT auth-class failure (see SLACK_PERMANENT_AUTH_ERRORS).
+  // Non-null = reconnection is STOPPED until the operator fixes the token and
+  // restarts (start() clears it). Queryable via getFatalAuthError() so the
+  // daemon/heartbeat layer can surface the dead-token condition.
+  private fatalAuthError: string | null = null;
   private readonly connectionState = new SlackConnectionStateTracker();
 
   // Bound listener references for proper removal on cleanup.
@@ -525,6 +568,9 @@ export class SlackSocketClient {
     private readonly config: SlackSocketConfig,
     private readonly onMessage: MessageHandler,
     log: LogFn,
+    // Invoked ONCE when a permanent auth-class failure stops the reconnect
+    // loop, so the embedding layer can alert the operator (Telegram/inbox).
+    private readonly onFatalAuthError?: (errorCode: string) => void,
   ) {
     // Wrap the log function to automatically redact tokens from all messages
     this.log = (msg: string) => log(redactTokens(msg));
@@ -533,6 +579,16 @@ export class SlackSocketClient {
   /** Get the connection state tracker for external inspection. */
   getConnectionState(): SlackConnectionStateTracker {
     return this.connectionState;
+  }
+
+  /**
+   * The permanent auth-failure code that stopped reconnection, or null if the
+   * connection has not hit a fatal auth error. Non-null means real-time Slack
+   * inbound is DOWN and will not recover without operator action (fix the app
+   * token, then restart). Heartbeat-surfaceable.
+   */
+  getFatalAuthError(): string | null {
+    return this.fatalAuthError;
   }
 
   /**
@@ -548,6 +604,10 @@ export class SlackSocketClient {
     // and without resetting it here every post-stop start() would silently
     // no-op all connects and reconnects forever.
     this.isShuttingDown = false;
+    // An explicit (re)start clears a latched fatal auth error: the operator's
+    // recovery path is "fix the token, restart the agent" — the new start must
+    // get a fresh chance to connect, not be blocked by the old token's fate.
+    this.fatalAuthError = null;
     this.connectionState.onConnecting();
     await this.connect();
   }
@@ -639,6 +699,18 @@ export class SlackSocketClient {
       }
 
       const data = await resp.json() as { ok: boolean; url?: string; error?: string };
+
+      // Classify ok:false BEFORE the generic throw: a dead/revoked/unscoped
+      // token comes back as HTTP 200 ok:false (e.g. invalid_auth) and will
+      // NEVER self-heal — retrying it forever at 30s just log-spams while
+      // masking a config error. Permanent auth-class codes STOP the reconnect
+      // loop and surface loudly; every other failure stays transient and falls
+      // through to the throw -> catch -> scheduleReconnect retry-forever path.
+      if (!data.ok && data.error && SLACK_PERMANENT_AUTH_ERRORS.has(data.error)) {
+        this.handleFatalAuthError(data.error);
+        return; // deliberate: NO scheduleReconnect — this cannot self-heal
+      }
+
       if (!data.ok || !data.url) {
         throw new Error(`apps.connections.open failed: ${data.error || 'no url returned'}`);
       }
@@ -817,6 +889,40 @@ export class SlackSocketClient {
   }
 
   /**
+   * Handle a PERMANENT auth-class failure from apps.connections.open.
+   *
+   * Latches the fatal state (which also gates scheduleReconnect, so no
+   * stray close/watchdog event can restart the loop), tears down any pending
+   * reconnect timer, logs a single LOUD operator-facing ERROR line, and fires
+   * the onFatalAuthError callback exactly once so the embedding layer
+   * (SlackSocketListener / agent-manager) can alert the operator.
+   *
+   * Recovery: fix the Slack app token, then restart — start() clears the
+   * latch and connects fresh.
+   */
+  private handleFatalAuthError(errorCode: string): void {
+    // Latch FIRST: from this point scheduleReconnect() is a no-op.
+    this.fatalAuthError = errorCode;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.cleanupWs();
+    this.connectionState.onDisconnected();
+    this.log(
+      `ERROR: Slack Socket Mode PERMANENT auth failure (${errorCode}) — the app token is invalid, revoked, expired, or missing the connections:write scope. ` +
+      `Reconnection STOPPED: this will NOT self-heal and real-time Slack inbound is DOWN until the token is fixed and the agent restarts. OPERATOR ACTION REQUIRED.`,
+    );
+    if (this.onFatalAuthError) {
+      try {
+        this.onFatalAuthError(errorCode);
+      } catch (err) {
+        this.log(`Slack fatal-auth alert callback failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  /**
    * Schedule a reconnection attempt with exponential backoff.
    *
    * NEVER gives up permanently. The previous behavior returned once
@@ -826,9 +932,17 @@ export class SlackSocketClient {
    * primary the 60s poll is dormant, so the loss was TOTAL and silent).
    * Past the soft max we keep retrying at the max backoff delay and log the
    * escalation so the condition is visible in the daemon log.
+   *
+   * ONE exception: a latched PERMANENT auth failure (see handleFatalAuthError)
+   * stops the loop — a dead token never self-heals, so retry-forever there
+   * would only log-spam while hiding a config error.
    */
   private scheduleReconnect(): void {
     if (this.isShuttingDown) return;
+    // Fatal auth latch: a permanent token failure cannot self-heal, so NO path
+    // (ws close, open-timeout watchdog, reconnect-error safety net) may
+    // re-enter the retry loop until the operator restarts with a fixed token.
+    if (this.fatalAuthError) return;
 
     // Clear any existing reconnect timer to prevent leaks on rapid disconnects
     if (this.reconnectTimer) {

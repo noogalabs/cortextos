@@ -677,6 +677,21 @@ export class AgentManager {
         log,
         trustedSlackUsers: config.trusted_slack_users,
         teamMembers: config.team_members,
+        // PERMANENT auth failure (invalid/revoked app token): the socket client
+        // has STOPPED reconnecting — this never self-heals, so alert the
+        // operator directly over Telegram (same mechanism as the ALLOWED_USER
+        // reject watchdog above) instead of letting a dead Slack token hide in
+        // scrolling logs. The listener also writes an urgent agent-inbox
+        // message; this is the daemon-level belt-and-suspenders surface.
+        onFatalAuthError: (errorCode) => {
+          const alertText = `⚠️ SLACK AUTH DEAD: ${name}'s Slack connection hit a permanent auth failure (${errorCode}). Reconnection stopped — real-time Slack inbound is DOWN and will NOT recover on its own. Fix the Slack app token in the agent's .env and restart the agent.`;
+          log(alertText);
+          if (telegramApi && chatId) {
+            telegramApi.sendMessage(chatId, alertText).catch(() => {
+              /* alert is best-effort; the urgent inbox message + log remain */
+            });
+          }
+        },
       });
       slackListener.start().catch(err => {
         log(`Slack Socket Mode listener failed to start: ${err}`);

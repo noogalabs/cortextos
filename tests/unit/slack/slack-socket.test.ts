@@ -4,6 +4,7 @@ import {
   isTimestampValid,
   shouldDeliverSlackMessage,
   SlackSocketClient,
+  SLACK_PERMANENT_AUTH_ERRORS,
 } from '../../../src/slack/slack-socket.js';
 import { redactTokens } from '../../../src/slack/slack-redact.js';
 
@@ -379,6 +380,207 @@ describe('SlackSocketClient — reconnection robustness', () => {
     client.stop();
     await client.start();
     expect(counters.constructed).toBe(2);
+    client.stop();
+  });
+});
+
+describe('SlackSocketClient — permanent auth failure classification (Collie medium)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  // The auth-class set itself: a dead token must be classified PERMANENT.
+  it('the permanent set covers all six auth-class codes', () => {
+    for (const code of [
+      'invalid_auth',
+      'account_inactive',
+      'token_revoked',
+      'token_expired',
+      'not_authed',
+      'no_permission',
+    ]) {
+      expect(SLACK_PERMANENT_AUTH_ERRORS.has(code)).toBe(true);
+    }
+    // ...and does NOT swallow transient ok:false codes.
+    expect(SLACK_PERMANENT_AUTH_ERRORS.has('internal_error')).toBe(false);
+    expect(SLACK_PERMANENT_AUTH_ERRORS.has('fatal_error')).toBe(false);
+  });
+
+  // THE regression guard for the Collie finding: an invalid/revoked token
+  // returns HTTP 200 ok:false — the old code threw, caught, and retried every
+  // 30s FOREVER, log-spamming while masking a config error that never
+  // self-heals. It must STOP reconnecting and latch a loud, visible state.
+  it.each([
+    'invalid_auth',
+    'account_inactive',
+    'token_revoked',
+    'token_expired',
+    'not_authed',
+    'no_permission',
+  ])('ok:false %s STOPS reconnection, latches fatal state, fires the alert once', async (code) => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: false, error: code }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const counters = { constructed: 0, closed: 0 };
+    vi.stubGlobal('WebSocket', makeMockWebSocket(counters));
+
+    const logs: string[] = [];
+    const onFatal = vi.fn();
+    const client = new SlackSocketClient(
+      { appToken: 'xapp-1', botToken: 'xoxb-1', channelId: 'C1' },
+      () => {},
+      (m) => logs.push(m),
+      onFatal,
+    );
+    await client.start();
+
+    // No matter how long we wait, NO reconnect fires (old code: one every 30s).
+    for (let i = 0; i < 20; i++) {
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+    expect(fetchMock.mock.calls.length).toBe(1);
+    expect(counters.constructed).toBe(0);
+
+    // Persistent, queryable error state (heartbeat-surfaceable).
+    expect(client.getFatalAuthError()).toBe(code);
+    expect(client.getConnectionState().getState()).toBe('disconnected');
+
+    // Loud ERROR log naming operator action — not a scroll-past reconnect line.
+    expect(
+      logs.some((l) => l.startsWith('ERROR:') && l.includes('PERMANENT auth failure') && l.includes(code)),
+    ).toBe(true);
+
+    // One-shot operator alert callback.
+    expect(onFatal).toHaveBeenCalledTimes(1);
+    expect(onFatal).toHaveBeenCalledWith(code);
+    client.stop();
+  });
+
+  // Transient failures must KEEP the retry-forever availability win — the
+  // permanent classification must not regress PR-base behavior.
+  it.each([
+    [
+      'non-auth ok:false (internal_error)',
+      () => ({ ok: true, status: 200, json: async () => ({ ok: false, error: 'internal_error' }) }),
+    ],
+    [
+      'HTTP 500',
+      () => ({ ok: false, status: 500, headers: { get: () => null }, json: async () => ({}) }),
+    ],
+    [
+      'HTTP 429 (no Retry-After)',
+      () => ({ ok: false, status: 429, headers: { get: () => null }, json: async () => ({}) }),
+    ],
+  ])('%s STILL schedules reconnect (transient path unchanged)', async (_label, makeResp) => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation(async () => makeResp());
+    vi.stubGlobal('fetch', fetchMock);
+    const counters = { constructed: 0, closed: 0 };
+    vi.stubGlobal('WebSocket', makeMockWebSocket(counters));
+
+    const onFatal = vi.fn();
+    const client = new SlackSocketClient(
+      { appToken: 'xapp-1', botToken: 'xoxb-1', channelId: 'C1' },
+      () => {},
+      () => {},
+      onFatal,
+    );
+    await client.start();
+
+    // Retries keep coming — well past the soft max would too (see the
+    // reconnection suite); a handful is enough to prove the loop is alive.
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(3);
+    expect(client.getFatalAuthError()).toBeNull();
+    expect(onFatal).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it('a network error (fetch rejects) STILL schedules reconnect', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockRejectedValue(new Error('network down'));
+    vi.stubGlobal('fetch', fetchMock);
+    const counters = { constructed: 0, closed: 0 };
+    vi.stubGlobal('WebSocket', makeMockWebSocket(counters));
+
+    const onFatal = vi.fn();
+    const client = new SlackSocketClient(
+      { appToken: 'xapp-1', botToken: 'xoxb-1', channelId: 'C1' },
+      () => {},
+      () => {},
+      onFatal,
+    );
+    await client.start();
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(3);
+    expect(client.getFatalAuthError()).toBeNull();
+    expect(onFatal).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  // Operator recovery path: fix the token, restart the agent. start() must
+  // clear the fatal latch and connect fresh — otherwise the latch would make
+  // the client permanently dead even with a good token.
+  it('start() after a fatal auth error clears the latch and connects again', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ok: false, error: 'invalid_auth' }) })
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true, url: 'wss://example.test/link' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const counters = { constructed: 0, closed: 0 };
+    vi.stubGlobal('WebSocket', makeMockWebSocket(counters));
+
+    const client = new SlackSocketClient(
+      { appToken: 'xapp-1', botToken: 'xoxb-1', channelId: 'C1' },
+      () => {},
+      () => {},
+    );
+    await client.start();
+    expect(client.getFatalAuthError()).toBe('invalid_auth');
+    expect(counters.constructed).toBe(0);
+
+    // Operator fixed the token and restarted.
+    await client.start();
+    expect(client.getFatalAuthError()).toBeNull();
+    expect(counters.constructed).toBe(1);
+    client.stop();
+  });
+
+  // Belt-and-suspenders: even a direct scheduleReconnect entry point (e.g. a
+  // straggler ws close event) cannot restart the loop while the latch is set.
+  it('no reconnect path can sneak past the fatal latch', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: false, error: 'token_revoked' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const counters = { constructed: 0, closed: 0 };
+    vi.stubGlobal('WebSocket', makeMockWebSocket(counters));
+
+    const client = new SlackSocketClient(
+      { appToken: 'xapp-1', botToken: 'xoxb-1', channelId: 'C1' },
+      () => {},
+      () => {},
+    );
+    await client.start();
+    expect(client.getFatalAuthError()).toBe('token_revoked');
+
+    // Force the private entry point a stray close/watchdog event would hit.
+    (client as unknown as { scheduleReconnect: () => void }).scheduleReconnect();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(fetchMock.mock.calls.length).toBe(1);
     client.stop();
   });
 });

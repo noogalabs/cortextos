@@ -263,6 +263,81 @@ describe('SlackSocketListener.handleMessage', () => {
     }
   });
 
+  // Collie medium fold-in: a PERMANENT Slack auth failure (token dead, socket
+  // client stopped reconnecting) must be surfaced loudly and visibly — never
+  // just a log line that scrolls past.
+  describe('handleFatalAuthError (permanent auth failure surfacing)', () => {
+    it('writes an URGENT inbox message, latches the queryable state, and fires the daemon alert', () => {
+      const logSpy = vi.fn();
+      const onFatal = vi.fn();
+      const listener = new SlackSocketListener({
+        appToken: 'xapp-test',
+        botToken: 'xoxb-test',
+        channel: 'C123',
+        agentName: 'collie',
+        paths,
+        log: logSpy,
+        onFatalAuthError: onFatal,
+      });
+
+      listener.handleFatalAuthError('invalid_auth');
+
+      // 1. Persistent, heartbeat-surfaceable error state.
+      expect(listener.getLastFatalAuthError()).toBe('invalid_auth');
+
+      // 2. URGENT agent-inbox message (NOT 'normal' like ordinary traffic) —
+      //    the agent sees it and relays to the operator.
+      expect(sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageMock).toHaveBeenCalledWith(
+        paths,
+        'fast-checker',
+        'collie',
+        'urgent',
+        expect.stringContaining('SLACK CONNECTION DEAD'),
+      );
+      const inboxText = sendMessageMock.mock.calls[0][4] as string;
+      expect(inboxText).toContain('invalid_auth');
+      expect(inboxText).toContain('NOT self-heal');
+      expect(inboxText).toContain('ACTION REQUIRED');
+
+      // 3. Daemon-level operator alert callback (agent-manager → Telegram).
+      expect(onFatal).toHaveBeenCalledTimes(1);
+      expect(onFatal).toHaveBeenCalledWith('invalid_auth');
+    });
+
+    it('never throws even when both the inbox write and the alert callback fail', () => {
+      sendMessageMock.mockImplementation(() => {
+        throw new Error('disk full');
+      });
+      const logSpy = vi.fn();
+      const listener = new SlackSocketListener({
+        appToken: 'xapp-test',
+        botToken: 'xoxb-test',
+        channel: 'C123',
+        agentName: 'collie',
+        paths,
+        log: logSpy,
+        onFatalAuthError: () => {
+          throw new Error('telegram down');
+        },
+      });
+
+      expect(() => listener.handleFatalAuthError('token_revoked')).not.toThrow();
+      // State still latched despite both surfaces failing.
+      expect(listener.getLastFatalAuthError()).toBe('token_revoked');
+      expect(logSpy.mock.calls.some((c) => String(c[0]).includes('fatal-auth inbox write failed'))).toBe(true);
+      expect(logSpy.mock.calls.some((c) => String(c[0]).includes('fatal-auth operator alert failed'))).toBe(true);
+    });
+
+    it('works without the optional daemon callback (inbox surface alone)', () => {
+      const listener = makeListener();
+      listener.handleFatalAuthError('account_inactive');
+      expect(listener.getLastFatalAuthError()).toBe('account_inactive');
+      expect(sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageMock.mock.calls[0][3]).toBe('urgent');
+    });
+  });
+
   it('sendMessage throwing does not throw out of handleMessage and is logged', async () => {
     getUserInfoMock.mockResolvedValue({ handle: 'carlos.calel', displayName: 'Carlos Calel' });
     sendMessageMock.mockImplementation(() => {
