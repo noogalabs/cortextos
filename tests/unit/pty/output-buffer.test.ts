@@ -79,26 +79,104 @@ describe('OutputBuffer redaction', () => {
     expect(buf.isBootstrapped()).toBe(true);
   });
 
-  it('chunk-boundary edge case is NOT redacted (documents the known limitation)', () => {
-    // Split a JWT across two push() calls. Neither chunk matches the
-    // regex on its own — the redactor is stateless and chunk-local. This
-    // test INTENTIONALLY asserts the un-redacted behavior so that any
-    // future refactor adding buffer-aware redaction has to be an
-    // explicit decision (the test fails and forces a re-review).
+  it('JWT split across a chunk boundary IS redacted (buffer-aware holdback)', () => {
+    // Split a JWT across two push() calls — the OS chunk-boundary case
+    // that the stateless chunk-local redactor used to miss. push() now
+    // holds back the trailing partial-JWT prefix and prepends it to the
+    // next chunk, so the reassembled token is redacted before anything
+    // reaches the disk log.
     const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
     const half1 = FAKE_JWT.slice(0, 40);
     const half2 = FAKE_JWT.slice(40);
     buf.push(`prefix ${half1}`);
-    buf.push(`${half2} suffix`);
+    buf.push(`${half2} suffix\n`);
 
+    // First write: only the non-token prefix reaches the log — the
+    // partial JWT is held back.
     const firstWrite = String(appendFileSyncMock.mock.calls[0][1]);
+    expect(firstWrite).toBe('prefix ');
+    expect(firstWrite).not.toContain('eyJ');
+
+    // Second write: held tail + second half reassembled and redacted.
     const secondWrite = String(appendFileSyncMock.mock.calls[1][1]);
-    // Each half survives because neither chunk is a complete JWT shape.
-    expect(firstWrite).toContain(half1);
-    expect(secondWrite).toContain(half2);
-    // Neither chunk contains the redaction marker.
-    expect(firstWrite).not.toContain('[REDACTED_JWT]');
-    expect(secondWrite).not.toContain('[REDACTED_JWT]');
+    expect(secondWrite).toContain('[REDACTED_JWT]');
+    expect(secondWrite).toContain(' suffix');
+    expect(secondWrite).not.toContain(FAKE_JWT);
+
+    // The full token never appears anywhere — log or in-memory buffer.
+    const allWrites = appendFileSyncMock.mock.calls.map(c => String(c[1])).join('');
+    expect(allWrites).not.toContain(FAKE_JWT);
+    expect(buf.getRecent()).not.toContain(FAKE_JWT);
+    expect(buf.getRecent()).toContain('[REDACTED_JWT]');
+  });
+
+  it('JWT split across THREE chunks is still redacted', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    buf.push(`token=${FAKE_JWT.slice(0, 20)}`);
+    buf.push(FAKE_JWT.slice(20, 60));
+    buf.push(`${FAKE_JWT.slice(60)}\n`);
+
+    const allWrites = appendFileSyncMock.mock.calls.map(c => String(c[1])).join('');
+    expect(allWrites).not.toContain(FAKE_JWT);
+    expect(allWrites).toContain('[REDACTED_JWT]');
+  });
+
+  it('held-back tail is still visible (redacted) via getRecent for bootstrap/activity detection', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    const partial = FAKE_JWT.slice(0, 40);
+    buf.push(`output ends with a partial token ${partial}`);
+
+    // The partial tail must not silently vanish from the in-memory view —
+    // pollers (bootstrap, rate-limit, typing-indicator size checks) read
+    // getRecent()/getSize() and need to see the latest bytes.
+    expect(buf.getRecent()).toContain('output ends with a partial token');
+    expect(buf.getRecent()).toContain(partial);
+    expect(buf.getSize()).toBe(`output ends with a partial token ${partial}`.length);
+  });
+
+  it('partial-token holdback flushes unredacted when it turns out NOT to be a JWT', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    // Looks like a JWT prefix at the boundary, but the next chunk reveals
+    // it was ordinary text — everything must flush through unredacted and
+    // in the original byte order.
+    buf.push('checking eyJsomething');
+    buf.push(' else entirely\n');
+
+    const allWrites = appendFileSyncMock.mock.calls.map(c => String(c[1])).join('');
+    expect(allWrites).toBe('checking eyJsomething else entirely\n');
+    expect(allWrites).not.toContain('[REDACTED_JWT]');
+  });
+
+  it('oversized trailing base64 blob is emitted, not held back (MAX_PARTIAL_HOLDBACK cap)', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    // A legitimate base64-encoded JSON blob (starts with eyJ, no dots)
+    // larger than the holdback cap — must NOT be withheld from the log.
+    const bigBlob = 'eyJ' + 'A'.repeat(4000);
+    buf.push(`payload=${bigBlob}`);
+
+    expect(appendFileSyncMock).toHaveBeenCalledTimes(1);
+    const written = String(appendFileSyncMock.mock.calls[0][1]);
+    expect(written).toContain(bigBlob);
+  });
+
+  it('trailing COMPLETE JWT is redacted and emitted immediately (no indefinite holdback)', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    // Chunk ends exactly at the end of a complete JWT (e.g. last output
+    // before the process exits). It must reach the log redacted rather
+    // than being withheld forever waiting for a next chunk.
+    buf.push(`cookie=${FAKE_JWT}`);
+
+    expect(appendFileSyncMock).toHaveBeenCalledTimes(1);
+    const written = String(appendFileSyncMock.mock.calls[0][1]);
+    expect(written).toBe('cookie=[REDACTED_JWT]');
+  });
+
+  it('clear() resets the held-back tail', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    buf.push(`partial ${FAKE_JWT.slice(0, 40)}`);
+    buf.clear();
+    expect(buf.getRecent()).toBe('');
+    expect(buf.getSize()).toBe(0);
   });
 
   it('short alphanumeric that resembles a truncated JWT is NOT redacted (length guard)', () => {

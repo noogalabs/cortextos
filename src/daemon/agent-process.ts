@@ -830,14 +830,13 @@ export class AgentProcess {
   }
 
   private shouldContinue(): boolean {
-    // Hermes: session continuity is determined by whether the SQLite DB exists.
-    // HERMES_HOME env var overrides the default ~/.hermes path.
-    if (this.config.runtime === 'hermes') {
-      const hermesHome = process.env['HERMES_HOME'];
-      return hermesDbExists(hermesHome);
-    }
-
-    // Check for force-fresh marker (all runtimes honor it).
+    // Check for force-fresh marker FIRST (all runtimes honor it).
+    //
+    // Ordering matters: this check used to sit BELOW the Hermes early-return,
+    // which meant hardRestartSelf() and armForceFresh() on a Hermes agent
+    // never actually forced a fresh session — the marker was bypassed (the
+    // agent kept resuming via --continue as long as state.db existed) AND
+    // never consumed, so it leaked in the state dir indefinitely.
     const forceFreshPath = join(this.env.ctxRoot, 'state', this.name, '.force-fresh');
     if (existsSync(forceFreshPath)) {
       // Context watchdog and hard-restart use this marker to force a fresh
@@ -845,10 +844,16 @@ export class AgentProcess {
       // daemon launch decision, before runtime-specific boot prompts run; do
       // not expect codex-app-server itself to read or clear `.force-fresh`.
       try {
-        const { unlinkSync } = require('fs');
         unlinkSync(forceFreshPath);
       } catch { /* ignore */ }
       return false;
+    }
+
+    // Hermes: session continuity is determined by whether the SQLite DB exists.
+    // HERMES_HOME (agent .env, falling back to the daemon's process env)
+    // overrides the default ~/.hermes path.
+    if (this.config.runtime === 'hermes') {
+      return hermesDbExists(this.resolveHermesHome());
     }
 
     // codex-app-server: session continuity is tracked by the adapter's own
@@ -914,6 +919,38 @@ export class AgentProcess {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Resolve HERMES_HOME for session-continuity detection.
+   *
+   * Resolution order: agent .env file (the documented place for per-agent
+   * overrides — see hermesDbExists' doc comment) → daemon process.env.
+   *
+   * The agent's .env is loaded into the PTY CHILD's environment by
+   * AgentPTY.spawn(), not into the daemon's process.env — so the previous
+   * behavior of reading only process.env silently ignored a HERMES_HOME
+   * set in the agent .env, and shouldContinue() would probe the wrong
+   * path (~/.hermes) for state.db.
+   */
+  private resolveHermesHome(): string | undefined {
+    try {
+      const envFile = join(this.env.agentDir, '.env');
+      if (existsSync(envFile)) {
+        for (const line of readFileSync(envFile, 'utf-8').split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eqIdx = trimmed.indexOf('=');
+          if (eqIdx > 0 && trimmed.slice(0, eqIdx).trim() === 'HERMES_HOME') {
+            const value = trimmed.slice(eqIdx + 1).trim();
+            if (value) return value;
+          }
+        }
+      }
+    } catch {
+      // Unreadable/malformed .env — fall through to the daemon's env.
+    }
+    return process.env['HERMES_HOME'];
   }
 
   private buildStartupPrompt(recoveryNote: string | null, options: StartOptions = {}): string {
