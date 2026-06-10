@@ -146,7 +146,7 @@ function randomSuffix() {
 
 export function formatEntry(c) {
   const lines = [`### ${c.id}`];
-  const fields = ['date', 'skill', 'verdict', 'confidence', 'incident', 'slippage', 'rule', 'source', 'event_id'];
+  const fields = ['date', 'emitted_at', 'skill', 'verdict', 'confidence', 'incident', 'slippage', 'rule', 'source', 'event_id'];
   for (const f of fields) {
     if (c[f]) lines.push(`- ${f}: ${String(c[f]).replace(/\n/g, ' ')}`);
   }
@@ -200,6 +200,10 @@ export function emitCandidate(opts, defaults = envDefaults()) {
   const candidate = {
     id: `fc-${Math.floor(Date.now() / 1000)}-${randomSuffix()}`,
     date: todayUTC(),
+    // Precise ISO axis for cutoff windowing in buildQueue (coarse `date` still
+    // drives the consumed_through date window). ISO-8601 UTC strings sort
+    // lexicographically, so string compare against the cutoff is correct.
+    emitted_at: new Date().toISOString(),
     skill: opts.skill || '',
     verdict: opts.verdict,
     confidence: opts.confidence || 'high',
@@ -287,6 +291,9 @@ export function normalizeEvent(ev) {
     // two stores. Fall back to the bus event id for events not minted by emit.
     id: md.id || `fc-event-${ev.id}`,
     event_id: ev.id,
+    // Carry the candidate's own emit stamp so the normalized event keys on the
+    // same per-candidate timestamp the run-log twin and the build window use.
+    emitted_at: md.emitted_at || ev.timestamp || '',
     date: (ev.timestamp || '').split('T')[0],
     skill: md.skill || md.candidate || '',
     verdict: VERDICTS.includes(md.verdict) ? md.verdict : '',
@@ -317,28 +324,44 @@ export function buildQueue({ eventsRoot, runsDir, since }) {
   const sinceDate = since || marker?.consumed_through || fourteenDaysAgo();
   const watermarkTs = marker?.consumed_through_ts || null;
   const events = readEvents(eventsRoot, sinceDate)
-    // Lower bound (strict `>`): exclude already-consumed events. Upper bound
-    // (`<= cutoff`): exclude events that arrived at/after this build's read
-    // boundary — they belong to the NEXT build (closes the drop AND the
-    // dup-on-during-scan). A timestamp-less event can't be windowed; keep it.
-    .filter((ev) => !ev.timestamp || ((!watermarkTs || ev.timestamp > watermarkTs) && ev.timestamp <= cutoffTs))
+    // Window on the candidate's OWN emit stamp (meta.emitted_at), NOT the bus-
+    // assigned ev.timestamp. emit stamps emitted_at at construction, then appends
+    // the run-log entry, then logs the bus event — so ev.timestamp is strictly
+    // LATER than emitted_at. Keying the event on ev.timestamp while the run-log
+    // twin keys on emitted_at lets one straddling emit fall on opposite sides of
+    // the cutoff (fileEntry IN, event OUT), splitting the dedup partners across
+    // builds = duplicate. Using meta.emitted_at makes BOTH stores key on the SAME
+    // per-candidate stamp, so they always agree. Fall back to ev.timestamp for
+    // pre-unified-store events with no meta.emitted_at; a stampless event is kept.
+    // Lower bound strict `>` (already-consumed), upper bound `<=` (next build).
+    .filter((ev) => {
+      const stamp = ev.metadata?.emitted_at || ev.timestamp;
+      return !stamp || ((!watermarkTs || stamp > watermarkTs) && stamp <= cutoffTs);
+    })
     .map(normalizeEvent);
-  // KNOWN-ACCEPTED LIMITATION (follow-up task_1781104449215_29277678): run-log
-  // entries are date-only, so this read CANNOT be bounded by the authoritative
-  // cutoffTs the way the event read above is (`ts <= cutoff`). An `emit`
-  // appending to candidates.md in the ~1 ms window between the cutoff capture
-  // and this read can cross the build boundary — the entry is consumed THIS
-  // cycle instead of next (dup-or-early-process, NOT silent loss: it is still
-  // archived). Near-zero in practice: the weekly queue->build->consume flow is
-  // single-threaded with no concurrent writer, and forge is DORMANT. The
-  // unified-store pass (precise emit ts on file entries + same cutoff bound, OR
-  // a queue/consume atomicity lock — task_1781104449215_29277678) bounds this
-  // second source under the one cutoff and is a HARD BLOCKER before forge
-  // build-mode is activated live.
+  // UNIFIED-STORE: run-log (candidates.md) entries are now bounded by the SAME
+  // authoritative cutoff as events. Each emit stamps a precise ISO `emitted_at`
+  // (see emitCandidate), so a file entry appended in the window between the
+  // cutoff capture and this read has `emitted_at > cutoffTs` and is deferred to
+  // the NEXT build — neither pulled in early NOR (via consume) archived early.
+  // Both stores now share one cutoff, closing the prior date-only asymmetry.
+  // Back-compat: entries written before this change have no `emitted_at` and
+  // cannot be windowed, so they are kept (same rule as a timestamp-less event).
   let fileEntries = [];
   const qPath = candidatesPath(runsDir);
   if (existsSync(qPath)) {
-    fileEntries = parseQueueFile(readFileSync(qPath, 'utf-8')).pending;
+    fileEntries = parseQueueFile(readFileSync(qPath, 'utf-8')).pending
+      // UPPER bound ONLY (`<= cutoff`): defer an entry appended at/after this
+      // build's read so it lands in the NEXT build. NO watermark lower bound here
+      // — that is an EVENT-store mechanism: events are append-only, so a consumed
+      // event must be watermark-filtered to avoid re-reading it. File entries are
+      // physically REMOVED by id at consume, so any entry STILL in candidates.md
+      // is by-definition not-yet-consumed (it may have been preserved because it
+      // arrived after a build read). Applying the lower bound here would silently
+      // DROP such a preserved entry once the marker advanced past its emit stamp —
+      // and a `--no-event` entry has no event copy to recover it. No `emitted_at`
+      // (pre-unified-store) → keep.
+      .filter((e) => !e.emitted_at || e.emitted_at <= cutoffTs);
   }
   // Dedupe across the two stores. emit dual-persists: the run-log entry is keyed
   // by the candidate's own fc-id, and the forge_candidate event carries that SAME
