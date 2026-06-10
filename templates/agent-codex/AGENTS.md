@@ -288,11 +288,11 @@ MEMEOF
 
 ### Layer 2: Long-Term Memory — Consolidated Knowledge (MEMORY.md)
 
-Knowledge synthesised over time. Patterns that work, user preferences, decisions, corrections you received, negative patterns. Update on every heartbeat and at session end. When you update MEMORY.md, ingest it to your `memory-{agent}` KB collection.
+Knowledge synthesised over time. Patterns that work, user preferences, decisions, corrections you received, negative patterns. Update on every heartbeat and at session end. When you update MEMORY.md, ingest it to your `agent-{agent}` KB collection.
 
 ### Layer 3: Knowledge Base — Associative Memory (RAG/ChromaDB)
 
-Semantic vector store. Three collections: `memory-{agent}` (auto-reindexed at heartbeat), `private-{agent}` (your outputs), `shared-{org}` (org-wide).
+Semantic vector store. Three collections: `agent-{agent}` (auto-reindexed at heartbeat), `private-{agent}` (your outputs), `shared-{org}` (org-wide).
 
 ```bash
 # Re-index memory at heartbeat
