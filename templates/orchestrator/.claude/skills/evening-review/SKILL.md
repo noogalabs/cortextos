@@ -133,13 +133,24 @@ find "$EVENT_ROOT" -type f -name "${TODAY}.jsonl" -print0 2>/dev/null \
 
 If there was no meaningful agent activity, no user correction, and no `forge_candidate` event, write `SKILL-DRIFT CANDIDATES: none (cost-guard skipped forge fork)` in the evening output and do not invoke forge.
 
+**Plumbing guard:** if `$CTX_FRAMEWORK_ROOT/scripts/forge-candidates.mjs` does not exist (the forge plumbing has not landed in this runtime yet), write `SKILL-DRIFT CANDIDATES: skipped (forge plumbing not deployed)` and skip forge detection this cycle — do not error. Resume automatically once the plumbing is present.
+
 If the cost-guard finds meaningful activity, invoke the `forge` skill in detect mode for today's fleet activity:
 
 ```
 /forge ascendops $(date -u +%Y-%m-%d)
 ```
 
-Append a `SKILL-DRIFT CANDIDATES` block to the evening output with HIGH-confidence candidates only. Persist every HIGH candidate before returning by logging a `forge_candidate` event and/or appending to `docs/ephemeral/forge-runs/candidates.md`, so the weekly-heavy build can read it later. Do not build, edit, merge, or activate skills from the daily-light hook.
+Append a `SKILL-DRIFT CANDIDATES` block to the evening output with HIGH-confidence candidates only. Persist every HIGH candidate durably BEFORE returning — detect runs unattended and the weekly build reads the persisted queue, not this session. One command per candidate dual-persists (run-log append to `docs/ephemeral/forge-runs/candidates.md` first, then the `forge_candidate` event) and refuses candidates with no tied real incident:
+
+```bash
+node "$CTX_FRAMEWORK_ROOT/scripts/forge-candidates.mjs" emit \
+  --skill "<target-or-proposed-name>" --verdict <create-new|edit-existing> \
+  --slippage "<what actually slipped>" --incident "<meld/PR/date>" \
+  --rule "<proposed hard rule>" --confidence high
+```
+
+If the script exits non-zero with `forge_candidate event: FAILED`, the run-log entry still persisted — note it in the evening output and move on. Do not build, edit, merge, or activate skills from the daily-light hook.
 
 ---
 
