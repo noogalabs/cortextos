@@ -1070,7 +1070,23 @@ describe('FastChecker', () => {
       expect(agent.injectMessage).toHaveBeenCalledWith(expect.stringContaining('Context window at 75%'));
     });
 
-    it('ignores lowercase non-model bracket tags so log lines do not trigger restarts', () => {
+    it('ignores uppercase log-tag percentages without a "context" suffix', () => {
+      // These all FALSE-POSITIVED under the old badge-prefix regex (uppercase
+      // tag + later NN%). The context-anchored regex excludes them because no
+      // "context" word follows the percent.
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { ctxRestartThreshold: 70 }) as any;
+      primeWatchdog(checker);
+      writeFileSync(
+        join(paths.logDir, 'stdout.log'),
+        '[INFO] download progress 85%\n[WARN] retry budget 90%\n' +
+        '[ERROR] disk usage 95%\n[BUILD] bundle shrunk 88%\n',
+      );
+      checker.watchdogCheck();
+      expect(agent.injectMessage).not.toHaveBeenCalled();
+    });
+
+    it('still ignores lowercase non-model bracket tags', () => {
       const agent = createMockAgent();
       const checker = new FastChecker(agent, paths, '/tmp/framework', { ctxRestartThreshold: 70 }) as any;
       primeWatchdog(checker);

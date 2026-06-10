@@ -881,16 +881,21 @@ export class FastChecker {
     if (tail && this.ctxThresholdPct > 0) {
       // Strip ANSI escape codes before applying the pattern
       const stripped = tail.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-      // F7: match the status-line shape generically — "[<Model badge>] … NN%"
-      // — instead of pinning model names (Sonnet|Opus|Haiku), which silently
-      // disabled Signal 3 for any other model family. Guards against false
-      // positives from arbitrary "[tag] … NN%" log lines:
-      //   - badge must start with an uppercase letter (model names are
-      //     capitalized; excludes [info]/[main]-style tags) and stay short
-      //   - badge and percent must sit on the SAME line (the status line is a
-      //     single line; the old [^\d]* could span lines)
+      // F7: anchor on the status-line "context" suffix — the real line is
+      // "[<Model>] <branch> · NN% context used", so a percent immediately
+      // followed by "context" on the same line is the reliable signal. This is
+      // model-agnostic (no Sonnet|Opus|Haiku pinning, which silently disabled
+      // Signal 3 for other model families) AND excludes the false positives the
+      // old badge-prefix shape let through — uppercase log tags like
+      // [INFO] 85%, [WARN] 90%, [ERROR] 95%, [BUILD] 88% have no "context"
+      // suffix so they no longer trigger a restart.
+      //   - percent and "context" must sit on the SAME line (the status line is
+      //     a single line)
+      //   - up to 15 chars between them absorbs the " " / " · " separators
       //   - percent capped at 3 digits and sanity-checked <= 100 below
-      const pctMatch = stripped.match(/\[[A-Z][^\]\n]{0,40}\][^\d\n]{0,120}(\d{1,3})%/);
+      // Known acceptable residual: a literal "NN% context …" in prose (e.g.
+      // "85% context switches") is rare in agent stdout — not chased.
+      const pctMatch = stripped.match(/(\d{1,3})%[^\n]{0,15}context/);
       if (pctMatch) {
         const pct = parseInt(pctMatch[1], 10);
         if (pct >= this.ctxThresholdPct && pct <= 100) {

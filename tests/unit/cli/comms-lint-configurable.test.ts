@@ -14,6 +14,11 @@ vi.mock('../../../src/bus/message.js', () => ({
   sendMessage: (...args: unknown[]) => sendMessageSpy(...args),
   checkInbox: vi.fn(() => []),
   ackInbox: vi.fn(),
+  // prune-processed (f12-f13-disk-leaks) is imported by src/cli/bus.ts at
+  // module-eval; the mock must expose these or bus.ts fails to load here.
+  pruneProcessed: vi.fn(),
+  PROCESSED_TTL_DAYS: 30,
+  PROCESSED_TTL_MIN_DAYS: 1,
 }));
 
 vi.mock('../../../src/bus/event.js', () => ({
