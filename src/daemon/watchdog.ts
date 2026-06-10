@@ -34,6 +34,7 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
+import { atomicWriteSync } from '../utils/atomic.js';
 
 // Number of failures on the same commit before triggering a rollback.
 export const ROLLBACK_THRESHOLD = 3;
@@ -91,8 +92,12 @@ export function loadStability(stateDir: string): CommitStability {
 
 function saveStability(stateDir: string, data: CommitStability): void {
   try {
-    mkdirSync(stateDir, { recursive: true });
-    writeFileSync(stabilityPath(stateDir), JSON.stringify(data, null, 2) + '\n', 'utf-8');
+    // Atomic (tmp + rename) — saveStability fires on EVERY crash, i.e. exactly
+    // when daemon death mid-write is most likely. A torn watchdog.json would
+    // reset restart_counts/last_healthy and defeat the rollback threshold.
+    // atomicWriteSync mkdirs the parent dir and appends the trailing '\n'
+    // itself, so on-disk bytes are identical to the previous format.
+    atomicWriteSync(stabilityPath(stateDir), JSON.stringify(data, null, 2));
   } catch {
     // Best-effort — never throw from the watchdog
   }
