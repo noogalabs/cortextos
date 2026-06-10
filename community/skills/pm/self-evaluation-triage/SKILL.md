@@ -56,7 +56,7 @@ cortextos bus log-event quality triage_outcome_update info \
 
 ## Part 2: Weekly Reflection Scan
 
-Runs every Monday at 06:00 ET (add to config.json cron if not present). Also triggers on demand via `/reflect` or Dane message.
+Runs every Monday at 06:00 ET (register with `cortextos bus add-cron <agent> self-evaluation-triage "0 6 * * 1" "Read and follow .claude/skills/pm/self-evaluation-triage/SKILL.md"` if not present). Also triggers on demand via `/reflect` or Dane message.
 
 ### Step 1 — Pull All Trajectories
 

@@ -434,7 +434,7 @@ cortextos bus list-crons $CTX_AGENT_NAME
 
 **Add a recurring cron at runtime:** Use the `cron-management` skill. Do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only and will not survive a restart.
 
-**Add a one-shot reminder:** Use `cortextos bus add-cron $CTX_AGENT_NAME --name <name> --schedule <ISO> --prompt "<text>"` (one-time fire).
+**Add a one-shot reminder:** Use `cortextos bus create-reminder <ISO-UTC> "<text>"`.
 
 **Remove:** `cortextos bus remove-cron $CTX_AGENT_NAME <name>`
 
@@ -450,7 +450,7 @@ For full CRUD protocol, see `.claude/skills/cron-management/SKILL.md`.
 |------|-----|
 | Repeat for this session only | `/loop <interval> <prompt>` |
 | Persist across restarts | `cortextos bus add-cron` |
-| One-time future fire | `cortextos bus add-cron --schedule <ISO>` |
+| One-time future fire | `cortextos bus create-reminder <ISO-UTC> "<prompt>"` |
 
 For full model (retry logic, execution log, migration, examples, troubleshooting), see `.claude/skills/cron-management/SKILL.md`.
 

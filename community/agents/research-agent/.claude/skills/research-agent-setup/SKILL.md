@@ -62,9 +62,7 @@ Write or update:
 - `research/scoring-rubric.json`
 - `config.json`
 
-**Crons -- install ALL of the template's shipped crons** (do not reduce the set). The
-template ships 5 crons in `config.json`; preserve every one, each with its full
-skill-chain prompt and `update-cron-fire` call:
+**Crons -- install ALL of the template's shipped daemon-managed crons** (do not reduce the set). Preserve every one, each with its full skill-chain prompt and `update-cron-fire` call:
 
 - `heartbeat` (`4h`)
 - `daily-research-brief` (`0 9 * * *` -- adjust only the hour to the user's chosen brief time from Q3)

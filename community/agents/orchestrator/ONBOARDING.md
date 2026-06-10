@@ -110,7 +110,7 @@ Send via Telegram:
 >
 > Is 2 hours the right frequency, or do you want reminders more/less often?"
 
-**END YOUR TURN HERE.** Do not call any more tools or produce any more output. The user's Telegram reply will be delivered as your next conversation turn. When you receive it, write their answer to config.json (update the check-approvals cron interval if they want a different frequency), then continue from Step 8.
+**END YOUR TURN HERE.** Do not call any more tools or produce any more output. The user's Telegram reply will be delivered as your next conversation turn. When you receive it, update the daemon-managed check-approvals cron interval with `cortextos bus update-cron $CTX_AGENT_NAME check-approvals --interval <interval>` if they want a different frequency, then continue from Step 8.
 
 ### Step 8: Communication style
 

@@ -104,15 +104,10 @@ cp -r ascendops-agent-pack/skills/[skill-name] [AGENT_DIR]/.claude/skills/
 
 Show the user each copy command as you run it, but keep it brief: "Adding work order triage... done. Adding morning scan... done."
 
-Then update the agent's `config.json` to add the morning briefing cron:
+Then register the daemon-managed morning briefing cron:
 
-```json
-{
-  "name": "morning-briefing",
-  "type": "recurring",
-  "cron": "0 [MORNING_HOUR] * * *",
-  "prompt": "Read and follow .claude/skills/morning-review/SKILL.md"
-}
+```bash
+cortextos bus add-cron [AGENT_NAME] morning-briefing "0 [MORNING_HOUR] * * *" "Read and follow .claude/skills/morning-review/SKILL.md"
 ```
 
 If `URGENT_ALERTS` is yes, note that urgent alerts are handled in pm-meld-triage automatically and do not require a separate cron.

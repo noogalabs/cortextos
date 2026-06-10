@@ -300,14 +300,8 @@ cortextos bus send-message "$AGENT" normal \
 
 ### Removing a Cron
 ```bash
-node -e "
-const fs = require('fs');
-const path = '$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT/config.json';
-const c = JSON.parse(fs.readFileSync(path));
-c.crons = (c.crons || []).filter(cr => cr.name !== 'cron-to-remove');
-fs.writeFileSync(path, JSON.stringify(c, null, 2));
-"
-cortextos bus send-message "$AGENT" normal 'Cron removed from config.json. Recreate your crons on next restart.'
+cortextos bus remove-cron "$AGENT" cron-to-remove
+cortextos bus send-message "$AGENT" normal 'Cron removed from daemon-managed crons.json.'
 ```
 
 ---
@@ -419,7 +413,7 @@ cortextos enable "$AGENT" --org "$ORG" --restart
 | Restart another agent | `cortextos bus send-message <agent> high "soft-restart" "<reason>"` |
 | Change model | Edit config.json model field + soft restart |
 | Update bot token | Edit .env BOT_TOKEN + soft restart |
-| Add cron | Edit config.json crons + notify agent |
+| Add cron | `cortextos bus add-cron <agent> <name> <interval-or-cron-expr> "<prompt>"` |
 | Check health | `cortextos status` or `cortextos bus read-all-heartbeats` |
 | List agents | `cortextos bus list-agents --format json` |
 | Check PM2 | `pm2 list` |

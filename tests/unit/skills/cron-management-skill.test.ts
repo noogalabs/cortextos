@@ -129,12 +129,12 @@ describe('cron-management skill', () => {
     });
   });
 
-  describe('gap documentation', () => {
+  describe('one-shot reminder documentation', () => {
     const canonical = readSkill(CANONICAL_PATH);
 
-    it('documents the one-shot reminder gap', () => {
-      expect(canonical).toContain('not yet supported');
-      expect(canonical).toContain('fire_at');
+    it('documents persistent one-shot reminders via create-reminder', () => {
+      expect(canonical).toContain('create-reminder');
+      expect(canonical).toContain('Reminders survive hard restarts');
     });
 
     it('documents enable/disable via --enabled flag', () => {

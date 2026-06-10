@@ -114,7 +114,7 @@ Always include `msg_id` as reply_to (auto-ACKs the original). Un-ACK'd messages 
 Crons are **daemon-managed** — loaded from `crons.json` on daemon start, no session-level restoration needed.
 
 **View:** `cortextos bus list-crons $CTX_AGENT_NAME`
-**Add:** `cortextos bus add-cron $CTX_AGENT_NAME --name <name> --schedule "<cron-or-interval>" --prompt "<text>"`
+**Add:** `cortextos bus add-cron $CTX_AGENT_NAME <name> "<cron-or-interval>" "<text>"`
 **Remove:** `cortextos bus remove-cron $CTX_AGENT_NAME <name>`
 
 Do NOT use `/loop` or CronCreate for persistent scheduling — those are session-only and will not survive a restart.

@@ -141,7 +141,7 @@ Always include `msg_id` as reply_to. Un-ACK'd messages redeliver after 5 min.
 Crons are **daemon-managed** — loaded from `crons.json` on daemon start, no session-level restoration needed.
 
 **View:** `ascendops bus list-crons $CTX_AGENT_NAME`
-**Add:** `ascendops bus add-cron $CTX_AGENT_NAME --name <name> --schedule "<cron-or-interval>" --prompt "<text>"`
+**Add:** `ascendops bus add-cron $CTX_AGENT_NAME <name> "<cron-or-interval>" "<text>"`
 **Remove:** `ascendops bus remove-cron $CTX_AGENT_NAME <name>`
 
 ---

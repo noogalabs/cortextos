@@ -8,7 +8,7 @@ triggers: ["upstream check", "framework update", "check upstream", "upstream aut
 # Framework Upstream Auto-Update
 
 ## Trigger
-- Daily cron (see `config.json` crons entry `daily-framework-upstream-auto-update`).
+- Daily daemon-managed cron (`daily-framework-upstream-auto-update`).
 - Ad hoc if [ORCHESTRATOR] or a user asks for an upstream check.
 
 ## Owner
@@ -130,13 +130,9 @@ Include whatever was applied or flagged overnight from Step 7's memory entry in 
 
 ## Deployment Config
 
-Add to `config.json` crons:
-```json
-{
-  "name": "daily-framework-upstream-auto-update",
-  "interval": "24h",
-  "prompt": "Read and follow .claude/skills/framework-upstream-auto-update/SKILL.md"
-}
+Register the daemon-managed cron:
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME daily-framework-upstream-auto-update 24h "Read and follow .claude/skills/framework-upstream-auto-update/SKILL.md"
 ```
 
 Replace `[AGENT_NAME]` and `[ORCHESTRATOR]` with your agent's name and the orchestrator agent name in your deployment.

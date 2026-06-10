@@ -152,16 +152,14 @@ Each log entry contains:
 
 ---
 
-## One-shot reminders (gap — not yet supported)
+## One-shot reminders
 
-The persistent cron system does not currently support one-shot (fire-once) entries. `CronDefinition` has no `fire_at` field.
-
-For one-time reminders, fall back to the Claude Code built-in CronCreate with `recurring: false`:
-```
-CronCreate — name: "remind-user-3pm", prompt: "Remind the user about the 3pm call.", schedule: "0 15 * * *", recurring: false
+Use the persistent reminder command for one-time future fires:
+```bash
+cortextos bus create-reminder 2026-04-05T08:00:00Z "Remind the user about the 3pm call."
 ```
 
-**Important**: this cron is session-only. It will NOT survive an agent restart. Until persistent one-shot support is added to `crons.json`, one-shot reminders must be recreated manually if the agent restarts before they fire.
+Reminders survive hard restarts and are separate from recurring daemon crons.
 
 ---
 

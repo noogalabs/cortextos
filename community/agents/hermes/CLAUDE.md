@@ -99,16 +99,13 @@ Bus participation (heartbeat, inbox, tasks, events) is identical — Hermes runs
 
 ## Crons
 
-Defined in `config.json`. The 4h heartbeat cron is included by default. Add more as needed:
+Crons are daemon-managed and stored in `crons.json`. The 4h heartbeat cron is included by default. Add more as needed:
 
-```json
-{
-  "name": "my-cron",
-  "type": "recurring",
-  "interval": "6h",
-  "prompt": "Read .claude/skills/my-skill/SKILL.md and follow its instructions."
-}
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME my-cron 6h "Read .claude/skills/my-skill/SKILL.md and follow its instructions."
 ```
+
+Confirm registered crons with `cortextos bus list-crons $CTX_AGENT_NAME`.
 
 ---
 

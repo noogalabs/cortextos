@@ -410,7 +410,7 @@ cortextos bus list-crons $CTX_AGENT_NAME
 
 **Add a recurring cron at runtime:** Use the `cron-management` skill. Do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only and will not survive a restart.
 
-**Add a one-shot reminder:** `cortextos bus add-cron $CTX_AGENT_NAME --name <name> --schedule <ISO> --prompt "<text>"` (one-time fire).
+**Add a one-shot reminder:** `cortextos bus create-reminder <ISO-UTC> "<text>"`
 
 **Remove:** `cortextos bus remove-cron $CTX_AGENT_NAME <name>`
 
