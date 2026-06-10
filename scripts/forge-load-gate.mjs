@@ -35,8 +35,11 @@
  *                   never claim the skill fired without running that smoke.
  *
  * Usage:
- *   node scripts/forge-load-gate.mjs <skill-dir>... [--target-home <repo-root>]
+ *   node scripts/forge-load-gate.mjs <skill-dir>... [--target-home <skills-home>]
  *        [--runtime-dir <live-skills-dir>] [--refs name1,name2] [--lenient] [--json]
+ *   <skills-home> is the dir directly containing skill subdirs (a role-template
+ *   `.claude/skills` dir or `community/skills`) — NOT the repo root; references
+ *   resolve as <skills-home>/<ref>/SKILL.md.
  *
  * Exit codes: 0 = mechanical gates pass (fire-smoke still required),
  *             1 = gate failure, 2 = no real YAML parser / bad invocation.
@@ -118,11 +121,17 @@ export function findReferencedSkills(body) {
 
 function trackedSkillResolves(targetHome, name) {
   try {
-    const out = execFileSync('git', ['-C', targetHome, 'ls-files', `*skills/${name}/SKILL.md`], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
+    // Resolve the EXACT path relative to the target home: the referenced skill
+    // must be tracked at <targetHome>/<name>/SKILL.md. The prior unanchored
+    // `*skills/<name>` glob matched a skill ANYWHERE in the repo from a repo-root
+    // home (false-GREEN — a ref absent from the actual home still "resolved")
+    // and matched NOTHING from a skills-subdir cwd (false-RED — relative paths
+    // lack the `skills/` prefix). `--error-unmatch` on the home-relative path is
+    // anchored correctly at both ends: exit 0 iff that exact path is tracked.
+    execFileSync('git', ['-C', targetHome, 'ls-files', '--error-unmatch', '--', join(name, 'SKILL.md')], {
+      stdio: ['ignore', 'ignore', 'ignore'],
     });
-    return out.trim().length > 0;
+    return true;
   } catch {
     return false;
   }

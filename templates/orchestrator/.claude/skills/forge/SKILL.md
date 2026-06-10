@@ -68,10 +68,10 @@ node "$CTX_FRAMEWORK_ROOT/scripts/forge-candidates.mjs" emit \
 node "$CTX_FRAMEWORK_ROOT/scripts/forge-candidates.mjs" queue
 ```
 
-**Gate every built/sharpened skill (step 4)** — the combined load gate: real-YAML parse (never regex; fails loud if no real parser) + discoverable + ship features (model tier, `context: fork`, `$ARGUMENTS`, imperative description, triggers) + referenced skills resolve from the target home via `git ls-files`. The trigger-fire smoke remains MANUAL in the target agent's context — the gate prints the exact smoke to run:
+**Gate every built/sharpened skill (step 4)** — the combined load gate: real-YAML parse (never regex; fails loud if no real parser) + discoverable + ship features (model tier, `context: fork`, `$ARGUMENTS`, imperative description, triggers) + referenced skills resolve from the target home via `git ls-files`. Pass `--target-home` as the skill's OWN tracked source home (its role-template `.claude/skills` dir, or `community/skills` for a shareable skill) — NOT the repo root: the reference check resolves names relative to that home, so the repo root would mis-scope the resolution. The trigger-fire smoke remains MANUAL in the target agent's context — the gate prints the exact smoke to run:
 
 ```bash
-node "$CTX_FRAMEWORK_ROOT/scripts/forge-load-gate.mjs" <skill-dir> --target-home "$CTX_FRAMEWORK_ROOT"
+node "$CTX_FRAMEWORK_ROOT/scripts/forge-load-gate.mjs" <skill-dir> --target-home "<the skill's tracked source home, e.g. templates/<role>/.claude/skills or community/skills>"
 ```
 
 **Two-step registration (step 4, hard rule 6)** — `stage` copies into the tracked home and gates it (PR follows; never commits/merges itself); `activate` runs only after the merge + orchestrator gate, copies byte-identical FROM the tracked source, and refuses untracked sources and missing `--gate-approved-by`:

@@ -31,24 +31,6 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runLoadGate } from './forge-load-gate.mjs';
 
-/**
- * Resolve the git repo root containing `dir`. The load gate's reference check
- * runs `git -C <home> ls-files '*skills/<ref>/SKILL.md'`; that pathspec only
- * matches when run from the REPO ROOT (from a skills subdir the tracked paths
- * are relative and lack the `skills/` prefix, so valid sibling refs wrongly
- * fail). Falls back to `dir` if not in a repo.
- */
-function repoRootOf(dir) {
-  try {
-    return execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim() || dir;
-  } catch {
-    return dir;
-  }
-}
-
 function gitTracked(path) {
   try {
     const out = execFileSync('git', ['-C', resolve(path, '..'), 'ls-files', '--', basename(path)], {
@@ -131,9 +113,12 @@ function stage(opts) {
   rmSync(dest, { recursive: true, force: true });
   cpSync(from, dest, { recursive: true });
   console.log(`staged ${name} -> ${dest}`);
-  // Pass the REPO ROOT (not the skills subdir) so the gate's `git ls-files
-  // '*skills/<ref>/SKILL.md'` reference check resolves tracked sibling skills.
-  const gate = runLoadGate([dest], { targetHome: repoRootOf(home) });
+  // Pass the skills home itself: the gate now resolves references as the exact
+  // path relative to the home (`git ls-files --error-unmatch -- <ref>/SKILL.md`
+  // from <home>), so the home — not the repo root — is the correct scope. (The
+  // old repo-root workaround for the unanchored `*skills/` glob over-broadened
+  // to a false-green; the anchored gate makes `home` correct.)
+  const gate = runLoadGate([dest], { targetHome: home });
   process.stdout.write(gate.output);
   if (!gate.ok) {
     console.error('stage: load gate FAILED — fix before opening the PR');

@@ -50,10 +50,30 @@ Inputs:
 - `docs/ephemeral/forge-runs/candidates.md` if present.
 - Any skill drift surfaced by David corrections, PR review loops, or under-fired skills this week.
 
-Invoke the forge skill in build mode:
+**Plumbing guard:** if `$CTX_FRAMEWORK_ROOT/scripts/forge-candidates.mjs` does not exist (the forge plumbing has not landed in this runtime yet), write `FORGE WEEKLY BUILD: skipped (forge plumbing not deployed)` and skip the rest of 1B — do not error. Resume automatically once the plumbing is present.
+
+Read the accumulated queue first — it merges the events since the last build marker with the pending run-log entries, deduped and grouped by create-vs-edit verdict:
+
+```bash
+node "$CTX_FRAMEWORK_ROOT/scripts/forge-candidates.mjs" queue
+```
+
+If the queue is empty, write `FORGE WEEKLY BUILD: queue empty — no build` and skip the rest of 1B. Otherwise invoke the forge skill in build mode:
 
 ```
 /forge --build
+```
+
+Gate every spec'd skill in the change-set through the combined load gate (real-YAML parse + discoverable + ship features + references resolve from the target home; the trigger-fire smoke stays manual in the target agent's context). Pass `--target-home` as the skill's OWN tracked source home (its role-template `.claude/skills` dir, or `community/skills` for a shareable skill) — NOT the repo root: the reference check resolves names relative to that home, so the repo root would false-green a ref that exists anywhere in the monorepo but is absent from the skill's actual home:
+
+```bash
+node "$CTX_FRAMEWORK_ROOT/scripts/forge-load-gate.mjs" <skill-dir> --target-home "<the skill's tracked source home, e.g. templates/<role>/.claude/skills or community/skills>"
+```
+
+After the gated change-set is assembled and handed to the gate, archive the consumed queue so next week starts clean:
+
+```bash
+node "$CTX_FRAMEWORK_ROOT/scripts/forge-candidates.mjs" consume --build-id "build-$(date -u +%Y-%m-%d)"
 ```
 
 Output a `FORGE WEEKLY BUILD` section with:

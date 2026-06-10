@@ -135,19 +135,40 @@ Legacy body.
     expect(res.stdout).toContain('`vendor-assign` does not resolve from target home');
   });
 
-  it('resolves references via git ls-files when tracked in the target home', () => {
+  it('resolves a reference tracked in the SAME target home (anchored, no false-red)', () => {
     tmp = mkdtempSync(join(tmpdir(), 'forge-gate-'));
     execFileSync('git', ['init', '-q', tmp]);
-    const refDir = join(tmp, 'templates', 'agent', '.claude', 'skills', 'vendor-assign');
+    // target-home is the skills HOME (the dir directly containing skill subdirs).
+    const home = join(tmp, 'community', 'skills');
+    const refDir = join(home, 'vendor-assign');
     mkdirSync(refDir, { recursive: true });
     writeFileSync(join(refDir, 'SKILL.md'), GOOD_SKILL.replace('name: demo-skill', 'name: vendor-assign'), 'utf-8');
     execFileSync('git', ['-C', tmp, 'add', '.']);
     const dir = seed('handoff-skill', GOOD_SKILL.replace('name: demo-skill', 'name: handoff-skill')
       .replace('run the demo.', 'run the demo, then hand off to the `vendor-assign` skill.'));
-    // seed() wrote the skill after `git add`, so handoff-skill itself is untracked —
-    // only the REFERENCE resolution is under test here.
-    const res = run([dir, '--target-home', tmp]);
+    // The sibling `vendor-assign` lives at <home>/vendor-assign — the anchored
+    // resolution finds it from a skills-subdir home (the old `*skills/` glob from
+    // a subdir cwd false-RED'd this exact case).
+    const res = run([dir, '--target-home', home]);
     expect(res.status).toBe(0);
     expect(res.stdout).not.toContain('vendor-assign` does not resolve');
+  });
+
+  it('rejects a reference present ELSEWHERE in the repo but absent from the target home (no false-green)', () => {
+    tmp = mkdtempSync(join(tmpdir(), 'forge-gate-'));
+    execFileSync('git', ['init', '-q', tmp]);
+    // vendor-assign is tracked in a DIFFERENT home (templates/other/.claude/skills).
+    const otherHome = join(tmp, 'templates', 'other', '.claude', 'skills', 'vendor-assign');
+    mkdirSync(otherHome, { recursive: true });
+    writeFileSync(join(otherHome, 'SKILL.md'), GOOD_SKILL.replace('name: demo-skill', 'name: vendor-assign'), 'utf-8');
+    execFileSync('git', ['-C', tmp, 'add', '.']);
+    const dir = seed('handoff-skill', GOOD_SKILL.replace('name: demo-skill', 'name: handoff-skill')
+      .replace('run the demo.', 'run the demo, then hand off to the `vendor-assign` skill.'));
+    // target-home = REPO ROOT (the case the unanchored `*skills/` glob FALSE-GREENED
+    // by matching vendor-assign anywhere in the monorepo). Anchored resolution keys
+    // off <home>/vendor-assign/SKILL.md — absent here — so it correctly REJECTS.
+    const res = run([dir, '--target-home', tmp]);
+    expect(res.status).toBe(1);
+    expect(res.stdout).toContain('`vendor-assign` does not resolve from target home');
   });
 });
