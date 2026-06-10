@@ -48,13 +48,45 @@ export class MessageDedup {
   }
 }
 
+// C0 control characters (except \t \n \r), DEL, and the C1 control block
+// (\x80-\x9f). ESC (0x1b) is the critical C0 — see sanitizeForInjection
+// below. The C1 block matters because 8-bit CSI (\x9b, U+009B) is the
+// single-byte equivalent of ESC[ in some terminal modes: "\x9b201~" can
+// act as the bracketed-paste END marker exactly like "\x1b[201~", the
+// same paste-breakout class already closed for 7-bit ESC. Stripping
+// targets code points U+0080-U+009F only — printable Latin-1/Unicode
+// text (é, ñ, emoji, etc.) sits above U+009F and is untouched.
+const CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x80-\x9f]/g;
+
+/**
+ * Strip control characters from message content before PTY injection.
+ *
+ * Bracketed paste only protects against PRINTABLE special characters.
+ * If the content itself contains the paste-END marker (ESC [ 2 0 1 ~),
+ * the terminal application sees the paste terminate early and interprets
+ * the REMAINDER of the message as typed keystrokes — i.e. an attacker who
+ * can get text delivered to an agent (Telegram message, bus message,
+ * email subject relayed into a prompt) could embed escape sequences that
+ * navigate TUI menus, auto-approve permission prompts, or submit
+ * arbitrary commands. Stripping ESC and the other C0 controls (keeping
+ * \t \n \r, which are legitimate in multi-line messages) closes the
+ * breakout: "\x1b[201~" becomes the harmless literal "[201~". C1
+ * controls (\x80-\x9f) are stripped for the same reason — 8-bit CSI
+ * "\x9b201~" is an alternate encoding of the same paste-END breakout.
+ */
+export function sanitizeForInjection(content: string): string {
+  return content.replace(CONTROL_CHARS, '');
+}
+
 /**
  * Inject a message into a PTY process using bracketed paste mode.
  * Replaces tmux load-buffer + paste-buffer pattern.
  *
  * Bracketed paste mode wraps the content so the terminal treats it as
  * pasted text rather than typed input. This prevents special characters
- * from being interpreted as commands.
+ * from being interpreted as commands. Content is first sanitized via
+ * `sanitizeForInjection` so embedded escape sequences cannot terminate
+ * the paste early and inject raw keystrokes.
  *
  * @param write Function to write to the PTY (pty.write)
  * @param content The message content to inject
@@ -65,6 +97,7 @@ export function injectMessage(
   content: string,
   enterDelay: number = 300,
 ): void {
+  content = sanitizeForInjection(content);
   // For very large messages, chunk the write to avoid overwhelming the PTY buffer
   const MAX_CHUNK = 4096;
 

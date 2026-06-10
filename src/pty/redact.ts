@@ -17,16 +17,15 @@
  * The fix therefore lives at the PTY layer (defense-in-depth for any
  * future exposure via any tool) rather than in an individual code path.
  *
- * Known limitation: PTY data arrives in OS-buffered chunks (typically 4KB
- * on Linux). If a chunk boundary happens to fall inside a JWT, neither
- * chunk matches the regex and the token slips through unredacted across
- * two push() calls. JWTs are typically 300-500 bytes so they fit in one
- * chunk in the overwhelming majority of real cases — every observed leak
- * in the origin audit fit in a single chunk. Buffer-aware redaction
- * (carry a trailing partial-match buffer across chunks) is the follow-up
- * if this edge case ever surfaces in production. Test `chunk-boundary
- * regression guard` in output-buffer.test.ts locks this documented
- * behavior in place so any future change has to be explicit.
+ * Chunk-boundary handling: PTY data arrives in OS-buffered chunks
+ * (typically 4KB on Linux). If a chunk boundary falls inside a JWT,
+ * neither chunk matches the regex on its own. `splitTrailingPartialJwt`
+ * closes this gap: OutputBuffer.push() holds back a trailing substring
+ * that could be the prefix of a JWT and prepends it to the next chunk,
+ * so the reassembled token is redacted before anything reaches the disk
+ * log. The holdback is bounded (MAX_PARTIAL_HOLDBACK) so legitimate
+ * base64 output that merely starts with `eyJ` cannot be withheld
+ * indefinitely. See the chunk-boundary tests in output-buffer.test.ts.
  */
 
 /**
@@ -49,4 +48,66 @@ const JWT_PATTERN = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10
  */
 export function redactSecrets(data: string): string {
   return data.replace(JWT_PATTERN, '[REDACTED_JWT]');
+}
+
+/**
+ * Maximum number of trailing characters that may be held back as a
+ * potential partial JWT across a chunk boundary. JWTs observed in the
+ * origin audit were 300-500 bytes; 2KB covers outsized tokens while
+ * bounding the worst case for legitimate base64 output that merely
+ * starts with `eyJ` (base64 of `{"` — any base64-encoded JSON).
+ */
+export const MAX_PARTIAL_HOLDBACK = 2048;
+
+/**
+ * A trailing substring that could be the PREFIX of a JWT split across a
+ * chunk boundary: `eyJ` followed by up to two dot-separated base64url
+ * segments, anchored at end-of-string. Note: segments here have no
+ * minimum length — a boundary can fall anywhere inside the token,
+ * INCLUDING inside the `eyJ` header prefix itself. The `ey?` alternative
+ * holds back a bare trailing `e` or `ey` so a token split after the
+ * first or second prefix byte (chunk 1 ends `...e`, chunk 2 starts
+ * `yJ...`) is still reassembled and redacted. Without it, neither chunk
+ * matches JWT_PATTERN on its own and the full token reaches the disk
+ * log once OutputBuffer's writes are concatenated. The cost is tiny: at
+ * most 2 extra bytes deferred to the next chunk (or flushed verbatim at
+ * close() — a bare prefix fragment carries no token material).
+ */
+const PARTIAL_JWT_AT_END = /(?:eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*){0,2}|ey?)$/;
+
+/**
+ * A held tail that is ONLY a fragment of the `eyJ` header prefix —
+ * contains no header/payload/signature bytes, so it is safe to emit
+ * verbatim if the stream ends while it is held (see OutputBuffer.close).
+ */
+export const BARE_PREFIX_FRAGMENT = /^(?:e|ey|eyJ)$/;
+
+/** A string that is, in its entirety, a complete JWT shape. */
+const COMPLETE_JWT = /^eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}$/;
+
+/**
+ * Split a chunk into `[emit, hold]` where `hold` is a trailing substring
+ * that could be the prefix of a JWT continuing in the next chunk.
+ *
+ * The caller (OutputBuffer.push) prepends `hold` to the next incoming
+ * chunk before redacting, so a token split across the OS chunk boundary
+ * is reassembled and caught by `redactSecrets`.
+ *
+ * Two deliberate non-holds:
+ * - Candidate longer than MAX_PARTIAL_HOLDBACK: almost certainly a
+ *   legitimate base64 blob, not a credential — emit unchanged rather
+ *   than withhold large amounts of output.
+ * - Candidate that is ALREADY a complete JWT shape: redactSecrets will
+ *   catch it in this chunk. Emitting now avoids indefinitely withholding
+ *   the final output of a session. (If the token actually continues into
+ *   the next chunk, only a signature fragment can appear in the log —
+ *   header and payload are redacted here, so nothing usable leaks.)
+ */
+export function splitTrailingPartialJwt(data: string): [string, string] {
+  const m = data.match(PARTIAL_JWT_AT_END);
+  if (!m || m.index === undefined) return [data, ''];
+  const candidate = m[0];
+  if (candidate.length > MAX_PARTIAL_HOLDBACK) return [data, ''];
+  if (COMPLETE_JWT.test(candidate)) return [data, ''];
+  return [data.slice(0, m.index), candidate];
 }

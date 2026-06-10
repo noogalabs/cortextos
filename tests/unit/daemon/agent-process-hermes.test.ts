@@ -57,6 +57,7 @@ const fsMocks = {
   writeFileSync: vi.fn(),
   appendFileSync: vi.fn(),
   statSync: vi.fn(),
+  unlinkSync: vi.fn(),
 };
 
 vi.mock('fs', async () => {
@@ -69,6 +70,7 @@ vi.mock('fs', async () => {
     get writeFileSync() { return fsMocks.writeFileSync; },
     get appendFileSync() { return fsMocks.appendFileSync; },
     get statSync() { return fsMocks.statSync; },
+    get unlinkSync() { return fsMocks.unlinkSync; },
   };
 });
 
@@ -98,6 +100,7 @@ beforeEach(() => {
   fsMocks.writeFileSync.mockReset();
   fsMocks.appendFileSync.mockReset();
   fsMocks.statSync.mockReset();
+  fsMocks.unlinkSync.mockReset();
 });
 
 describe('AgentProcess - Hermes runtime: shouldContinue', () => {
@@ -124,7 +127,51 @@ describe('AgentProcess - Hermes runtime: shouldContinue', () => {
     await ap.start();
 
     expect(mockHermesDbExists).toHaveBeenCalledWith('/custom/hermes');
-    process.env['HERMES_HOME'] = originalHermesHome;
+    if (originalHermesHome === undefined) {
+      delete process.env['HERMES_HOME'];
+    } else {
+      process.env['HERMES_HOME'] = originalHermesHome;
+    }
+  });
+
+  it('honors the .force-fresh marker even when Hermes state.db exists', async () => {
+    // Regression: the force-fresh check used to sit BELOW the Hermes
+    // early-return in shouldContinue(), so hardRestartSelf() on a Hermes
+    // agent never forced a fresh session and the marker leaked forever.
+    fsMocks.existsSync.mockImplementation((p: string) => String(p).endsWith('.force-fresh'));
+    mockHermesDbExists.mockReturnValue(true);
+
+    const ap = new AgentProcess('hermes-agent', mockEnv, { runtime: 'hermes' });
+    await ap.start();
+
+    // Fresh mode despite state.db existing — the marker wins...
+    expect(mockPty.spawn).toHaveBeenCalledWith('fresh', expect.any(String));
+    // ...and the Hermes DB probe is never consulted (marker short-circuits).
+    expect(mockHermesDbExists).not.toHaveBeenCalled();
+    // ...and the marker is consumed so the NEXT start can continue again.
+    const unlinked = fsMocks.unlinkSync.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(unlinked.some((p: string) => p.endsWith('.force-fresh'))).toBe(true);
+  });
+
+  it('resolves HERMES_HOME from the agent .env file (not just the daemon env)', async () => {
+    // The agent .env is loaded into the PTY CHILD's environment, not the
+    // daemon's process.env — shouldContinue() must read the file itself or
+    // the documented per-agent override is silently ignored.
+    const agentEnvPath = `${mockEnv.agentDir}/.env`;
+    fsMocks.existsSync.mockImplementation((p: string) => String(p) === agentEnvPath);
+    fsMocks.readFileSync.mockImplementation((p: string) => {
+      if (String(p) === agentEnvPath) {
+        return '# agent secrets\nBOT_TOKEN=tg-token\nHERMES_HOME=/srv/hermes-home\n';
+      }
+      return '';
+    });
+    mockHermesDbExists.mockReturnValue(true);
+
+    const ap = new AgentProcess('hermes-agent', mockEnv, { runtime: 'hermes' });
+    await ap.start();
+
+    expect(mockHermesDbExists).toHaveBeenCalledWith('/srv/hermes-home');
+    expect(mockPty.spawn).toHaveBeenCalledWith('continue', expect.any(String));
   });
 });
 

@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from 'fs';
+import { existsSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
@@ -44,6 +44,17 @@ export class HermesPTY extends AgentPTY {
    */
   protected getBinaryName(): string {
     return 'hermes';
+  }
+
+  /**
+   * Hermes never shows a trust-folder prompt (see class-level comment), so
+   * the base class's auto-accept timers must not run. Their loose
+   * "Yes"/"trust" substring match against recent output would fire a stray
+   * Enter at the 5s/8s marks — right when the startup-file read command has
+   * just been injected — and could submit a partial or empty line.
+   */
+  protected needsTrustPromptAutoAccept(): boolean {
+    return false;
   }
 
   /**
@@ -93,12 +104,21 @@ export class HermesPTY extends AgentPTY {
    * The file is gitignored (.cortextos-startup.md is in .gitignore by convention).
    */
   private writeStartupFile(prompt: string): void {
+    const filePath = join(this.agentDir, STARTUP_PROMPT_FILE);
     try {
-      const filePath = join(this.agentDir, STARTUP_PROMPT_FILE);
       writeFileSync(filePath, prompt, 'utf-8');
     } catch (err) {
-      // Non-fatal: if the write fails, the injection command will fail gracefully
+      // Non-fatal for the spawn itself, but a STALE startup file from a
+      // previous boot may still be on disk. Remove it so the injected read
+      // command fails loudly ("file not found") instead of Hermes silently
+      // following OUTDATED instructions (e.g. a prior session's recovery
+      // note or continue prompt).
       console.error(`[hermes-pty] Failed to write startup file: ${err}`);
+      try {
+        unlinkSync(filePath);
+      } catch {
+        // Nothing stale to remove (or it is equally unreachable) — fine.
+      }
     }
   }
 
@@ -115,15 +135,42 @@ export class HermesPTY extends AgentPTY {
   private async waitForPromptThenInject(timeoutMs = 30000): Promise<void> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
+      // If the PTY died (crash, kill, restart) while we were waiting,
+      // abort: this loop belongs to a dead session, and writing to a null
+      // PTY would throw. Crash recovery spawns a NEW HermesPTY instance
+      // with its own injection schedule.
+      if (!this.isAlive()) {
+        console.error('[hermes-pty] PTY exited before startup injection — skipping');
+        return;
+      }
       if (this.getOutputBuffer().isBootstrapped()) {
         // `❯` appeared — Hermes is ready. Inject the read command.
-        this.write(`Read ${STARTUP_PROMPT_FILE} and follow the instructions there.\r`);
+        this.injectStartupCommand();
         return;
       }
       await sleep(500);
     }
-    // Timeout: Hermes took too long to boot. Inject anyway and let it handle.
-    this.write(`Read ${STARTUP_PROMPT_FILE} and follow the instructions there.\r`);
+    // Timeout: Hermes took too long to boot. Inject anyway (if still alive)
+    // and let the REPL handle it whenever it becomes ready.
+    if (this.isAlive()) {
+      this.injectStartupCommand();
+    } else {
+      console.error('[hermes-pty] PTY exited during bootstrap wait — startup injection skipped');
+    }
+  }
+
+  /**
+   * Write the startup read command to the PTY. write() throws if the PTY
+   * has been torn down between the alive-check and the write — that race
+   * must not surface as an unhandled rejection in the daemon, so it is
+   * caught and logged here.
+   */
+  private injectStartupCommand(): void {
+    try {
+      this.write(`Read ${STARTUP_PROMPT_FILE} and follow the instructions there.\r`);
+    } catch (err) {
+      console.error(`[hermes-pty] Startup injection write failed (PTY torn down?): ${err}`);
+    }
   }
 
 }

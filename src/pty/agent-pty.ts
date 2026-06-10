@@ -37,6 +37,12 @@ export class AgentPTY {
   private config: AgentConfig;
   private onExitHandler: ((exitCode: number, signal?: number) => void) | null = null;
   private spawnFn: SpawnFn | null = null;
+  // Trust-prompt auto-accept timers. Stored so they can be cancelled when
+  // the PTY exits or is killed — otherwise a timer from a previous spawn()
+  // can fire against a RESPAWNED PTY on the same instance and write a stray
+  // Enter into the new session (the callbacks only check `this.pty`, which
+  // is truthy again after a respawn).
+  private trustPromptTimers: ReturnType<typeof setTimeout>[] = [];
 
   constructor(env: CtxEnv, config: AgentConfig, logPath?: string, bootstrapPattern?: string) {
     this.env = env;
@@ -170,6 +176,13 @@ export class AgentPTY {
     this.pty.onExit(({ exitCode, signal }) => {
       this._alive = false;
       this.pty = null;
+      // Flush any held-back partial-JWT tail — the stream is over, so the
+      // hold can never be resolved by a next chunk. Writes an explicit
+      // marker (or the bare prefix fragment) instead of dropping bytes.
+      this.outputBuffer.close();
+      // Cancel pending trust-prompt timers — the PTY they targeted is gone,
+      // and they must not fire against a future respawn on this instance.
+      this.clearTrustPromptTimers();
       if (this.onExitHandler) {
         this.onExitHandler(exitCode, signal);
       }
@@ -178,22 +191,42 @@ export class AgentPTY {
     // Claude Code shows a "trust this folder?" prompt on first run in a new directory.
     // Auto-accept by sending Enter after the prompt appears.
     // The prompt takes ~3-5s to render; we send Enter at 5s and 8s for reliability.
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
+    // Skipped for runtimes that never show a trust prompt (Hermes overrides
+    // needsTrustPromptAutoAccept) — the loose "Yes"/"trust" substring match
+    // would otherwise fire a stray Enter on unrelated output.
+    if (this.needsTrustPromptAutoAccept()) {
+      for (const delayMs of [5000, 8000]) {
+        const timer = setTimeout(() => {
+          if (this.pty) {
+            const recent = this.outputBuffer.getRecent();
+            if (recent.includes('trust') || recent.includes('Yes')) {
+              try {
+                this.pty.write('\r');
+              } catch {
+                // PTY torn down between the alive check and the write — ignore.
+              }
+            }
+          }
+        }, delayMs);
+        this.trustPromptTimers.push(timer);
       }
-    }, 5000);
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
-      }
-    }, 8000);
+    }
+  }
+
+  /**
+   * Whether this runtime shows a "trust this folder?" prompt that the
+   * daemon should auto-accept. Claude Code does; Hermes does not
+   * (HermesPTY overrides this to return false).
+   */
+  protected needsTrustPromptAutoAccept(): boolean {
+    return true;
+  }
+
+  private clearTrustPromptTimers(): void {
+    for (const timer of this.trustPromptTimers) {
+      clearTimeout(timer);
+    }
+    this.trustPromptTimers = [];
   }
 
   /**
@@ -255,11 +288,24 @@ export class AgentPTY {
    * Kill the PTY process.
    */
   kill(): void {
+    // Cancel pending trust-prompt timers unconditionally — even if the PTY
+    // is already gone, stale timers must not survive into a respawn.
+    this.clearTrustPromptTimers();
     const pty = this.pty;
     if (pty) {
       this._alive = false;
       this.pty = null;
-      pty.kill();
+      try {
+        pty.kill();
+      } catch {
+        // The process may have exited between the null-check and the kill;
+        // a throw here must not propagate into stop()/restart paths.
+      }
+      // Belt-and-suspenders: onExit normally fires after kill and flushes
+      // the held tail, but if the event loop tears down first (daemon
+      // shutdown) the hold would be lost. close() is idempotent, so the
+      // subsequent onExit flush is a no-op.
+      this.outputBuffer.close();
     }
   }
 

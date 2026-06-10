@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { MessageDedup, KEYS, injectMessage } from '../../../src/pty/inject';
+import { MessageDedup, KEYS, injectMessage, sanitizeForInjection } from '../../../src/pty/inject';
 
 describe('MessageDedup', () => {
   it('detects duplicate content', () => {
@@ -32,6 +32,82 @@ describe('KEYS', () => {
     expect(KEYS.DOWN).toBe('\x1b[B');
     expect(KEYS.UP).toBe('\x1b[A');
     expect(KEYS.SPACE).toBe(' ');
+  });
+});
+
+describe('sanitizeForInjection — escape-sequence breakout protection', () => {
+  it('strips a bracketed-paste END marker embedded in content', () => {
+    // An attacker-controlled message containing ESC[201~ would terminate
+    // bracketed paste early — everything after it would be interpreted as
+    // TYPED keystrokes (TUI navigation, auto-approve Enter, etc.).
+    const malicious = 'innocent text\x1b[201~\rrm -rf /\r';
+    const safe = sanitizeForInjection(malicious);
+    expect(safe).not.toContain('\x1b');
+    // The marker degrades to harmless literal text.
+    expect(safe).toContain('[201~');
+  });
+
+  it('strips other C0 control characters but preserves tab/newline/CR', () => {
+    const input = 'line1\nline2\r\nta\tb\x00\x07\x08\x0b\x7fend';
+    const safe = sanitizeForInjection(input);
+    expect(safe).toBe('line1\nline2\r\nta\tbend');
+  });
+
+  it('strips 8-bit CSI (\\x9b) — C1-encoded paste-END breakout is neutralized', () => {
+    // \x9b is the single-byte (C1) equivalent of ESC[. In terminal modes
+    // that honor 8-bit controls, "\x9b201~" terminates bracketed paste
+    // exactly like "\x1b[201~" — the same breakout class, alternate
+    // encoding. It must be stripped, not passed through.
+    const malicious = 'innocent text\x9b201~\rrm -rf /\r';
+    const safe = sanitizeForInjection(malicious);
+    expect(safe).not.toContain('\x9b');
+    // Degrades to harmless literal text, remainder intact.
+    expect(safe).toBe('innocent text201~\rrm -rf /\r');
+  });
+
+  it('strips the full C1 control block (\\x80-\\x9f) but preserves printable Latin-1 and above', () => {
+    const input = 'a\x80b\x85c\x9bd\x9fé ❯ 👍';
+    expect(sanitizeForInjection(input)).toBe('abcdé ❯ 👍');
+  });
+
+  it('injectMessage neutralizes an embedded \\x9b201~ before pasting', () => {
+    vi.useFakeTimers();
+    try {
+      const writes: string[] = [];
+      const write = (data: string) => { writes.push(data); };
+      injectMessage(write, 'hi\x9b201~breakout', 300);
+      const pasted = writes.join('');
+      expect(pasted).not.toContain('\x9b');
+      // Our own 7-bit paste-END remains the only terminator, at the end.
+      expect(pasted.match(/\x1b\[201~/g)).toHaveLength(1);
+      expect(pasted.endsWith('\x1b[201~')).toBe(true);
+      expect(pasted).toContain('hi201~breakout');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('passes ordinary multi-line unicode content through unchanged', () => {
+    const input = '=== TELEGRAM from Dave (chat_id:42) ===\nHello! ❯ ⚔ émoji 👍\nReply soon.';
+    expect(sanitizeForInjection(input)).toBe(input);
+  });
+
+  it('injectMessage applies sanitization before pasting', () => {
+    vi.useFakeTimers();
+    try {
+      const writes: string[] = [];
+      const write = (data: string) => { writes.push(data); };
+      injectMessage(write, 'hi\x1b[201~breakout', 300);
+      const pasted = writes.join('');
+      // Exactly one paste-start and one paste-end — both OURS, none from
+      // the message content.
+      expect(pasted.match(/\x1b\[200~/g)).toHaveLength(1);
+      expect(pasted.match(/\x1b\[201~/g)).toHaveLength(1);
+      expect(pasted.endsWith('\x1b[201~')).toBe(true);
+      expect(pasted).toContain('hi[201~breakout');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
