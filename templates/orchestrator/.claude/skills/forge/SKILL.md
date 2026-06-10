@@ -49,6 +49,46 @@ Turn how-we-actually-slipped into rule-baked skills, on a cadence, so slippage s
 
 7. **The forge produces SPECS + change-sets, not auto-merges.** No skill the forge builds is merged or activated without the human/orchestrator gate. The forge surfaces; Dane gates; dev-side ships.
 
+## Plumbing — the mechanical layer behind the steps
+
+These scripts live in the framework repo (`$CTX_FRAMEWORK_ROOT/scripts/`). They are the durable plumbing; the judgment stays in this skill.
+
+**Persist a HIGH candidate (detect, step 2)** — one command dual-persists (run-log append FIRST, then the `forge_candidate` bus event). Refuses candidates with no tied real incident (hard rule 1):
+
+```bash
+node "$CTX_FRAMEWORK_ROOT/scripts/forge-candidates.mjs" emit \
+  --skill "<target-or-proposed-name>" --verdict <create-new|edit-existing> \
+  --slippage "<what actually slipped>" --incident "<meld/PR/date>" \
+  --rule "<proposed hard rule>" --confidence high
+```
+
+**Read the accumulated queue (build, step 3)** — merges `forge_candidate` events since the last build marker with pending `docs/ephemeral/forge-runs/candidates.md` entries, dedupes by event id, groups by create-vs-edit verdict:
+
+```bash
+node "$CTX_FRAMEWORK_ROOT/scripts/forge-candidates.mjs" queue
+```
+
+**Gate every built/sharpened skill (step 4)** — the combined load gate: real-YAML parse (never regex; fails loud if no real parser) + discoverable + ship features (model tier, `context: fork`, `$ARGUMENTS`, imperative description, triggers) + referenced skills resolve from the target home via `git ls-files`. The trigger-fire smoke remains MANUAL in the target agent's context — the gate prints the exact smoke to run:
+
+```bash
+node "$CTX_FRAMEWORK_ROOT/scripts/forge-load-gate.mjs" <skill-dir> --target-home "$CTX_FRAMEWORK_ROOT"
+```
+
+**Two-step registration (step 4, hard rule 6)** — `stage` copies into the tracked home and gates it (PR follows; never commits/merges itself); `activate` runs only after the merge + orchestrator gate, copies byte-identical FROM the tracked source, and refuses untracked sources and missing `--gate-approved-by`:
+
+```bash
+node "$CTX_FRAMEWORK_ROOT/scripts/forge-register.mjs" stage --from <built-skill-dir> --home "$CTX_FRAMEWORK_ROOT/community/skills"
+node "$CTX_FRAMEWORK_ROOT/scripts/forge-register.mjs" activate --from <tracked-skill-dir> --runtime <agent>/.claude/skills --gate-approved-by <name>
+```
+
+**Close out a build pass (step 5 hand-off)** — archive the consumed queue into `runs/<build-id>.md` and advance the marker so the next detect window starts clean:
+
+```bash
+node "$CTX_FRAMEWORK_ROOT/scripts/forge-candidates.mjs" consume --build-id "build-$(date -u +%Y-%m-%d)"
+```
+
+**Known limitation (must close before build-mode goes live):** the build read bounds the *event* store by a single authoritative cutoff, but run-log (`candidates.md`) entries are date-only and are NOT cutoff-bounded — a concurrent `emit` in the ~1 ms window between the cutoff capture and the run-log read can cross the build boundary (consumed this cycle instead of next; near-zero in the single-threaded weekly flow, accepted while forge is dormant). The unified-store fix (precise emit ts on run-log entries + the same cutoff bound, or a queue/consume atomicity lock) is **`task_1781104449215_29277678`** — a HARD BLOCKER before forge build-mode/consume is activated live. See `scripts/forge-candidates.mjs` (candidates.md read).
+
 ## Invocation example
 
 ```
