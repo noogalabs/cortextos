@@ -1219,9 +1219,12 @@ export class FastChecker {
         }
         from = msg.username ?? 'unknown';
       }
+      // Coerce text: captionless file/photo shares deliver with no text field,
+      // so interpolating msg.text directly would render the literal string
+      // "undefined" in the inbox body (the socket listener already guards this).
       deliverable.push(
         `=== SLACK from ${from} (channel:${this.slackWatch.channel} ts:${msg.ts}) ===\n` +
-        `${msg.text}\n` +
+        `${msg.text ?? ''}\n` +
         `Reply using: cortextos bus send-slack ${this.slackWatch.channel} "<reply>"`,
       );
     }

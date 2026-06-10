@@ -14,6 +14,26 @@
 //   (4) message filter delivers non-bot subtyped messages (file_share etc.),
 //       matching the legacy poll — upstream dropped ALL subtyped events, which
 //       would silently lose human file/photo shares (shouldDeliverSlackMessage).
+//   (5) reconnection never gives up permanently — past maxReconnectAttempts the
+//       client keeps retrying at the max backoff delay instead of returning.
+//       Upstream stopped forever after ~3 minutes of outage, which (with the
+//       poll dormant while Socket Mode is primary) silently killed ALL Slack
+//       inbound until a daemon restart.
+//   (6) connect() checks the HTTP status of apps.connections.open and honors a
+//       429 Retry-After as a floor on the next reconnect delay; start() resets
+//       isShuttingDown so a stopped client can be restarted.
+//   (7) a WebSocket open-timeout watchdog recycles connections that never
+//       reach 'open' (black-holed TCP / stalled TLS would otherwise hang the
+//       client forever with no event ever firing).
+//   (8) PERMANENT auth-class failures from apps.connections.open (invalid_auth,
+//       token_revoked, etc. — see SLACK_PERMANENT_AUTH_ERRORS) STOP the
+//       reconnect loop instead of retrying forever: a dead token returns HTTP
+//       200 ok:false and will NEVER self-heal, so retry-forever would just
+//       log-spam every 30s while silently masking a config error. The client
+//       latches a fatal state (getFatalAuthError), logs a loud ERROR, and
+//       invokes onFatalAuthError so the daemon can alert the operator.
+//       Transient failures (network, 5xx, 429, non-auth ok:false) keep the
+//       retry-forever behavior of (5).
 
 /**
  * Slack Socket Mode Client
@@ -470,6 +490,45 @@ const API_TIMEOUT_MS = 10_000;
 const REACTION_TIMEOUT_MS = 5_000;
 
 /**
+ * Timeout for a created WebSocket to reach 'open'. A black-holed TCP connect
+ * or stalled TLS handshake fires NO event at all — without this watchdog the
+ * client would sit in 'connecting' forever with reconnection never scheduled.
+ */
+const WS_OPEN_TIMEOUT_MS = 15_000;
+
+/** Cap on a server-sent Retry-After honored as the next reconnect delay. */
+const MAX_RETRY_AFTER_MS = 120_000;
+
+/**
+ * apps.connections.open `ok:false` error codes that are PERMANENT auth-class
+ * failures. These mean the app-level token is invalid, revoked, expired, or
+ * lacks the connections:write scope — a condition that will NEVER self-heal,
+ * no matter how many times we retry. Reconnecting on these would log-spam
+ * forever while silently masking a configuration error, so the client STOPS
+ * and surfaces a fatal state instead.
+ *
+ * Codes (from Slack's apps.connections.open / common Web API error tables):
+ * - invalid_auth:     token is invalid (wrong/garbled/deleted app token)
+ * - account_inactive: the user/workspace behind the token was deactivated
+ * - token_revoked:    token was explicitly revoked
+ * - token_expired:    token has expired (refreshable app tokens)
+ * - not_authed:       no token was provided at all
+ * - no_permission:    token lacks the required scope (connections:write)
+ *
+ * Everything else (network errors, HTTP 5xx, 429 rate limits, transient
+ * ok:false codes like internal_error / fatal_error) is treated as TRANSIENT
+ * and keeps the persistent-reconnect behavior.
+ */
+export const SLACK_PERMANENT_AUTH_ERRORS: ReadonlySet<string> = new Set([
+  'invalid_auth',
+  'account_inactive',
+  'token_revoked',
+  'token_expired',
+  'not_authed',
+  'no_permission',
+]);
+
+/**
  * Minimal Slack Socket Mode client.
  *
  * Establishes a WebSocket connection to Slack's Socket Mode endpoint,
@@ -484,6 +543,16 @@ export class SlackSocketClient {
   private readonly maxReconnectDelayMs = 30_000;
   private isShuttingDown = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Watchdog for sockets that never reach 'open' (see WS_OPEN_TIMEOUT_MS).
+  private openTimer: ReturnType<typeof setTimeout> | null = null;
+  // Floor (ms) for the next reconnect delay, set when apps.connections.open
+  // returns HTTP 429 with a Retry-After header; consumed by scheduleReconnect.
+  private rateLimitMinDelayMs = 0;
+  // Latched on a PERMANENT auth-class failure (see SLACK_PERMANENT_AUTH_ERRORS).
+  // Non-null = reconnection is STOPPED until the operator fixes the token and
+  // restarts (start() clears it). Queryable via getFatalAuthError() so the
+  // daemon/heartbeat layer can surface the dead-token condition.
+  private fatalAuthError: string | null = null;
   private readonly connectionState = new SlackConnectionStateTracker();
 
   // Bound listener references for proper removal on cleanup.
@@ -499,6 +568,9 @@ export class SlackSocketClient {
     private readonly config: SlackSocketConfig,
     private readonly onMessage: MessageHandler,
     log: LogFn,
+    // Invoked ONCE when a permanent auth-class failure stops the reconnect
+    // loop, so the embedding layer can alert the operator (Telegram/inbox).
+    private readonly onFatalAuthError?: (errorCode: string) => void,
   ) {
     // Wrap the log function to automatically redact tokens from all messages
     this.log = (msg: string) => log(redactTokens(msg));
@@ -510,6 +582,16 @@ export class SlackSocketClient {
   }
 
   /**
+   * The permanent auth-failure code that stopped reconnection, or null if the
+   * connection has not hit a fatal auth error. Non-null means real-time Slack
+   * inbound is DOWN and will not recover without operator action (fix the app
+   * token, then restart). Heartbeat-surfaceable.
+   */
+  getFatalAuthError(): string | null {
+    return this.fatalAuthError;
+  }
+
+  /**
    * Start the Socket Mode connection.
    * Obtains a WebSocket URL from Slack and connects.
    */
@@ -518,6 +600,14 @@ export class SlackSocketClient {
       this.log('WARN: WebSocket not available, Slack Socket Mode requires Node 20.10+');
       return;
     }
+    // Allow a stopped client to be restarted: stop() latches isShuttingDown,
+    // and without resetting it here every post-stop start() would silently
+    // no-op all connects and reconnects forever.
+    this.isShuttingDown = false;
+    // An explicit (re)start clears a latched fatal auth error: the operator's
+    // recovery path is "fix the token, restart the agent" — the new start must
+    // get a fresh chance to connect, not be blocked by the old token's fate.
+    this.fatalAuthError = null;
     this.connectionState.onConnecting();
     await this.connect();
   }
@@ -540,6 +630,14 @@ export class SlackSocketClient {
    * and null the reference. Safe to call multiple times.
    */
   private cleanupWs(): void {
+    // The open-timeout watchdog is tied to the socket being torn down — always
+    // clear it (even when ws is already null) so a stale timer can never fire
+    // against a connection that was already recycled.
+    if (this.openTimer) {
+      clearTimeout(this.openTimer);
+      this.openTimer = null;
+    }
+
     const ws = this.ws;
     if (!ws) return;
 
@@ -583,7 +681,36 @@ export class SlackSocketClient {
         signal: AbortSignal.timeout(API_TIMEOUT_MS),
       });
 
+      // Check the HTTP status BEFORE parsing: 429/5xx/proxy responses are often
+      // non-JSON, and resp.json() on them throws an opaque SyntaxError. For a
+      // 429, honor the server's Retry-After as a floor on the next reconnect
+      // delay (capped) so backoff cannot hammer a rate-limited endpoint.
+      if (!resp.ok) {
+        if (resp.status === 429) {
+          const retryAfterSec = Number(resp.headers.get('retry-after') ?? '');
+          if (Number.isFinite(retryAfterSec) && retryAfterSec > 0) {
+            this.rateLimitMinDelayMs = Math.min(retryAfterSec * 1000, MAX_RETRY_AFTER_MS);
+          }
+          throw new Error(
+            `apps.connections.open rate limited (HTTP 429${this.rateLimitMinDelayMs ? `, retry after ${this.rateLimitMinDelayMs}ms` : ''})`,
+          );
+        }
+        throw new Error(`apps.connections.open failed: HTTP ${resp.status}`);
+      }
+
       const data = await resp.json() as { ok: boolean; url?: string; error?: string };
+
+      // Classify ok:false BEFORE the generic throw: a dead/revoked/unscoped
+      // token comes back as HTTP 200 ok:false (e.g. invalid_auth) and will
+      // NEVER self-heal — retrying it forever at 30s just log-spams while
+      // masking a config error. Permanent auth-class codes STOP the reconnect
+      // loop and surface loudly; every other failure stays transient and falls
+      // through to the throw -> catch -> scheduleReconnect retry-forever path.
+      if (!data.ok && data.error && SLACK_PERMANENT_AUTH_ERRORS.has(data.error)) {
+        this.handleFatalAuthError(data.error);
+        return; // deliberate: NO scheduleReconnect — this cannot self-heal
+      }
+
       if (!data.ok || !data.url) {
         throw new Error(`apps.connections.open failed: ${data.error || 'no url returned'}`);
       }
@@ -601,6 +728,10 @@ export class SlackSocketClient {
       this.ws = new WebSocket(data.url);
 
       this.onWsOpen = () => {
+        if (this.openTimer) {
+          clearTimeout(this.openTimer);
+          this.openTimer = null;
+        }
         this.log('Slack Socket Mode connected');
         this.reconnectAttempts = 0;
       };
@@ -624,6 +755,19 @@ export class SlackSocketClient {
       this.ws.addEventListener('message', this.onWsMessage);
       this.ws.addEventListener('close', this.onWsClose);
       this.ws.addEventListener('error', this.onWsError);
+
+      // Half-open guard: if 'open' never fires (black-holed connect), no other
+      // event will either — recycle the socket and go through normal backoff.
+      // Cleared by onWsOpen on success and by cleanupWs on any teardown.
+      this.openTimer = setTimeout(() => {
+        this.openTimer = null;
+        this.log(`Slack Socket Mode: WebSocket did not open within ${WS_OPEN_TIMEOUT_MS}ms — recycling connection`);
+        this.cleanupWs();
+        if (!this.isShuttingDown) {
+          this.connectionState.onReconnecting();
+          this.scheduleReconnect();
+        }
+      }, WS_OPEN_TIMEOUT_MS);
 
     } catch (error) {
       this.log(`Slack Socket Mode connection error: ${error instanceof Error ? error.message : String(error)}`);
@@ -745,14 +889,60 @@ export class SlackSocketClient {
   }
 
   /**
+   * Handle a PERMANENT auth-class failure from apps.connections.open.
+   *
+   * Latches the fatal state (which also gates scheduleReconnect, so no
+   * stray close/watchdog event can restart the loop), tears down any pending
+   * reconnect timer, logs a single LOUD operator-facing ERROR line, and fires
+   * the onFatalAuthError callback exactly once so the embedding layer
+   * (SlackSocketListener / agent-manager) can alert the operator.
+   *
+   * Recovery: fix the Slack app token, then restart — start() clears the
+   * latch and connects fresh.
+   */
+  private handleFatalAuthError(errorCode: string): void {
+    // Latch FIRST: from this point scheduleReconnect() is a no-op.
+    this.fatalAuthError = errorCode;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.cleanupWs();
+    this.connectionState.onDisconnected();
+    this.log(
+      `ERROR: Slack Socket Mode PERMANENT auth failure (${errorCode}) — the app token is invalid, revoked, expired, or missing the connections:write scope. ` +
+      `Reconnection STOPPED: this will NOT self-heal and real-time Slack inbound is DOWN until the token is fixed and the agent restarts. OPERATOR ACTION REQUIRED.`,
+    );
+    if (this.onFatalAuthError) {
+      try {
+        this.onFatalAuthError(errorCode);
+      } catch (err) {
+        this.log(`Slack fatal-auth alert callback failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  /**
    * Schedule a reconnection attempt with exponential backoff.
+   *
+   * NEVER gives up permanently. The previous behavior returned once
+   * maxReconnectAttempts was reached — but the backoff ladder exhausts in
+   * about 3 minutes, so any Slack/network outage longer than that permanently
+   * killed real-time inbound until a daemon restart (and while Socket Mode is
+   * primary the 60s poll is dormant, so the loss was TOTAL and silent).
+   * Past the soft max we keep retrying at the max backoff delay and log the
+   * escalation so the condition is visible in the daemon log.
+   *
+   * ONE exception: a latched PERMANENT auth failure (see handleFatalAuthError)
+   * stops the loop — a dead token never self-heals, so retry-forever there
+   * would only log-spam while hiding a config error.
    */
   private scheduleReconnect(): void {
     if (this.isShuttingDown) return;
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.log(`Slack Socket Mode max reconnect attempts (${this.maxReconnectAttempts}) reached`);
-      return;
-    }
+    // Fatal auth latch: a permanent token failure cannot self-heal, so NO path
+    // (ws close, open-timeout watchdog, reconnect-error safety net) may
+    // re-enter the retry loop until the operator restarts with a fixed token.
+    if (this.fatalAuthError) return;
 
     // Clear any existing reconnect timer to prevent leaks on rapid disconnects
     if (this.reconnectTimer) {
@@ -760,17 +950,33 @@ export class SlackSocketClient {
       this.reconnectTimer = null;
     }
 
-    const delay = Math.min(
-      this.baseReconnectDelayMs * Math.pow(2, this.reconnectAttempts),
+    // Cap the exponent so Math.pow can't overflow to Infinity on a long outage.
+    const cappedExponent = Math.min(this.reconnectAttempts, 16);
+    const backoff = Math.min(
+      this.baseReconnectDelayMs * Math.pow(2, cappedExponent),
       this.maxReconnectDelayMs,
     );
+    // Honor a server-sent Retry-After (set by connect() on HTTP 429) as a
+    // one-shot floor on the delay, then clear it.
+    const delay = Math.max(backoff, this.rateLimitMinDelayMs);
+    this.rateLimitMinDelayMs = 0;
     this.reconnectAttempts++;
 
-    this.log(`Slack Socket Mode reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    if (this.reconnectAttempts > this.maxReconnectAttempts) {
+      this.log(`Slack Socket Mode reconnect attempt ${this.reconnectAttempts} exceeds soft max (${this.maxReconnectAttempts}) — continuing at max backoff (${delay}ms)`);
+    } else {
+      this.log(`Slack Socket Mode reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.isShuttingDown) {
-        this.connect();
+        // connect() catches its own errors; this catch is a final safety net so
+        // an unexpected synchronous throw can neither become an unhandled
+        // rejection nor silently end the reconnect chain.
+        void this.connect().catch((err) => {
+          this.log(`Slack Socket Mode reconnect error: ${err instanceof Error ? err.message : String(err)}`);
+          this.scheduleReconnect();
+        });
       }
     }, delay);
   }

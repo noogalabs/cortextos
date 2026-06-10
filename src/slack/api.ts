@@ -6,11 +6,24 @@ export interface SlackMessage {
   ts: string;
   user?: string;
   username?: string;
-  text: string;
+  /**
+   * Optional: captionless file/photo shares (subtype `file_share`) arrive with
+   * NO text field. Callers must render a missing text as an empty body, never
+   * interpolate it directly (which prints the literal string "undefined").
+   */
+  text?: string;
   type: string;
   subtype?: string;
   bot_id?: string;
 }
+
+/**
+ * Timeout for Slack Web API calls. Without it a black-holed connection hangs
+ * the await forever — and checkSlackWatch is awaited inside the fast-checker
+ * tick loop, so one hung call would stall ALL inbound (Telegram included)
+ * until daemon restart.
+ */
+const API_TIMEOUT_MS = 10_000;
 
 export class SlackAPI {
   private readonly baseUrl = 'https://slack.com/api';
@@ -20,8 +33,33 @@ export class SlackAPI {
     this.token = token;
   }
 
+  /**
+   * Shared fetch wrapper: bounded timeout + HTTP-status checking before JSON
+   * parsing. Slack app-level errors come back HTTP 200 with `ok:false` (the
+   * caller checks those), but transport-level failures (429 rate limit, 5xx,
+   * proxy HTML pages) would otherwise surface as an opaque JSON parse error.
+   * 429s include the Retry-After header in the error message so operators can
+   * see the server-requested pause in the log line.
+   */
+  private async requestJson<T>(path: string, init: RequestInit): Promise<T> {
+    const response = await fetch(`${this.baseUrl}/${path}`, {
+      ...init,
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('retry-after');
+        throw new Error(
+          `Slack API ${path} rate limited (HTTP 429${retryAfter ? `, retry after ${retryAfter}s` : ''})`,
+        );
+      }
+      throw new Error(`Slack API ${path} failed: HTTP ${response.status}`);
+    }
+    return await response.json() as T;
+  }
+
   async postMessage(channel: string, text: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/chat.postMessage`, {
+    const data = await this.requestJson<{ ok: boolean; error?: string }>('chat.postMessage', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${this.token}`,
@@ -29,7 +67,6 @@ export class SlackAPI {
       },
       body: JSON.stringify({ channel, text }),
     });
-    const data = await response.json() as { ok: boolean; error?: string };
     if (!data.ok) {
       throw new Error(`Slack postMessage failed: ${data.error ?? 'unknown'}`);
     }
@@ -37,10 +74,10 @@ export class SlackAPI {
 
   async getHistory(channel: string, oldest: string): Promise<SlackMessage[]> {
     const params = new URLSearchParams({ channel, oldest, limit: '50', inclusive: 'false' });
-    const response = await fetch(`${this.baseUrl}/conversations.history?${params}`, {
-      headers: { 'Authorization': `Bearer ${this.token}` },
-    });
-    const data = await response.json() as { ok: boolean; messages?: SlackMessage[]; error?: string };
+    const data = await this.requestJson<{ ok: boolean; messages?: SlackMessage[]; error?: string }>(
+      `conversations.history?${params}`,
+      { headers: { 'Authorization': `Bearer ${this.token}` } },
+    );
     if (!data.ok) {
       throw new Error(`Slack conversations.history failed: ${data.error ?? 'unknown'}`);
     }
@@ -50,10 +87,10 @@ export class SlackAPI {
   async getUserName(userId: string): Promise<string> {
     try {
       const params = new URLSearchParams({ user: userId });
-      const response = await fetch(`${this.baseUrl}/users.info?${params}`, {
-        headers: { 'Authorization': `Bearer ${this.token}` },
-      });
-      const data = await response.json() as { ok: boolean; user?: { real_name?: string; name?: string } };
+      const data = await this.requestJson<{ ok: boolean; user?: { real_name?: string; name?: string } }>(
+        `users.info?${params}`,
+        { headers: { 'Authorization': `Bearer ${this.token}` } },
+      );
       if (data.ok && data.user) {
         return data.user.real_name ?? data.user.name ?? userId;
       }
@@ -71,13 +108,12 @@ export class SlackAPI {
   ): Promise<{ handle: string | null; displayName: string } | null> {
     try {
       const params = new URLSearchParams({ user: userId });
-      const response = await fetch(`${this.baseUrl}/users.info?${params}`, {
-        headers: { 'Authorization': `Bearer ${this.token}` },
-      });
-      const data = await response.json() as {
+      const data = await this.requestJson<{
         ok: boolean;
         user?: { name?: string; real_name?: string; profile?: { display_name?: string } };
-      };
+      }>(`users.info?${params}`, {
+        headers: { 'Authorization': `Bearer ${this.token}` },
+      });
       if (data.ok && data.user) {
         const handle = data.user.name ?? null;
         const displayName =
@@ -98,11 +134,10 @@ export class SlackAPI {
    */
   async getBotUserId(): Promise<string | null> {
     try {
-      const response = await fetch(`${this.baseUrl}/auth.test`, {
+      const data = await this.requestJson<{ ok: boolean; user_id?: string }>('auth.test', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${this.token}` },
       });
-      const data = await response.json() as { ok: boolean; user_id?: string };
       if (data.ok && data.user_id) {
         return data.user_id;
       }
