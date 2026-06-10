@@ -96,6 +96,13 @@ export class FastChecker {
   private gmailDeliveredIds: Map<string, number> = new Map();
   private gmailDeliveredIdsPath: string = '';
   private readonly GMAIL_DELIVERED_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30d
+  // F8: Gmail checks run on their own timer (armed in start()), NOT inside
+  // pollCycle — the worst-case Gmail batch takes minutes and would trip the
+  // 30s pollCycle timeout. The tick is intentionally shorter than the watch
+  // interval; checkGmailWatch self-gates on gmailWatch.intervalMs.
+  private gmailWatchTimer: NodeJS.Timeout | null = null;
+  private gmailCheckInFlight: boolean = false;
+  private readonly GMAIL_TIMER_TICK_MS = 30_000;
 
   // Slack watch state
   private slackWatch?: { channel: string; intervalMs: number };
@@ -341,6 +348,17 @@ export class FastChecker {
 
     // Wait for bootstrap
     await this.waitForBootstrap();
+    // F5: stop() may have landed while we were waiting (stop/restart within
+    // the ~30s bootstrap window is common). stop() clears timers only if they
+    // are already set — arming them now would orphan them: nothing would ever
+    // clear them and the heartbeat would keep marking a STOPPED agent online.
+    if (!this.running) {
+      this.log('Stopped during bootstrap wait — not arming timers or poll loop');
+      if (process.platform !== 'win32') {
+        process.removeListener('SIGUSR1', sigusr1Handler);
+      }
+      return;
+    }
     this.log('Bootstrap complete. Beginning poll loop.');
     this.bootstrappedAt = Date.now();
     this.stdoutLastChangeAt = Date.now();
@@ -436,6 +454,25 @@ export class FastChecker {
       this.lastPollCycleCompletedAt = now;
     }, WATCHDOG_INTERVAL_MS);
 
+    // F8: Gmail watch runs on its OWN timer, decoupled from the 1s pollCycle.
+    // checkGmailWatch worst-case is minutes (up to 20 metadata fetches at 10s
+    // each + 20 label-modifies at 10s each), which raced against
+    // POLL_CYCLE_TIMEOUT_MS (30s) inside pollCycle — any Gmail batch beyond
+    // ~3 messages tripped a spurious "pollCycle timeout" and left the
+    // abandoned check running concurrently with new cycles. The timer ticks
+    // every 30s; checkGmailWatch still self-gates on the configured
+    // intervalMs (default 15 min), so the polling cadence is unchanged. The
+    // in-flight flag prevents overlapping runs when a check outlasts a tick.
+    if (this.gmailWatch) {
+      this.gmailWatchTimer = setInterval(() => {
+        if (this.gmailCheckInFlight) return;
+        this.gmailCheckInFlight = true;
+        this.checkGmailWatch()
+          .catch(err => this.log(`Gmail watch error: ${err}`))
+          .finally(() => { this.gmailCheckInFlight = false; });
+      }, this.GMAIL_TIMER_TICK_MS);
+    }
+
     // added 2026-04-29 by collie via dane dispatch — RFC #15 Day-1 dispatcher integration; Piece 3 (handler-type wiring) deferred to Day-2
     this.startHookDispatcher();
 
@@ -480,6 +517,10 @@ export class FastChecker {
     if (this.pollCycleWatchdog !== null) {
       clearInterval(this.pollCycleWatchdog);
       this.pollCycleWatchdog = null;
+    }
+    if (this.gmailWatchTimer !== null) {
+      clearInterval(this.gmailWatchTimer);
+      this.gmailWatchTimer = null;
     }
     // added 2026-04-29 by collie via dane dispatch — RFC #15 Day-1 dispatcher integration; Piece 3 (handler-type wiring) deferred to Day-2
     if (this.hookRegistryWatcher !== null) {
@@ -682,10 +723,12 @@ export class FastChecker {
     const ackIds: string[] = [];
 
     // Process queued Telegram messages. Drain into a local buffer rather than
-    // discarding outright — if injection fails (agent mid-restart / NOT_RUNNING,
-    // or DEDUPED) we must re-queue, since the in-memory queue is the ONLY backing
-    // store for Telegram (no inbox-style ACK/redelivery). Mirrors the inbox
-    // ACK-after-inject recovery model below.
+    // discarding outright — if injection fails because the agent is not running
+    // (mid-restart / NOT_RUNNING) we must re-queue, since the in-memory queue is
+    // the ONLY backing store for Telegram (no inbox-style ACK/redelivery).
+    // Mirrors the inbox ACK-after-inject recovery model below. DEDUPED failures
+    // are dropped instead (see below) — retrying identical content can never
+    // succeed and would loop forever.
     const drainedTelegram: typeof this.telegramMessages = [];
     while (this.telegramMessages.length > 0) {
       const msg = this.telegramMessages.shift()!;
@@ -703,8 +746,8 @@ export class FastChecker {
 
     // Inject if there's anything
     if (messageBlock) {
-      const injected = this.agent.injectMessage(messageBlock);
-      if (injected) {
+      const injectResult = this.agent.injectMessageDetailed(messageBlock);
+      if (injectResult.ok) {
         // ACK inbox messages
         for (const id of ackIds) {
           ackInbox(this.paths, id);
@@ -719,13 +762,23 @@ export class FastChecker {
         // Cooldown after injection
         await sleep(5000);
       } else if (drainedTelegram.length > 0) {
-        // Inject failed (agent not running mid-restart, or deduped). Re-queue the
-        // drained Telegram messages at the FRONT so they are retried next cycle and
-        // preserve original order. Inbox messages need no action — they were never
-        // ACK'd, so checkInbox redelivers them. Without this, mid-restart inbound
-        // Telegram is silently and permanently lost (offset already advanced).
-        this.telegramMessages.unshift(...drainedTelegram);
-        this.log(`Inject failed; re-queued ${drainedTelegram.length} Telegram message(s)`);
+        if (injectResult.code === 'NOT_RUNNING') {
+          // Agent not running (mid-restart). Re-queue the drained Telegram
+          // messages at the FRONT so they are retried next cycle and preserve
+          // original order. Inbox messages need no action — they were never
+          // ACK'd, so checkInbox redelivers them. Without this, mid-restart
+          // inbound Telegram is silently and permanently lost (offset already
+          // advanced).
+          this.telegramMessages.unshift(...drainedTelegram);
+          this.log(`Inject failed (${injectResult.code}); re-queued ${drainedTelegram.length} Telegram message(s)`);
+        } else {
+          // F6: DEDUPED is permanent for identical content — the MessageDedup
+          // hash window rejects the same block on every retry until unrelated
+          // content changes the hash. Re-queueing would retry (and log) every
+          // poll tick forever. Drop with a single log line instead; identical
+          // content was already injected within the dedup window.
+          this.log(`Inject deduped; dropped ${drainedTelegram.length} Telegram message(s) (duplicate of recently injected content)`);
+        }
       }
     }
 
@@ -737,8 +790,11 @@ export class FastChecker {
     // Watchdog: detect ctx-exhaustion survey + frozen stdout
     this.watchdogCheck();
 
-    // Gmail watch: check on configured interval (default 15 min)
-    await this.checkGmailWatch();
+    // NOTE (F8): Gmail watch is intentionally NOT checked here — it runs on
+    // its own timer (see start()) because its worst case exceeds the 30s
+    // pollCycle timeout. Slack/usage/context checks below stay in-cycle:
+    // each is bounded well under the timeout (10-15s execFile timeouts or
+    // local file reads) and moving Slack was explicitly out of scope.
 
     // Slack watch: check on configured interval (default 60 sec)
     await this.checkSlackWatch();
@@ -825,10 +881,19 @@ export class FastChecker {
     if (tail && this.ctxThresholdPct > 0) {
       // Strip ANSI escape codes before applying the pattern
       const stripped = tail.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-      const pctMatch = stripped.match(/\[(?:Sonnet|Opus|Haiku)[^\]]*\][^\d]*(\d+)%/);
+      // F7: match the status-line shape generically — "[<Model badge>] … NN%"
+      // — instead of pinning model names (Sonnet|Opus|Haiku), which silently
+      // disabled Signal 3 for any other model family. Guards against false
+      // positives from arbitrary "[tag] … NN%" log lines:
+      //   - badge must start with an uppercase letter (model names are
+      //     capitalized; excludes [info]/[main]-style tags) and stay short
+      //   - badge and percent must sit on the SAME line (the status line is a
+      //     single line; the old [^\d]* could span lines)
+      //   - percent capped at 3 digits and sanity-checked <= 100 below
+      const pctMatch = stripped.match(/\[[A-Z][^\]\n]{0,40}\][^\d\n]{0,120}(\d{1,3})%/);
       if (pctMatch) {
         const pct = parseInt(pctMatch[1], 10);
-        if (pct >= this.ctxThresholdPct) {
+        if (pct >= this.ctxThresholdPct && pct <= 100) {
           if (this.ctxThresholdTriggeredAt > 0 &&
               now - this.ctxThresholdTriggeredAt > this.CTX_THRESHOLD_FALLBACK_MS) {
             // Agent ignored the injection for 15 min — fallback hard restart
