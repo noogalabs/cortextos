@@ -64,8 +64,13 @@ const MIME_TYPES: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8',
   '.json': 'application/json',
   '.md': 'text/plain; charset=utf-8',
-  '.html': 'text/html; charset=utf-8',
-  '.htm': 'text/html; charset=utf-8',
+  // SECURITY: .html/.htm are deliberately served as text/plain, NOT text/html.
+  // Agent-written HTML served inline as text/html would execute scripts on the
+  // dashboard origin (stored XSS → auth-cookie theft). The dashboard's own
+  // HTML preview (deliverable-preview.tsx) fetches the body as text and renders
+  // it in a sandboxed srcDoc iframe, so it does not rely on this content type.
+  '.html': 'text/plain; charset=utf-8',
+  '.htm': 'text/plain; charset=utf-8',
   '.ts': 'text/plain; charset=utf-8',
   '.tsx': 'text/plain; charset=utf-8',
   '.js': 'text/plain; charset=utf-8',
@@ -77,6 +82,33 @@ const MIME_TYPES: Record<string, string> = {
 
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']);
 const INLINE_EXTENSIONS = new Set(['.md', '.html', '.htm', '.txt', '.ts', '.tsx', '.js', '.css', '.sh', '.json', '.csv']);
+
+// ---------------------------------------------------------------------------
+// Sensitive-file denylist.
+//
+// SECURITY: agent directories under the allowed roots contain credential
+// files (.env with BOT_TOKEN/CHAT_ID, key material, secrets files). Without
+// this check, GET /api/media/orgs/<org>/agents/<name>/.env would serve the
+// agent's credentials to any authenticated dashboard user.
+//
+// The check is applied to the basename of the RESOLVED real path (after
+// fs.realpathSync), so `..` traversal, URL-encoding tricks, and symlinks
+// pointing at a blocked file cannot smuggle a blocked name past the filter.
+// Only the final segment is checked: files that merely live inside a dot
+// directory (e.g. .claude/skills/foo/SKILL.md) remain servable.
+// ---------------------------------------------------------------------------
+const BLOCKED_KEY_EXTENSIONS = new Set(['.pem', '.key', '.p12', '.pfx']);
+
+function isSensitiveBasename(basename: string): boolean {
+  const lower = basename.toLowerCase();
+  // All dotfiles: .env, .env.local, .env.production, .npmrc, .netrc, ...
+  if (lower.startsWith('.')) return true;
+  // secrets, secrets.json, secrets-prod.yaml, ...
+  if (lower.startsWith('secrets')) return true;
+  // Private key / cert-bundle material by extension.
+  if (BLOCKED_KEY_EXTENSIONS.has(path.extname(lower))) return true;
+  return false;
+}
 
 /**
  * GET /api/media/[...filepath]
@@ -162,6 +194,21 @@ export async function GET(
     );
   }
 
+  // SECURITY: refuse to serve secrets/dotfiles/key material even when they
+  // resolve under a valid root. Checked on the resolved basename (post-
+  // realpath, post-symlink) so it cannot be bypassed via `..` or encoding.
+  // Responds with the same 404 shape as a resolution miss so the route does
+  // not act as a file-existence oracle for blocked names.
+  if (isSensitiveBasename(path.basename(realFullPath))) {
+    return new Response(
+      JSON.stringify({
+        error: 'not_found',
+        message: 'File not found under any configured root.',
+      }),
+      { status: 404, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
+
   const ext = path.extname(realFullPath).toLowerCase();
   const renderMd = _request.nextUrl.searchParams.get('render') === 'true';
 
@@ -196,7 +243,19 @@ export async function GET(
     'Content-Type': mimeType,
     'Content-Length': String(fileBuffer.length),
     'Cache-Control': 'private, max-age=3600',
+    // SECURITY: prevent browsers from MIME-sniffing text/plain responses
+    // (e.g. .html served as text/plain above) back into executable HTML.
+    'X-Content-Type-Options': 'nosniff',
   };
+
+  // SECURITY: defense-in-depth for document types that can execute script on
+  // the dashboard origin when navigated to directly. CSP `sandbox` puts the
+  // response in an opaque origin with scripts disabled. SVG renders fine as
+  // <img> (where scripts never run) and inline markup still displays; this
+  // only constrains direct navigation.
+  if (ext === '.html' || ext === '.htm' || ext === '.svg') {
+    headers['Content-Security-Policy'] = 'sandbox';
+  }
 
   if (IMAGE_EXTENSIONS.has(ext) || INLINE_EXTENSIONS.has(ext)) {
     headers['Content-Disposition'] = `inline; filename="${path.basename(realFullPath)}"`;
