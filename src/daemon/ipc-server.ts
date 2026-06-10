@@ -279,8 +279,17 @@ export function invalidateFleetHealthCache(): void {
 // Cron mutation helpers — Subtask 4.2
 // ---------------------------------------------------------------------------
 
-/** Interval shorthand regex — matches "6h", "30m", "1d", "2w" etc. */
-const INTERVAL_REGEX = /^\d+(s|m|h|d|w)$/;
+/**
+ * Interval shorthand regex — matches "6h", "30m", "1d", "2w" etc.
+ *
+ * F9 fix: NO seconds unit. parseDurationMs (src/bus/cron-state.ts) only
+ * understands m|h|d|w, and the scheduler ticks every 30s with minute-level
+ * cron granularity — a "30s" schedule used to pass validation here, then
+ * parse to NaN nextFireAt and SILENTLY never fire. Units here MUST stay in
+ * lockstep with parseDurationMs (enforced by the parity test in
+ * tests/unit/daemon/ipc-mutations.test.ts).
+ */
+const INTERVAL_REGEX = /^\d+(m|h|d|w)$/;
 
 /** Cron name must be non-empty and contain only URL-safe chars (no whitespace). */
 const CRON_NAME_REGEX = /^[a-zA-Z0-9_-]+$/;

@@ -90,7 +90,6 @@ describe('isValidSchedule', () => {
     expect(isValidSchedule('30m')).toBe(true);
     expect(isValidSchedule('1d')).toBe(true);
     expect(isValidSchedule('2w')).toBe(true);
-    expect(isValidSchedule('5s')).toBe(true);
   });
 
   it('accepts valid 5-field cron expressions', async () => {
@@ -109,9 +108,52 @@ describe('isValidSchedule', () => {
     expect(isValidSchedule('0 9 * *')).toBe(false); // only 4 fields
   });
 
+  it('rejects seconds intervals loudly at add-time (F9)', async () => {
+    // parseDurationMs has no seconds unit and the scheduler ticks every 30s
+    // with minute-level cron granularity — a seconds schedule used to pass
+    // validation, parse to NaN, and silently never fire. Fail-loud instead.
+    const { isValidSchedule } = await import('../../../src/daemon/ipc-server.js');
+    expect(isValidSchedule('5s')).toBe(false);
+    expect(isValidSchedule('30s')).toBe(false);
+  });
+
   it('rejects whitespace-only string', async () => {
     const { isValidSchedule } = await import('../../../src/daemon/ipc-server.js');
     expect(isValidSchedule('   ')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F9 parity: isValidSchedule (ipc-server) vs parseDurationMs (cron-state)
+// ---------------------------------------------------------------------------
+
+describe('F9 parity: every unit isValidSchedule accepts is parseable by parseDurationMs', () => {
+  it('any "<n><unit>" shorthand accepted by validation parses to a positive finite duration', async () => {
+    const { isValidSchedule } = await import('../../../src/daemon/ipc-server.js');
+    const { parseDurationMs } = await import('../../../src/bus/cron-state.js');
+
+    // Sweep every single-letter unit candidate. If the validator accepts a
+    // shorthand the scheduler cannot parse, the cron is reported ok at
+    // add-time but nextFireAt becomes NaN and it silently never fires —
+    // exactly the F9 bug class. This test makes that divergence impossible
+    // to reintroduce without a loud failure.
+    for (let c = 97; c <= 122; c++) {
+      const unit = String.fromCharCode(c);
+      const candidate = `30${unit}`;
+      if (isValidSchedule(candidate)) {
+        const ms = parseDurationMs(candidate);
+        expect(
+          Number.isFinite(ms) && ms > 0,
+          `unit '${unit}': isValidSchedule('${candidate}') is true but parseDurationMs('${candidate}') = ${ms} — accepted-but-unfireable cron (F9 regression)`,
+        ).toBe(true);
+      }
+    }
+
+    // Sanity: the sweep is not vacuous — the known-good units pass both sides.
+    for (const good of ['30m', '6h', '1d', '2w']) {
+      expect(isValidSchedule(good)).toBe(true);
+      expect(parseDurationMs(good)).toBeGreaterThan(0);
+    }
   });
 });
 

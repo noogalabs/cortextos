@@ -341,14 +341,14 @@ class Daemon {
     // Create agent manager
     this.agentManager = new AgentManager(this.instanceId, this.ctxRoot, frameworkRoot, org);
 
-    // Start IPC server
-    this.ipcServer = new IPCServer(this.agentManager, this.instanceId);
-    await this.ipcServer.start();
-
-    // Discover and start agents
-    await this.agentManager.discoverAndStart();
-
-    console.log(`[daemon] Running (pid: ${process.pid})`);
+    // F2 fix: register shutdown-signal + fatal-error handlers BEFORE any boot
+    // work (IPC server start + serial multi-agent discoverAndStart, which can
+    // take minutes). A SIGTERM or crash arriving DURING boot must still run
+    // stopAll() and write crash markers — otherwise every already-started
+    // agent's SessionEnd hook fires a false CRASH alert and no crash history
+    // is recorded. The handlers only need ctxRoot/frameworkRoot/pidFile
+    // (all available here) and null-check agentManager/ipcServer, so early
+    // registration is safe.
 
     // Handle shutdown signals
     const shutdown = async () => {
@@ -426,6 +426,17 @@ class Daemon {
         unlinkSync(pidFile);
       } catch { /* ignore */ }
     });
+
+    // --- Boot work begins only AFTER all handlers above are installed (F2) ---
+
+    // Start IPC server
+    this.ipcServer = new IPCServer(this.agentManager, this.instanceId);
+    await this.ipcServer.start();
+
+    // Discover and start agents
+    await this.agentManager.discoverAndStart();
+
+    console.log(`[daemon] Running (pid: ${process.pid})`);
   }
 }
 
