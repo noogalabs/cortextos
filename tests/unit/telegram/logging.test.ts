@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -8,6 +8,11 @@ import {
   recordInboundTelegram,
   cacheLastSent,
   readLastSent,
+  buildRecentHistory,
+  readTailSync,
+  rotateMessageLogIfNeeded,
+  MESSAGE_LOG_ROTATION_BYTES,
+  HISTORY_TAIL_BYTES,
 } from '../../../src/telegram/logging';
 import { TelegramAPI } from '../../../src/telegram/api';
 import type { BusPaths, TelegramMessage } from '../../../src/types';
@@ -192,6 +197,174 @@ describe('Telegram Logging', () => {
     it('returns null when file does not exist', () => {
       const result = readLastSent(testDir, 'bot1', '000');
       expect(result).toBeNull();
+    });
+  });
+
+  describe('readTailSync (F13)', () => {
+    it('returns small files in full', () => {
+      const p = join(testDir, 'small.jsonl');
+      writeFileSync(p, 'line1\nline2\nline3\n');
+      expect(readTailSync(p, 64 * 1024)).toBe('line1\nline2\nline3\n');
+    });
+
+    it('returns empty string for an empty file', () => {
+      const p = join(testDir, 'empty.jsonl');
+      writeFileSync(p, '');
+      expect(readTailSync(p, 64 * 1024)).toBe('');
+    });
+
+    it('reads only the tail of large files and drops the leading partial line', () => {
+      const p = join(testDir, 'large.jsonl');
+      const lines: string[] = [];
+      for (let i = 0; i < 5000; i++) {
+        lines.push(JSON.stringify({ seq: i, pad: 'x'.repeat(50) }));
+      }
+      writeFileSync(p, lines.join('\n') + '\n');
+
+      const tail = readTailSync(p, 1024); // far smaller than the file
+      const tailLines = tail.split('\n').filter(Boolean);
+
+      expect(tail.length).toBeLessThanOrEqual(1024);
+      expect(tailLines.length).toBeGreaterThan(0);
+      // Every surviving line is complete, valid JSON (partial head was dropped)
+      for (const line of tailLines) {
+        expect(() => JSON.parse(line)).not.toThrow();
+      }
+      // The very last line of the file is present
+      expect(JSON.parse(tailLines[tailLines.length - 1]).seq).toBe(4999);
+    });
+  });
+
+  describe('rotateMessageLogIfNeeded (F13)', () => {
+    it('does nothing below the size cap', () => {
+      const p = join(testDir, 'out.jsonl');
+      writeFileSync(p, 'small\n');
+      rotateMessageLogIfNeeded(p);
+      expect(readFileSync(p, 'utf-8')).toBe('small\n');
+      expect(existsSync(p + '.1')).toBe(false);
+    });
+
+    it('does nothing (and does not throw) when the file is missing', () => {
+      expect(() => rotateMessageLogIfNeeded(join(testDir, 'nope.jsonl'))).not.toThrow();
+    });
+
+    it('rotates to a single .1 backup above the cap', () => {
+      const p = join(testDir, 'out.jsonl');
+      writeFileSync(p, 'big-old-content\n');
+      rotateMessageLogIfNeeded(p, 4); // tiny cap to force rotation
+      expect(existsSync(p)).toBe(false); // active log starts fresh on next append
+      expect(readFileSync(p + '.1', 'utf-8')).toBe('big-old-content\n');
+    });
+
+    it('replaces the previous .1 backup (keeps exactly one generation)', () => {
+      const p = join(testDir, 'out.jsonl');
+      writeFileSync(p + '.1', 'generation-1\n');
+      writeFileSync(p, 'generation-2\n');
+      rotateMessageLogIfNeeded(p, 4);
+      expect(readFileSync(p + '.1', 'utf-8')).toBe('generation-2\n');
+      expect(existsSync(p)).toBe(false);
+    });
+
+    it('logOutboundMessage rotates at the real cap and keeps writing', () => {
+      const logDir = join(testDir, 'logs', 'bot1');
+      mkdirSync(logDir, { recursive: true });
+      const logPath = join(logDir, 'outbound-messages.jsonl');
+      // Pre-grow the active log past the rotation cap
+      writeFileSync(logPath, 'x'.repeat(MESSAGE_LOG_ROTATION_BYTES + 1) + '\n');
+
+      logOutboundMessage(testDir, 'bot1', '111', 'post-rotation entry', 7);
+
+      expect(existsSync(logPath + '.1')).toBe(true);
+      const active = readFileSync(logPath, 'utf-8').trim().split('\n');
+      expect(active).toHaveLength(1); // only the fresh entry
+      expect(JSON.parse(active[0]).text).toBe('post-rotation entry');
+    });
+
+    it('logInboundMessage rotates at the real cap and keeps writing', () => {
+      const logDir = join(testDir, 'logs', 'bot1');
+      mkdirSync(logDir, { recursive: true });
+      const logPath = join(logDir, 'inbound-messages.jsonl');
+      writeFileSync(logPath, 'x'.repeat(MESSAGE_LOG_ROTATION_BYTES + 1) + '\n');
+
+      logInboundMessage(testDir, 'bot1', { message_id: 1, chat_id: 111, text: 'fresh' });
+
+      expect(existsSync(logPath + '.1')).toBe(true);
+      const active = readFileSync(logPath, 'utf-8').trim().split('\n');
+      expect(active).toHaveLength(1);
+      expect(JSON.parse(active[0]).text).toBe('fresh');
+    });
+  });
+
+  describe('buildRecentHistory (F13)', () => {
+    const CHAT = '12345';
+
+    function writeJsonl(file: string, rows: object[]): void {
+      const dir = join(testDir, 'logs', 'bot1');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, file), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+    }
+
+    it('returns null when no logs exist', () => {
+      expect(buildRecentHistory(testDir, 'bot1', CHAT)).toBeNull();
+    });
+
+    it('combines inbound + outbound sorted by timestamp on small files', () => {
+      writeJsonl('inbound-messages.jsonl', [
+        { chat_id: CHAT, text: 'question', timestamp: '2026-06-10T10:00:00Z' },
+      ]);
+      writeJsonl('outbound-messages.jsonl', [
+        { chat_id: CHAT, text: 'answer', timestamp: '2026-06-10T10:01:00Z' },
+      ]);
+
+      const history = buildRecentHistory(testDir, 'bot1', CHAT, 6);
+      expect(history).toBe('[user]: question\n[bot1]: answer');
+    });
+
+    it('filters out other chat ids', () => {
+      writeJsonl('inbound-messages.jsonl', [
+        { chat_id: CHAT, text: 'mine', timestamp: '2026-06-10T10:00:00Z' },
+        { chat_id: '99999', text: 'not mine', timestamp: '2026-06-10T10:01:00Z' },
+      ]);
+      const history = buildRecentHistory(testDir, 'bot1', CHAT, 6);
+      expect(history).toBe('[user]: mine');
+    });
+
+    it('returns the most recent messages from a log far larger than the tail window', () => {
+      const rows: object[] = [];
+      for (let i = 0; i < 20000; i++) {
+        rows.push({
+          chat_id: CHAT,
+          text: `message number ${i}`,
+          timestamp: `2026-06-10T10:00:00.${String(i).padStart(5, '0')}Z`,
+        });
+      }
+      writeJsonl('inbound-messages.jsonl', rows);
+
+      // Sanity: the file really exceeds the tail window
+      const size = readFileSync(join(testDir, 'logs', 'bot1', 'inbound-messages.jsonl')).length;
+      expect(size).toBeGreaterThan(HISTORY_TAIL_BYTES * 4);
+
+      const history = buildRecentHistory(testDir, 'bot1', CHAT, 6);
+      expect(history).not.toBeNull();
+      const lines = history!.split('\n');
+      expect(lines).toHaveLength(6);
+      expect(lines[5]).toBe('[user]: message number 19999');
+      expect(lines[0]).toBe('[user]: message number 19994');
+    });
+
+    it('tops up from the rotated .1 backup right after rotation', () => {
+      writeJsonl('inbound-messages.jsonl.1', [
+        { chat_id: CHAT, text: 'older from backup', timestamp: '2026-06-10T09:00:00Z' },
+        { chat_id: CHAT, text: 'newer from backup', timestamp: '2026-06-10T09:30:00Z' },
+      ]);
+      writeJsonl('inbound-messages.jsonl', [
+        { chat_id: CHAT, text: 'fresh after rotation', timestamp: '2026-06-10T10:00:00Z' },
+      ]);
+
+      const history = buildRecentHistory(testDir, 'bot1', CHAT, 6);
+      expect(history).toBe(
+        '[user]: older from backup\n[user]: newer from backup\n[user]: fresh after rotation',
+      );
     });
   });
 });

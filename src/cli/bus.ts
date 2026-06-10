@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { spawnSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
-import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
+import { sendMessage, checkInbox, ackInbox, pruneProcessed, PROCESSED_TTL_DAYS, PROCESSED_TTL_MIN_DAYS } from '../bus/message.js';
 import { agentExists } from '../bus/agents.js';
 import { validateAgentName, isValidJson } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
@@ -32,7 +32,7 @@ import { resolveEnv } from '../utils/env.js';
 import { resolveCommsLintRules, type ResolvedCommsLintRules } from '../bus/comms-lint-config.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
-import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
+import { logOutboundMessage, cacheLastSent, rotateMessageLogIfNeeded } from '../telegram/logging.js';
 import type { Priority, Task, TaskStatus, EventCategory, EventSeverity, ApprovalCategory, ApprovalStatus, OrgContext, CronDefinition } from '../types/index.js';
 
 /**
@@ -423,6 +423,31 @@ busCommand
       logEvent(paths, env.agentName, env.org, 'action', 'inbox_ack', 'info', JSON.stringify({ msg_id: id }));
     } catch { /* non-fatal */ }
     console.log(`ACK'd ${id}`);
+  });
+
+// F12 disk-leak fix: ackInbox moves messages into processed/{agent}/ forever
+// with no cleanup path (prod: 18k+ files / 72 MB). This sweep deletes acked
+// messages older than the TTL. Path-safe: only operates inside
+// {ctxRoot}/processed/ (see pruneProcessed in src/bus/message.ts).
+busCommand
+  .command('prune-processed')
+  .description('Delete acked (processed) inbox messages older than N days')
+  .option('--days <n>', 'Retention TTL in days (minimum 1)', String(PROCESSED_TTL_DAYS))
+  .option('--all-agents', 'Sweep every agent\'s processed/ dir in this instance, not just this agent', false)
+  .action((opts: { days?: string; allAgents?: boolean }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const days = parseInt(opts.days ?? String(PROCESSED_TTL_DAYS), 10);
+    if (!Number.isFinite(days) || days < PROCESSED_TTL_MIN_DAYS) {
+      console.error(`prune-processed: --days must be a number >= ${PROCESSED_TTL_MIN_DAYS} (got '${opts.days}')`);
+      process.exitCode = 1;
+      return;
+    }
+    const result = pruneProcessed(paths, days, { allAgents: opts.allAgents ?? false });
+    console.log(
+      `Pruned ${result.deleted} processed message(s) older than ${days} day(s) ` +
+      `(scanned ${result.scanned}, kept ${result.keptRecent} recent, ${result.errors} error(s))`,
+    );
   });
 
 busCommand
@@ -2149,7 +2174,9 @@ busCommand
       message_id: `mobile-reply-${Date.now()}`,
       type: 'text',
     });
-    appendFileSync(join(logDir, 'outbound-messages.jsonl'), entry + '\n');
+    const outboundLogPath = join(logDir, 'outbound-messages.jsonl');
+    rotateMessageLogIfNeeded(outboundLogPath); // F13: bound unbounded JSONL growth
+    appendFileSync(outboundLogPath, entry + '\n');
 
     // ACK the original inbox message
     if (msgId) {
