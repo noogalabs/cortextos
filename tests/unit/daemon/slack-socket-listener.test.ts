@@ -212,6 +212,57 @@ describe('SlackSocketListener.handleMessage', () => {
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
   });
 
+  // Single-flight: a burst of messages arriving before the first auth.test
+  // resolves must share ONE lookup, not fan out into N parallel API calls.
+  it('a concurrent message burst shares one in-flight auth.test lookup', async () => {
+    let resolveAuth!: (v: string | null) => void;
+    getBotUserIdMock.mockReturnValue(
+      new Promise<string | null>((resolve) => {
+        resolveAuth = resolve;
+      }),
+    );
+    const listener = makeListener(() => {}, { trustedSlackUsers: ['carlos.calel'] });
+
+    const p1 = listener.handleMessage(makeEvent({ ts: '1700000000.000100' }));
+    const p2 = listener.handleMessage(makeEvent({ ts: '1700000000.000200' }));
+    resolveAuth('UBOTSELF');
+    await Promise.all([p1, p2]);
+
+    expect(getBotUserIdMock).toHaveBeenCalledTimes(1);
+    // Both real-user messages still delivered.
+    expect(sendMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  // A transient auth.test failure must not permanently disable the self-echo
+  // guard — but the retry is cooldown-gated so a hard outage doesn't add an
+  // auth.test call to every single message.
+  it('failed own-id lookup retries after the cooldown, not on every message', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-06-10T12:00:00Z'));
+      getBotUserIdMock.mockResolvedValue(null);
+      const listener = makeListener(() => {}, { trustedSlackUsers: ['carlos.calel'] });
+
+      await listener.handleMessage(makeEvent({ user: 'U999' }));
+      await listener.handleMessage(makeEvent({ user: 'U999' }));
+      // Within the cooldown: the failure is not re-probed per message.
+      expect(getBotUserIdMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageMock).toHaveBeenCalledTimes(2);
+
+      // Past the cooldown the lookup is retried — and now succeeds, so a
+      // subsequent self-echo is dropped.
+      vi.setSystemTime(new Date('2026-06-10T12:01:01Z'));
+      getBotUserIdMock.mockResolvedValue('UBOTSELF');
+      await listener.handleMessage(makeEvent({ user: 'UBOTSELF', text: 'my own reply' }));
+
+      expect(getBotUserIdMock).toHaveBeenCalledTimes(2);
+      // Still only the two earlier deliveries — the self-echo was dropped.
+      expect(sendMessageMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('sendMessage throwing does not throw out of handleMessage and is logged', async () => {
     getUserInfoMock.mockResolvedValue({ handle: 'carlos.calel', displayName: 'Carlos Calel' });
     sendMessageMock.mockImplementation(() => {

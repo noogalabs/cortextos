@@ -1444,6 +1444,25 @@ describe('FastChecker', () => {
       expect(text).not.toContain('spam');
     });
 
+    it('TC-S13: captionless file_share (no text) renders an empty body, never "undefined"', async () => {
+      // A photo/file shared with NO caption arrives with no text field at all.
+      // Interpolating msg.text directly would print the literal string
+      // "undefined" into the inbox body (the socket listener already guards
+      // this; the poll path must too).
+      mockApi.getHistory.mockResolvedValue([
+        { ts: '13.0', user: 'U123', type: 'message', subtype: 'file_share' },
+      ]);
+      mockApi.getUserInfo.mockResolvedValue({ handle: 'brittany.hunter', displayName: 'Brittany Hunter' });
+      await (checker as any).checkSlackWatch();
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      const text = (sendMessage as any).mock.calls[0][4];
+      expect(text).not.toContain('undefined');
+      const lines = text.split('\n');
+      expect(lines[0]).toContain('=== SLACK from Brittany Hunter (@brittany.hunter)');
+      expect(lines[1]).toBe('');
+      expect(lines[2]).toContain('Reply using: cortextos bus send-slack');
+    });
+
     it('TC-S3: cursor-based dedup — same message not processed twice', async () => {
       mockApi.getHistory.mockResolvedValueOnce([{ ts: '100.0001', text: 'msg1', type: 'message', user: 'U1' }]);
       await (checker as any).checkSlackWatch();

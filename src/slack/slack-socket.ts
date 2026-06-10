@@ -14,6 +14,17 @@
 //   (4) message filter delivers non-bot subtyped messages (file_share etc.),
 //       matching the legacy poll — upstream dropped ALL subtyped events, which
 //       would silently lose human file/photo shares (shouldDeliverSlackMessage).
+//   (5) reconnection never gives up permanently — past maxReconnectAttempts the
+//       client keeps retrying at the max backoff delay instead of returning.
+//       Upstream stopped forever after ~3 minutes of outage, which (with the
+//       poll dormant while Socket Mode is primary) silently killed ALL Slack
+//       inbound until a daemon restart.
+//   (6) connect() checks the HTTP status of apps.connections.open and honors a
+//       429 Retry-After as a floor on the next reconnect delay; start() resets
+//       isShuttingDown so a stopped client can be restarted.
+//   (7) a WebSocket open-timeout watchdog recycles connections that never
+//       reach 'open' (black-holed TCP / stalled TLS would otherwise hang the
+//       client forever with no event ever firing).
 
 /**
  * Slack Socket Mode Client
@@ -470,6 +481,16 @@ const API_TIMEOUT_MS = 10_000;
 const REACTION_TIMEOUT_MS = 5_000;
 
 /**
+ * Timeout for a created WebSocket to reach 'open'. A black-holed TCP connect
+ * or stalled TLS handshake fires NO event at all — without this watchdog the
+ * client would sit in 'connecting' forever with reconnection never scheduled.
+ */
+const WS_OPEN_TIMEOUT_MS = 15_000;
+
+/** Cap on a server-sent Retry-After honored as the next reconnect delay. */
+const MAX_RETRY_AFTER_MS = 120_000;
+
+/**
  * Minimal Slack Socket Mode client.
  *
  * Establishes a WebSocket connection to Slack's Socket Mode endpoint,
@@ -484,6 +505,11 @@ export class SlackSocketClient {
   private readonly maxReconnectDelayMs = 30_000;
   private isShuttingDown = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Watchdog for sockets that never reach 'open' (see WS_OPEN_TIMEOUT_MS).
+  private openTimer: ReturnType<typeof setTimeout> | null = null;
+  // Floor (ms) for the next reconnect delay, set when apps.connections.open
+  // returns HTTP 429 with a Retry-After header; consumed by scheduleReconnect.
+  private rateLimitMinDelayMs = 0;
   private readonly connectionState = new SlackConnectionStateTracker();
 
   // Bound listener references for proper removal on cleanup.
@@ -518,6 +544,10 @@ export class SlackSocketClient {
       this.log('WARN: WebSocket not available, Slack Socket Mode requires Node 20.10+');
       return;
     }
+    // Allow a stopped client to be restarted: stop() latches isShuttingDown,
+    // and without resetting it here every post-stop start() would silently
+    // no-op all connects and reconnects forever.
+    this.isShuttingDown = false;
     this.connectionState.onConnecting();
     await this.connect();
   }
@@ -540,6 +570,14 @@ export class SlackSocketClient {
    * and null the reference. Safe to call multiple times.
    */
   private cleanupWs(): void {
+    // The open-timeout watchdog is tied to the socket being torn down — always
+    // clear it (even when ws is already null) so a stale timer can never fire
+    // against a connection that was already recycled.
+    if (this.openTimer) {
+      clearTimeout(this.openTimer);
+      this.openTimer = null;
+    }
+
     const ws = this.ws;
     if (!ws) return;
 
@@ -583,6 +621,23 @@ export class SlackSocketClient {
         signal: AbortSignal.timeout(API_TIMEOUT_MS),
       });
 
+      // Check the HTTP status BEFORE parsing: 429/5xx/proxy responses are often
+      // non-JSON, and resp.json() on them throws an opaque SyntaxError. For a
+      // 429, honor the server's Retry-After as a floor on the next reconnect
+      // delay (capped) so backoff cannot hammer a rate-limited endpoint.
+      if (!resp.ok) {
+        if (resp.status === 429) {
+          const retryAfterSec = Number(resp.headers.get('retry-after') ?? '');
+          if (Number.isFinite(retryAfterSec) && retryAfterSec > 0) {
+            this.rateLimitMinDelayMs = Math.min(retryAfterSec * 1000, MAX_RETRY_AFTER_MS);
+          }
+          throw new Error(
+            `apps.connections.open rate limited (HTTP 429${this.rateLimitMinDelayMs ? `, retry after ${this.rateLimitMinDelayMs}ms` : ''})`,
+          );
+        }
+        throw new Error(`apps.connections.open failed: HTTP ${resp.status}`);
+      }
+
       const data = await resp.json() as { ok: boolean; url?: string; error?: string };
       if (!data.ok || !data.url) {
         throw new Error(`apps.connections.open failed: ${data.error || 'no url returned'}`);
@@ -601,6 +656,10 @@ export class SlackSocketClient {
       this.ws = new WebSocket(data.url);
 
       this.onWsOpen = () => {
+        if (this.openTimer) {
+          clearTimeout(this.openTimer);
+          this.openTimer = null;
+        }
         this.log('Slack Socket Mode connected');
         this.reconnectAttempts = 0;
       };
@@ -624,6 +683,19 @@ export class SlackSocketClient {
       this.ws.addEventListener('message', this.onWsMessage);
       this.ws.addEventListener('close', this.onWsClose);
       this.ws.addEventListener('error', this.onWsError);
+
+      // Half-open guard: if 'open' never fires (black-holed connect), no other
+      // event will either — recycle the socket and go through normal backoff.
+      // Cleared by onWsOpen on success and by cleanupWs on any teardown.
+      this.openTimer = setTimeout(() => {
+        this.openTimer = null;
+        this.log(`Slack Socket Mode: WebSocket did not open within ${WS_OPEN_TIMEOUT_MS}ms — recycling connection`);
+        this.cleanupWs();
+        if (!this.isShuttingDown) {
+          this.connectionState.onReconnecting();
+          this.scheduleReconnect();
+        }
+      }, WS_OPEN_TIMEOUT_MS);
 
     } catch (error) {
       this.log(`Slack Socket Mode connection error: ${error instanceof Error ? error.message : String(error)}`);
@@ -746,13 +818,17 @@ export class SlackSocketClient {
 
   /**
    * Schedule a reconnection attempt with exponential backoff.
+   *
+   * NEVER gives up permanently. The previous behavior returned once
+   * maxReconnectAttempts was reached — but the backoff ladder exhausts in
+   * about 3 minutes, so any Slack/network outage longer than that permanently
+   * killed real-time inbound until a daemon restart (and while Socket Mode is
+   * primary the 60s poll is dormant, so the loss was TOTAL and silent).
+   * Past the soft max we keep retrying at the max backoff delay and log the
+   * escalation so the condition is visible in the daemon log.
    */
   private scheduleReconnect(): void {
     if (this.isShuttingDown) return;
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.log(`Slack Socket Mode max reconnect attempts (${this.maxReconnectAttempts}) reached`);
-      return;
-    }
 
     // Clear any existing reconnect timer to prevent leaks on rapid disconnects
     if (this.reconnectTimer) {
@@ -760,17 +836,33 @@ export class SlackSocketClient {
       this.reconnectTimer = null;
     }
 
-    const delay = Math.min(
-      this.baseReconnectDelayMs * Math.pow(2, this.reconnectAttempts),
+    // Cap the exponent so Math.pow can't overflow to Infinity on a long outage.
+    const cappedExponent = Math.min(this.reconnectAttempts, 16);
+    const backoff = Math.min(
+      this.baseReconnectDelayMs * Math.pow(2, cappedExponent),
       this.maxReconnectDelayMs,
     );
+    // Honor a server-sent Retry-After (set by connect() on HTTP 429) as a
+    // one-shot floor on the delay, then clear it.
+    const delay = Math.max(backoff, this.rateLimitMinDelayMs);
+    this.rateLimitMinDelayMs = 0;
     this.reconnectAttempts++;
 
-    this.log(`Slack Socket Mode reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    if (this.reconnectAttempts > this.maxReconnectAttempts) {
+      this.log(`Slack Socket Mode reconnect attempt ${this.reconnectAttempts} exceeds soft max (${this.maxReconnectAttempts}) — continuing at max backoff (${delay}ms)`);
+    } else {
+      this.log(`Slack Socket Mode reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.isShuttingDown) {
-        this.connect();
+        // connect() catches its own errors; this catch is a final safety net so
+        // an unexpected synchronous throw can neither become an unhandled
+        // rejection nor silently end the reconnect chain.
+        void this.connect().catch((err) => {
+          this.log(`Slack Socket Mode reconnect error: ${err instanceof Error ? err.message : String(err)}`);
+          this.scheduleReconnect();
+        });
       }
     }, delay);
   }

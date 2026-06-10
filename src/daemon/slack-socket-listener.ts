@@ -49,11 +49,21 @@ export class SlackSocketListener {
   >();
   // Loudly-open warning is logged at most once per listener instance.
   private slackOpenWarned = false;
-  // Own bot user id (resolved once via auth.test) for the self-echo guard.
-  // `undefined` = not yet resolved; `null` = resolved-but-unavailable (auth.test
-  // failed), in which case the own-id check is skipped and shouldDeliverSlackMessage's
-  // bot_id guard still applies. A non-null value drops events authored by our own bot.
+  // Own bot user id (resolved via auth.test) for the self-echo guard.
+  // `undefined` = not yet resolved; `null` = lookup failed (retried after a
+  // cooldown — see resolveOwnBotUserId), in which case the own-id check is
+  // skipped and shouldDeliverSlackMessage's bot_id guard still applies.
+  // A non-null value drops events authored by our own bot.
   private ownBotUserId: string | null | undefined = undefined;
+  // In-flight auth.test promise: a burst of inbound messages arriving before
+  // the first resolution completes must share ONE lookup, not fan out into N
+  // parallel auth.test calls.
+  private ownBotUserIdInFlight: Promise<string | null> | null = null;
+  // When the lookup failed (null), retry no more than once per cooldown so a
+  // transient blip doesn't permanently disable the guard, but a hard outage
+  // doesn't add an auth.test call to every message either.
+  private ownBotUserIdLastFailureAt = 0;
+  private static readonly OWN_ID_RETRY_COOLDOWN_MS = 60_000;
 
   constructor(opts: SlackSocketListenerOptions) {
     this.channel = opts.channel;
@@ -86,6 +96,29 @@ export class SlackSocketListener {
   }
 
   /**
+   * Resolve (or re-resolve) the own bot user id with single-flight dedup.
+   * getBotUserId never throws (returns null on any failure), so this never
+   * throws either. On failure, records the time so the cooldown gate in
+   * handleMessage can retry later instead of caching the failure forever.
+   */
+  private async resolveOwnBotUserId(): Promise<void> {
+    if (!this.ownBotUserIdInFlight) {
+      this.ownBotUserIdInFlight = this.slackApi.getBotUserId();
+    }
+    const inFlight = this.ownBotUserIdInFlight;
+    const resolved = await inFlight;
+    // Only the call that owns the current in-flight promise clears it (a
+    // concurrent waiter resuming later must not null out a NEWER lookup).
+    if (this.ownBotUserIdInFlight === inFlight) {
+      this.ownBotUserIdInFlight = null;
+    }
+    this.ownBotUserId = resolved;
+    if (resolved === null) {
+      this.ownBotUserIdLastFailureAt = Date.now();
+    }
+  }
+
+  /**
    * Handle a single Slack message event: resolve the display name and write
    * the formatted message to the agent's inbox. PUBLIC for unit testing.
    *
@@ -97,11 +130,16 @@ export class SlackSocketListener {
 
     // Self-echo guard (belt-and-suspenders alongside shouldDeliverSlackMessage's
     // bot_id drop): never process our own bot user's messages. Resolve the own
-    // bot user id once via auth.test and cache it. If auth.test is unavailable
-    // (null), skip this check — the bot_id gate already covers the observed case,
-    // and a lookup failure must not kill inbound.
-    if (this.ownBotUserId === undefined) {
-      this.ownBotUserId = await this.slackApi.getBotUserId();
+    // bot user id via auth.test and cache it on success; failures are retried
+    // after a cooldown. If auth.test is unavailable (null), skip this check —
+    // the bot_id gate already covers the observed case, and a lookup failure
+    // must not kill inbound.
+    if (
+      this.ownBotUserId === undefined ||
+      (this.ownBotUserId === null &&
+        Date.now() - this.ownBotUserIdLastFailureAt >= SlackSocketListener.OWN_ID_RETRY_COOLDOWN_MS)
+    ) {
+      await this.resolveOwnBotUserId();
     }
     if (this.ownBotUserId && userId === this.ownBotUserId) {
       this.log(`Slack message from own bot user ${userId} dropped (self-echo guard)`);

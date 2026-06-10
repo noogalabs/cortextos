@@ -17,16 +17,20 @@
  * Patterns masked:
  * - Slack bot tokens: xoxb-...
  * - Slack app tokens: xapp-...
- * - Slack user/workspace tokens: xoxp-..., xoxa-...
+ * - Slack user/workspace/session/client/refresh tokens: xoxp-, xoxa-, xoxs-, xoxc-, xoxr-
+ * - Slack incoming-webhook URLs: hooks.slack.com/services/T.../B.../secret
  * - Telegram bot tokens in URL paths: /bot123456:ABC.../method
  * - Telegram bot tokens standalone: 123456789:AAF-abc123...
  * - Bearer and Bot authorization values
  */
 export function redactTokens(input: string): string {
   return input
-    // Slack tokens: xoxb-..., xapp-..., xoxp-..., xoxa-...
-    .replace(/\b(xox[bpae]-)[A-Za-z0-9-]+/g, '$1****')
+    // Slack tokens: xoxb-, xapp-, xoxp-, xoxa-, xoxs- (session), xoxc- (client),
+    // xoxr- (refresh), xoxe- (export)
+    .replace(/\b(xox[bpaescr]-)[A-Za-z0-9-]+/g, '$1****')
     .replace(/\b(xapp-)[A-Za-z0-9-]+/g, '$1****')
+    // Slack incoming-webhook URLs — the path segments ARE the secret
+    .replace(/(hooks\.slack\.com\/services\/)[A-Za-z0-9/]+/g, '$1****')
     // Telegram bot tokens in URL paths: /bot123456:ABC.../
     .replace(/\/bot(\d+):[A-Za-z0-9_-]+/g, '/bot$1:****')
     // Telegram bot tokens standalone: 123456789:AAHfoo-bar_Baz
