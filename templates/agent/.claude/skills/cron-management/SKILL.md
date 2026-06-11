@@ -49,6 +49,43 @@ The daemon reloads automatically after `add-cron`. Confirm with `list-crons`.
 
 ---
 
+## One-Shot Actions (fire once at a future time)
+
+There are TWO mechanisms; they behave differently. Pick by whether the time is
+precise/critical or "next time I wake."
+
+**1. Persistent reminder — surfaces at your NEXT boot/restart (NOT real-time).**
+`create-reminder` writes a persistent reminder that the daemon injects into your
+boot/continue prompt the next time you start a session at-or-after `fire_at`. It
+survives every restart type. It does **NOT** interrupt a running session at the
+exact time — if you keep running past `fire_at` with no restart, it waits until
+your next wake. Use it for "next time you wake after X, do Y" — never for a
+time-critical fire.
+
+```bash
+cortextos bus create-reminder <fire-at-ISO-8601-UTC> "<prompt surfaced on next boot if overdue>"
+# e.g. cortextos bus create-reminder 2026-04-05T19:00:00Z "On next wake, follow up on the call."
+cortextos bus list-reminders          # pending reminders
+cortextos bus ack-reminder <id>        # mark handled
+```
+
+**2. Precise wall-clock fire on a running agent — self-removing recurring cron.**
+The daemon cron scheduler fires crons at their wall-clock time mid-run, but it
+has no native one-shot (`type: once` is not supported). For a true "fire at 3pm
+today" on a running agent, add a recurring cron at that minute whose prompt does
+the action **and then removes itself** — the established self-removing pattern
+(see the `telnyx-10dlc-campaign-poll` skill, "self-removes when done"):
+
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME remind-3pm "0 15 * * *" \
+  "Do <the one-time action>, then run: cortextos bus remove-cron $CTX_AGENT_NAME remind-3pm"
+```
+
+Rule of thumb: repeats → recurring cron; precise one-time wall-clock fire →
+self-removing cron; "handle on next wake" → `create-reminder`.
+
+---
+
 ## Updating a Cron
 
 ```bash
