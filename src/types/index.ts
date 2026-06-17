@@ -569,9 +569,12 @@ export interface CronDefinition {
  * It is append-only; log rotation prunes to the last 1 000 lines.
  *
  * Status semantics:
- *   "fired"   — the fire attempt succeeded on this attempt.
- *   "retried" — this attempt failed but more retries remain (see `error`).
- *   "failed"  — final failure after exhausting all retries (see `error`).
+ *   "fired"              — paste/write injection succeeded; this does NOT prove the REPL executed it.
+ *   "confirmed"          — transcript contains the salted user turn, proving the REPL consumed it.
+ *   "noop_unconfirmed"   — detector did not find the salted turn after one verification window.
+ *   "noop_reinjected"    — detector still did not find it after two windows and performed one safe re-inject.
+ *   "retried"            — this attempt failed but more retries remain (see `error`).
+ *   "failed"             — final failure after exhausting all retries (see `error`).
  */
 export interface CronExecutionLogEntry {
   /** ISO 8601 UTC timestamp of the fire attempt. */
@@ -579,7 +582,7 @@ export interface CronExecutionLogEntry {
   /** Cron name (matches CronDefinition.name). */
   cron: string;
   /** Outcome of this attempt. */
-  status: 'fired' | 'retried' | 'failed';
+  status: 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'retried' | 'failed';
   /** Attempt index (1-based). */
   attempt: number;
   /** Wall-clock duration of the fire attempt in milliseconds. */
@@ -844,7 +847,7 @@ export interface CronSummaryRow {
    * Outcome of the most recent execution log entry.
    * Null when the cron has never fired.
    */
-  lastStatus: 'fired' | 'retried' | 'failed' | null;
+  lastStatus: CronExecutionLogEntry['status'] | null;
   /**
    * ISO 8601 timestamp of the next scheduled fire.
    * Computed from the cron's schedule + last_fired_at (or now).

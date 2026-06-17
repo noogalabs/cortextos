@@ -8,6 +8,8 @@ import { SlackSocketListener } from './slack-socket-listener.js';
 import { resolveSlackInboundMode } from './slack-inbound-mode.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { syncCronsForAgent } from './cron-migration.js';
+import { appendExecutionLog } from './cron-execution-log.js';
+import { CronNoopDetector } from './cron-noop-detector.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -19,6 +21,7 @@ import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
 import { evaluateShift } from './shift.js';
 import { logEvent } from '../bus/event.js';
+import { sendMessage } from '../bus/message.js';
 import { stripBom } from '../utils/strip-bom.js';
 import { normalizeAllowedUser } from './allowed-user.js';
 import { confirmSupportAccessOnFirstContact } from '../cli/support-access-notify.js';
@@ -46,6 +49,8 @@ export class AgentManager {
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
+  /** Post-fire verifier that confirms Claude cron prompts reached the REPL transcript. */
+  private cronNoopDetector: CronNoopDetector;
   // Tracks agents that received a start request while still stopping.
   // stopAgent() honors these after cleanup completes so restart-all is race-free.
   private pendingRestarts: Set<string> = new Set();
@@ -69,6 +74,35 @@ export class AgentManager {
     this.ctxRoot = ctxRoot;
     this.frameworkRoot = frameworkRoot;
     this.org = org;
+    this.cronNoopDetector = new CronNoopDetector({
+      appendExecutionLog,
+      emitEvent: (agentName, event, severity, meta) => {
+        try {
+          const resolvedOrg = this.resolveAgentOrg(agentName);
+          const paths = resolvePaths(agentName, this.instanceId, resolvedOrg);
+          logEvent(paths, agentName, resolvedOrg || '', 'action', event, severity, meta);
+        } catch (err) {
+          console.log(`[cron-noop-detector] logEvent failed for ${agentName}/${event} (non-fatal): ${err}`);
+        }
+      },
+      getStatus: (agentName) => this.getAgentStatus(agentName),
+      inject: (agentName, text) => this.injectAgentDetailed(agentName, text),
+      notifyOrchestrator: (agentName, text) => {
+        try {
+          const resolvedOrg = this.resolveAgentOrg(agentName);
+          const orchestratorName = this.resolveOrgOrchestrator(resolvedOrg);
+          if (!orchestratorName) {
+            console.log(`[cron-noop-detector] no orchestrator configured for org ${resolvedOrg}; persistent no-op notice not sent`);
+            return;
+          }
+          const paths = resolvePaths(agentName, this.instanceId, resolvedOrg);
+          sendMessage(paths, 'daemon', orchestratorName, 'normal', text);
+        } catch (err) {
+          console.log(`[cron-noop-detector] orchestrator notify failed for ${agentName} (non-fatal): ${err}`);
+        }
+      },
+      logger: (msg) => console.log(msg),
+    });
     this.daemonJustCrashed = this.detectDaemonCrashMarkers();
     if (this.daemonJustCrashed) {
       console.log('[agent-manager] Detected .daemon-crashed marker(s) — previous daemon exited abnormally. Will quiet BUG-011 alarm for this startup cycle.');
@@ -320,6 +354,17 @@ export class AgentManager {
 
     // Ultimate fallback: daemon's startup org (single-org install behavior)
     return this.org;
+  }
+
+  private resolveOrgOrchestrator(org: string | undefined): string | null {
+    if (!org) return null;
+    try {
+      const contextJson = stripBom(readFileSync(join(this.frameworkRoot, 'orgs', org, 'context.json'), 'utf-8'));
+      const parsed = JSON.parse(contextJson);
+      return typeof parsed.orchestrator === 'string' && parsed.orchestrator ? parsed.orchestrator : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1501,6 +1546,22 @@ export class AgentManager {
       const injected = this.injectAgent(agentName, injection);
       if (!injected) {
         throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);
+      }
+      try {
+        const entry = this.agents.get(agentName);
+        const config = entry?.process.getConfig();
+        if (entry && config) {
+          this.cronNoopDetector.registerFire({
+            agentName,
+            agentDir: entry.process.getAgentDir(),
+            config,
+            cronName: cron.name,
+            prompt,
+            firedAt,
+          });
+        }
+      } catch (err) {
+        console.log(`[cron-noop-detector] register failed for ${agentName}/${cron.name} (non-fatal): ${err}`);
       }
     };
 

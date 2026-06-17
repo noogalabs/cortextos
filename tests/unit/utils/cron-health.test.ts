@@ -35,7 +35,7 @@ function makeRow(
     org: string;
     schedule: string;
     lastFire: string | null;
-    lastStatus: 'fired' | 'retried' | 'failed' | null;
+    lastStatus: CronExecutionLogEntry['status'] | null;
     fire_at: string;
     last_fired_at: string;
     nextFire: string;
@@ -60,7 +60,7 @@ function makeRow(
 }
 
 function makeEntry(
-  status: 'fired' | 'retried' | 'failed',
+  status: CronExecutionLogEntry['status'],
   tsMs: number = NOW_MS - 3_600_000,
 ): CronExecutionLogEntry {
   return {
@@ -290,7 +290,7 @@ describe('computeHealth — successRate24h', () => {
   it('returns 1.0 for all-success entries', () => {
     const entries = [
       makeEntry('fired', NOW_MS - 3_600_000),
-      makeEntry('fired', NOW_MS - 7_200_000),
+      makeEntry('confirmed', NOW_MS - 7_200_000),
     ];
     const row = makeRow({ lastFire: new Date(NOW_MS - 3_600_000).toISOString(), lastStatus: 'fired' });
     const result = computeHealth(row, entries, NOW_MS);

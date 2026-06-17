@@ -33,7 +33,7 @@ const CRON_NAME = 'heartbeat';
 
 function makeEntry(
   cronName: string,
-  status: 'fired' | 'retried' | 'failed',
+  status: CronExecutionLogEntry['status'],
   idx: number,
 ): CronExecutionLogEntry {
   return {
@@ -56,10 +56,11 @@ function writeLog(agentName: string, entries: CronExecutionLogEntry[]): void {
   );
 }
 
-// Write 10 fired + 5 failed for the test agent
+// Write 9 fired + 1 confirmed + 5 failed for the test agent
 beforeAll(() => {
   const entries: CronExecutionLogEntry[] = [
-    ...Array.from({ length: 10 }, (_, i) => makeEntry(CRON_NAME, 'fired', i)),
+    ...Array.from({ length: 9 }, (_, i) => makeEntry(CRON_NAME, 'fired', i)),
+    makeEntry(CRON_NAME, 'confirmed', 9),
     ...Array.from({ length: 5 }, (_, i) => makeEntry(CRON_NAME, 'failed', 10 + i)),
   ];
   writeLog(AGENT, entries);
@@ -117,11 +118,11 @@ describe('GET /api/workflows/crons/[agent]/executions — pagination shape', () 
 });
 
 describe('GET /api/workflows/crons/[agent]/executions — status filter', () => {
-  it('?status=success returns only fired entries', async () => {
+  it('?status=success returns fired and confirmed entries', async () => {
     const res = await callGet(AGENT, 'limit=100&status=success');
     const body = await res.json() as { entries: CronExecutionLogEntry[]; total: number };
     expect(body.total).toBe(10);
-    expect(body.entries.every(e => e.status === 'fired')).toBe(true);
+    expect(body.entries.every(e => e.status === 'fired' || e.status === 'confirmed')).toBe(true);
   });
 
   it('?status=failure returns only failed entries', async () => {

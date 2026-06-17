@@ -121,7 +121,7 @@ export function computeHealth(
   // ── 24h metrics ───────────────────────────────────────────────────────────
 
   const firesLast24h = executionsLast24h.length;
-  const successCount = executionsLast24h.filter(e => e.status === 'fired').length;
+  const successCount = executionsLast24h.filter(e => e.status === 'fired' || e.status === 'confirmed').length;
   const successRate24h = firesLast24h > 0 ? successCount / firesLast24h : 1;
 
   // ── State machine ─────────────────────────────────────────────────────────
