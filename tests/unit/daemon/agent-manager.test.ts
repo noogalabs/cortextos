@@ -9,14 +9,19 @@ import { buildReplyContext } from '../../../src/daemon/agent-manager.js';
 vi.mock('../../../src/daemon/agent-process.js', () => ({
   AgentProcess: class {
     name: string;
-    dir: string;
-    constructor(name: string, dir: string) {
+    dir: any;
+    config: any;
+    constructor(name: string, dir: any, config?: any) {
       this.name = name;
       this.dir = dir;
+      this.config = config ?? {};
     }
     async start() { /* no-op */ }
     async stop() { /* no-op */ }
     getStatus() { return { name: this.name, status: 'stopped' }; }
+    getAgentDir() { return typeof this.dir === 'string' ? this.dir : this.dir?.agentDir; }
+    getConfig() { return this.config; }
+    injectMessage() { return true; }
     onExit() { /* no-op */ }
   },
 }));
