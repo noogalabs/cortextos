@@ -154,6 +154,12 @@ export function computeHealth(
       lastFireMs, expectedIntervalMs, gapMs, successRate24h, firesLast24h);
   }
 
+  if (lastStatus === 'noop_unconfirmed' || lastStatus === 'noop_reinjected' || lastStatus === 'noop_persistent') {
+    return makeHealth(agent, org, cron.name, nextFire, 'warning',
+      `most recent cron fire was not confirmed by transcript detector (${lastStatus})`,
+      lastFireMs, expectedIntervalMs, gapMs, successRate24h, firesLast24h);
+  }
+
   // warning: gap > 2x expected interval (only applies when interval is known)
   if (expectedIntervalMs > 0 && gapMs !== null && gapMs > WARNING_MULTIPLIER * expectedIntervalMs) {
     const expectedLabel = formatMs(expectedIntervalMs);

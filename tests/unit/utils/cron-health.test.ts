@@ -146,6 +146,23 @@ describe('computeHealth — failure', () => {
 });
 
 // ---------------------------------------------------------------------------
+// detector no-op statuses
+// ---------------------------------------------------------------------------
+
+describe('computeHealth — detector no-op statuses', () => {
+  it.each(['noop_unconfirmed', 'noop_reinjected', 'noop_persistent'] as const)(
+    'returns warning when lastStatus is %s',
+    (lastStatus) => {
+      const lastFire = new Date(NOW_MS - 1000).toISOString();
+      const row = makeRow({ lastFire, lastStatus, schedule: '6h' });
+      const result = computeHealth(row, [makeEntry(lastStatus, NOW_MS - 1000)], NOW_MS);
+      expect(result.state).toBe('warning');
+      expect(result.reason).toContain(lastStatus);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // warning
 // ---------------------------------------------------------------------------
 
