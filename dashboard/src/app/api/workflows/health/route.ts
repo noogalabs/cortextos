@@ -54,7 +54,7 @@ interface CronExecutionLogEntry {
   error: string | null;
 }
 
-type CronExecutionStatus = 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'retried' | 'failed';
+type CronExecutionStatus = 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'noop_persistent' | 'retried' | 'failed';
 
 export type CronHealthState = 'healthy' | 'warning' | 'failure' | 'never-fired';
 
@@ -247,7 +247,7 @@ function computeHealth(
     return make('failure', `most recent execution failed`);
   }
 
-  if (lastStatus === 'noop_unconfirmed' || lastStatus === 'noop_reinjected') {
+  if (lastStatus === 'noop_unconfirmed' || lastStatus === 'noop_reinjected' || lastStatus === 'noop_persistent') {
     return make('warning', `most recent cron fire was not confirmed by transcript detector (${lastStatus})`);
   }
 

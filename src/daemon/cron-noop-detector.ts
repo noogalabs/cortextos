@@ -1,4 +1,4 @@
-import { existsSync, openSync, readSync, closeSync, fstatSync, readdirSync } from 'fs';
+import { existsSync, openSync, readSync, closeSync, fstatSync, readdirSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join, sep } from 'path';
 import type { AgentConfig, AgentStatus, CronExecutionLogEntry } from '../types/index.js';
@@ -33,9 +33,12 @@ export function resolveClaudeTranscriptPath(
   try {
     const jsonlFiles = readdirSync(convDir)
       .filter((f) => f.endsWith('.jsonl'))
-      .sort();
-    const lastJsonl = jsonlFiles[jsonlFiles.length - 1];
-    return lastJsonl ? join(convDir, lastJsonl) : null;
+      .map((file) => {
+        const path = join(convDir, file);
+        return { path, mtimeMs: statSync(path).mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return jsonlFiles[0]?.path ?? null;
   } catch {
     return null;
   }
@@ -291,6 +294,14 @@ export class CronNoopDetector {
   }
 
   private escalatePersistent(pending: PendingCronVerification, transcriptPath: string | null, reason?: string): void {
+    this.appendExecutionLog(pending.agentName, {
+      ts: this.now().toISOString(),
+      cron: pending.cronName,
+      status: 'noop_persistent',
+      attempt: pending.window,
+      duration_ms: 0,
+      error: reason ?? 'salted user turn absent after re-inject verification windows',
+    });
     const meta = {
       agent: pending.agentName,
       cron: pending.cronName,

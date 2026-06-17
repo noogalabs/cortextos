@@ -414,6 +414,7 @@ export interface CronDefinition {
  *   "confirmed"          — transcript contains the salted user turn, proving the REPL consumed it.
  *   "noop_unconfirmed"   — detector did not find the salted turn after one verification window.
  *   "noop_reinjected"    — detector still did not find it after two windows and performed one safe re-inject.
+ *   "noop_persistent"    — detector did not find the re-injected turn after both verification windows.
  *   "retried"            — this attempt failed but more retries remain (see `error`).
  *   "failed"             — final failure after exhausting all retries (see `error`).
  */
@@ -423,7 +424,7 @@ export interface CronExecutionLogEntry {
   /** Cron name (matches CronDefinition.name). */
   cron: string;
   /** Outcome of this attempt. */
-  status: 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'retried' | 'failed';
+  status: 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'noop_persistent' | 'retried' | 'failed';
   /** Attempt index (1-based). */
   attempt: number;
   /** Wall-clock duration of the fire attempt in milliseconds. */

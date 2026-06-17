@@ -47,7 +47,7 @@ interface CronExecutionLogEntry {
   error: string | null;
 }
 
-type CronExecutionStatus = 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'retried' | 'failed';
+type CronExecutionStatus = 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'noop_persistent' | 'retried' | 'failed';
 
 export interface CronSummaryRow {
   agent: string;

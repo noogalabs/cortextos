@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'fs';
 import { join, sep } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -29,14 +29,18 @@ describe('cron-noop-detector transcript lookup', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('resolves the newest Claude JSONL transcript using the canonical project path', () => {
+  it('resolves the most recently modified Claude JSONL transcript using the canonical project path', () => {
     const launchDir = join(testDir, 'agent-dir');
     const convDir = join(testDir, '.claude', 'projects', launchDir.split(sep).join('-'));
     mkdirSync(convDir, { recursive: true });
-    writeFileSync(join(convDir, 'a.jsonl'), '');
-    writeFileSync(join(convDir, 'z.jsonl'), '');
+    const lexicallyLast = join(convDir, 'z.jsonl');
+    const newestByMtime = join(convDir, 'a.jsonl');
+    writeFileSync(lexicallyLast, '');
+    writeFileSync(newestByMtime, '');
+    utimesSync(lexicallyLast, new Date('2026-06-17T11:00:00.000Z'), new Date('2026-06-17T11:00:00.000Z'));
+    utimesSync(newestByMtime, new Date('2026-06-17T12:00:00.000Z'), new Date('2026-06-17T12:00:00.000Z'));
 
-    expect(resolveClaudeTranscriptPath({}, launchDir, testDir)).toBe(join(convDir, 'z.jsonl'));
+    expect(resolveClaudeTranscriptPath({}, launchDir, testDir)).toBe(newestByMtime);
   });
 
   it('matches salted cron turns when message.content is a block array', () => {
@@ -168,6 +172,12 @@ describe('CronNoopDetector', () => {
     await vi.advanceTimersByTimeAsync(verifyDelayMs);
 
     expect(injects).toHaveLength(1);
+    expect(logs.map((l) => l.status)).toEqual([
+      'noop_unconfirmed',
+      'noop_reinjected',
+      'noop_unconfirmed',
+      'noop_persistent',
+    ]);
     expect(events.map((e) => e.event)).toEqual([
       'cron_fire_unconfirmed',
       'cron_fire_reinjected',

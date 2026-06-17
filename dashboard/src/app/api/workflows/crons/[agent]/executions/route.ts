@@ -29,7 +29,7 @@ type StatusFilter = 'all' | 'success' | 'failure';
 export interface CronExecutionLogEntry {
   ts: string;
   cron: string;
-  status: 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'retried' | 'failed';
+  status: 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'noop_persistent' | 'retried' | 'failed';
   attempt: number;
   duration_ms: number;
   error: string | null;

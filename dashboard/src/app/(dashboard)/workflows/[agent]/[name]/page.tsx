@@ -52,7 +52,7 @@ interface CronSummaryRow {
   nextFire: string;
 }
 
-type CronExecutionStatus = 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'retried' | 'failed';
+type CronExecutionStatus = 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'noop_persistent' | 'retried' | 'failed';
 
 // ---------------------------------------------------------------------------
 // Page component

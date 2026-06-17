@@ -68,7 +68,7 @@ interface CronExecutionEntry {
   error: string | null;
 }
 
-type CronExecutionStatus = 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'retried' | 'failed';
+type CronExecutionStatus = 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'noop_persistent' | 'retried' | 'failed';
 
 interface AgentCrons {
   name: string;
@@ -124,7 +124,7 @@ function statusBadgeVariant(
 ): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (status === 'fired' || status === 'confirmed') return 'default';
   if (status === 'failed') return 'destructive';
-  if (status === 'retried' || status === 'noop_unconfirmed' || status === 'noop_reinjected') return 'secondary';
+  if (status === 'retried' || status === 'noop_unconfirmed' || status === 'noop_reinjected' || status === 'noop_persistent') return 'secondary';
   return 'outline';
 }
 
@@ -133,6 +133,7 @@ function statusLabel(status: CronExecutionStatus | null): string {
   if (status === 'confirmed') return 'confirmed';
   if (status === 'noop_unconfirmed') return 'unconfirmed';
   if (status === 'noop_reinjected') return 're-injected';
+  if (status === 'noop_persistent') return 'persistent no-op';
   if (status === 'failed') return 'failed';
   if (status === 'retried') return 'retried';
   return 'never';
