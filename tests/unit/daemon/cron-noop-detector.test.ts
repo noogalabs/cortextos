@@ -56,6 +56,23 @@ describe('cron-noop-detector transcript lookup', () => {
 
     expect(transcriptContainsCronTurn(transcript, salt, firedAt).found).toBe(true);
   });
+
+  it('finds salted cron turns even when verbose output pushes them beyond the old tail window', () => {
+    const firedAt = '2026-06-17T12:00:00.000Z';
+    const salt = cronFireSalt(firedAt, 'heartbeat');
+    const transcript = join(testDir, 'session.jsonl');
+    const largeAssistantLine = JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-06-17T12:00:02.000Z',
+      message: { content: 'x'.repeat(300 * 1024) },
+    }) + '\n';
+    writeFileSync(
+      transcript,
+      transcriptLine('2026-06-17T12:00:01.000Z', `${salt}: Read HEARTBEAT.md`) + largeAssistantLine,
+    );
+
+    expect(transcriptContainsCronTurn(transcript, salt, firedAt).found).toBe(true);
+  });
 });
 
 describe('CronNoopDetector', () => {
@@ -196,6 +213,34 @@ describe('CronNoopDetector', () => {
     expect(injects).toHaveLength(1);
     expect(injects[0]).toContain('[CRON FIRED 2026-06-17T12:00:02.000Z] heartbeat');
     expect(injects[0]).not.toContain(originalSalt);
+  });
+
+  it('accepts a delayed original salt after a re-inject instead of escalating', async () => {
+    const testDir = mkdtempSync(join(tmpdir(), 'cron-noop-delayed-original-'));
+    try {
+      const firedAt = '2026-06-17T12:00:00.000Z';
+      const originalSalt = cronFireSalt(firedAt, cronName);
+      transcriptPath = join(testDir, 'session.jsonl');
+      writeFileSync(transcriptPath, '');
+
+      register(makeDetector(), firedAt);
+
+      await vi.advanceTimersByTimeAsync(verifyDelayMs);
+      await vi.advanceTimersByTimeAsync(verifyDelayMs);
+      writeFileSync(transcriptPath, transcriptLine('2026-06-17T12:00:02.500Z', `${originalSalt}: Read HEARTBEAT.md`));
+      await vi.advanceTimersByTimeAsync(verifyDelayMs);
+
+      expect(injects).toHaveLength(1);
+      expect(logs.map((l) => l.status)).toEqual([
+        'noop_unconfirmed',
+        'noop_reinjected',
+        'confirmed',
+      ]);
+      expect(events.map((e) => e.event)).toEqual(['cron_fire_unconfirmed', 'cron_fire_reinjected']);
+      expect(notifications).toHaveLength(0);
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
   });
 
   it('skips codex and hermes runtimes without registering timers', async () => {

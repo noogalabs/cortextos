@@ -1,14 +1,17 @@
-import { existsSync, openSync, readSync, closeSync, fstatSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join, sep } from 'path';
 import type { AgentConfig, AgentStatus, CronExecutionLogEntry } from '../types/index.js';
 
 export const CRON_NOOP_VERIFY_DELAY_MS = 75_000;
-const TRANSCRIPT_TAIL_BYTES = 256 * 1024;
-
 export interface CronTranscriptLookup {
   found: boolean;
   path?: string;
+}
+
+interface CronSaltCandidate {
+  salt: string;
+  firedAt: string;
 }
 
 export function cronFireSalt(firedAt: string, cronName: string): string {
@@ -44,26 +47,6 @@ export function resolveClaudeTranscriptPath(
   }
 }
 
-function readTailSync(filePath: string, maxBytes: number): string {
-  const fd = openSync(filePath, 'r');
-  try {
-    const size = fstatSync(fd).size;
-    if (size === 0) return '';
-    const start = Math.max(0, size - maxBytes);
-    const length = size - start;
-    const buf = Buffer.alloc(length);
-    readSync(fd, buf, 0, length, start);
-    let text = buf.toString('utf-8');
-    if (start > 0) {
-      const nl = text.indexOf('\n');
-      text = nl >= 0 ? text.slice(nl + 1) : '';
-    }
-    return text;
-  } finally {
-    closeSync(fd);
-  }
-}
-
 function contentContainsSalt(content: unknown, salt: string): boolean {
   if (typeof content === 'string') return content.includes(salt);
   try {
@@ -77,16 +60,27 @@ export function transcriptContainsCronTurn(
   transcriptPath: string | null,
   salt: string,
   firedAt: string,
-  tailBytes: number = TRANSCRIPT_TAIL_BYTES,
+): CronTranscriptLookup {
+  return transcriptContainsAnyCronTurn(transcriptPath, [{ salt, firedAt }]);
+}
+
+function transcriptContainsAnyCronTurn(
+  transcriptPath: string | null,
+  candidates: CronSaltCandidate[],
 ): CronTranscriptLookup {
   if (!transcriptPath || !existsSync(transcriptPath)) return { found: false };
 
-  const firedMs = Date.parse(firedAt);
-  if (!Number.isFinite(firedMs)) return { found: false, path: transcriptPath };
+  const parsedCandidates = candidates
+    .map((candidate) => ({
+      ...candidate,
+      firedMs: Date.parse(candidate.firedAt),
+    }))
+    .filter((candidate) => Number.isFinite(candidate.firedMs));
+  if (parsedCandidates.length === 0) return { found: false, path: transcriptPath };
 
   try {
-    const tail = readTailSync(transcriptPath, tailBytes);
-    for (const line of tail.split('\n')) {
+    const transcript = readFileSync(transcriptPath, 'utf-8');
+    for (const line of transcript.split('\n')) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       let row: any;
@@ -97,8 +91,11 @@ export function transcriptContainsCronTurn(
       }
       if (row?.type !== 'user') continue;
       const tsMs = Date.parse(String(row.timestamp || ''));
-      if (!Number.isFinite(tsMs) || tsMs < firedMs) continue;
-      if (contentContainsSalt(row?.message?.content, salt)) {
+      if (!Number.isFinite(tsMs)) continue;
+      const matched = parsedCandidates.some((candidate) =>
+        tsMs >= candidate.firedMs && contentContainsSalt(row?.message?.content, candidate.salt),
+      );
+      if (matched) {
         return { found: true, path: transcriptPath };
       }
     }
@@ -121,6 +118,7 @@ interface PendingCronVerification {
   prompt: string;
   firedAt: string;
   salt: string;
+  acceptedSalts: CronSaltCandidate[];
   window: 1 | 2;
   reinjects: number;
   timer?: NodeJS.Timeout;
@@ -182,6 +180,7 @@ export class CronNoopDetector {
       prompt: input.prompt,
       firedAt: input.firedAt,
       salt,
+      acceptedSalts: [{ salt, firedAt: input.firedAt }],
       window: 1,
       reinjects: 0,
     });
@@ -203,7 +202,7 @@ export class CronNoopDetector {
 
     try {
       const transcriptPath = this.transcriptPathFor(pending.agentDir, pending.config);
-      const lookup = transcriptContainsCronTurn(transcriptPath, pending.salt, pending.firedAt);
+      const lookup = transcriptContainsAnyCronTurn(transcriptPath, pending.acceptedSalts);
       if (lookup.found) {
         this.appendExecutionLog(pending.agentName, {
           ts: this.now().toISOString(),
@@ -259,6 +258,7 @@ export class CronNoopDetector {
     }
 
     const firedAt = this.now().toISOString();
+    const salt = cronFireSalt(firedAt, pending.cronName);
     const injection = `[CRON FIRED ${firedAt}] ${pending.cronName}: ${pending.prompt}`;
     const result = this.inject(pending.agentName, injection);
     if (!result.ok) {
@@ -269,7 +269,11 @@ export class CronNoopDetector {
     const next: PendingCronVerification = {
       ...pending,
       firedAt,
-      salt: cronFireSalt(firedAt, pending.cronName),
+      salt,
+      acceptedSalts: [
+        ...pending.acceptedSalts,
+        { salt, firedAt },
+      ],
       window: 1,
       reinjects: 1,
       timer: undefined,
