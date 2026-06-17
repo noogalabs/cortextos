@@ -150,7 +150,7 @@ describe('computeHealth — failure', () => {
 // ---------------------------------------------------------------------------
 
 describe('computeHealth — detector no-op statuses', () => {
-  it.each(['noop_unconfirmed', 'noop_reinjected', 'noop_persistent'] as const)(
+  it.each(['noop_unconfirmed', 'noop_reinjected'] as const)(
     'returns warning when lastStatus is %s',
     (lastStatus) => {
       const lastFire = new Date(NOW_MS - 1000).toISOString();
@@ -160,6 +160,14 @@ describe('computeHealth — detector no-op statuses', () => {
       expect(result.reason).toContain(lastStatus);
     },
   );
+
+  it('returns failure when lastStatus is noop_persistent', () => {
+    const lastFire = new Date(NOW_MS - 1000).toISOString();
+    const row = makeRow({ lastFire, lastStatus: 'noop_persistent', schedule: '6h' });
+    const result = computeHealth(row, [makeEntry('noop_persistent', NOW_MS - 1000)], NOW_MS);
+    expect(result.state).toBe('failure');
+    expect(result.reason).toMatch(/persistent cron no-op/i);
+  });
 });
 
 // ---------------------------------------------------------------------------

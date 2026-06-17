@@ -85,7 +85,7 @@ export function readExecutionLogPage(
   if (statusFilter === 'success') {
     filtered = filtered.filter(e => e.status === 'fired' || e.status === 'confirmed');
   } else if (statusFilter === 'failure') {
-    filtered = filtered.filter(e => e.status === 'failed');
+    filtered = filtered.filter(e => e.status === 'failed' || e.status === 'noop_persistent');
   }
 
   const total = filtered.length;

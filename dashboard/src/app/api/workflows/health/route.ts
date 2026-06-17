@@ -247,7 +247,11 @@ function computeHealth(
     return make('failure', `most recent execution failed`);
   }
 
-  if (lastStatus === 'noop_unconfirmed' || lastStatus === 'noop_reinjected' || lastStatus === 'noop_persistent') {
+  if (lastStatus === 'noop_persistent') {
+    return make('failure', 'persistent cron no-op detected after re-inject verification');
+  }
+
+  if (lastStatus === 'noop_unconfirmed' || lastStatus === 'noop_reinjected') {
     return make('warning', `most recent cron fire was not confirmed by transcript detector (${lastStatus})`);
   }
 

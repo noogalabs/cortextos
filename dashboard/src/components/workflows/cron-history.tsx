@@ -67,8 +67,8 @@ function statusBadgeVariant(
   status: CronExecutionStatus,
 ): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (status === 'fired' || status === 'confirmed') return 'default';
-  if (status === 'failed') return 'destructive';
-  if (status === 'noop_unconfirmed' || status === 'noop_reinjected' || status === 'noop_persistent') return 'outline';
+  if (status === 'failed' || status === 'noop_persistent') return 'destructive';
+  if (status === 'noop_unconfirmed' || status === 'noop_reinjected') return 'outline';
   if (status === 'retried') return 'secondary';
   return 'outline';
 }

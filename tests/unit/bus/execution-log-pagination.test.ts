@@ -174,19 +174,20 @@ describe('getExecutionLogPage — statusFilter', () => {
     expect(page.total).toBe(3); // 2 fired + 1 confirmed entries
   });
 
-  it('failure filter returns only "failed" entries', async () => {
+  it('failure filter returns failed and persistent no-op entries', async () => {
     const entries = [
       makeEntry('heartbeat', 'fired', 0),
       makeEntry('heartbeat', 'failed', 1),
       makeEntry('heartbeat', 'failed', 2),
       makeEntry('heartbeat', 'fired', 3),
+      makeEntry('heartbeat', 'noop_persistent', 4),
     ];
     writeLogEntries('boris', entries);
     const { getExecutionLogPage } = await importCrons();
 
     const page = getExecutionLogPage('boris', 'heartbeat', 100, 0, 'failure');
-    expect(page.entries.every(e => e.status === 'failed')).toBe(true);
-    expect(page.total).toBe(2);
+    expect(page.entries.every(e => e.status === 'failed' || e.status === 'noop_persistent')).toBe(true);
+    expect(page.total).toBe(3);
   });
 
   it('all filter returns all statuses', async () => {

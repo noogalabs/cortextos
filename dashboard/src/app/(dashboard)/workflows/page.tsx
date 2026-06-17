@@ -123,8 +123,8 @@ function statusBadgeVariant(
   status: CronExecutionStatus | null,
 ): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (status === 'fired' || status === 'confirmed') return 'default';
-  if (status === 'failed') return 'destructive';
-  if (status === 'retried' || status === 'noop_unconfirmed' || status === 'noop_reinjected' || status === 'noop_persistent') return 'secondary';
+  if (status === 'failed' || status === 'noop_persistent') return 'destructive';
+  if (status === 'retried' || status === 'noop_unconfirmed' || status === 'noop_reinjected') return 'secondary';
   return 'outline';
 }
 
