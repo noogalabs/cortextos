@@ -302,6 +302,12 @@ export class AgentManager {
       allowedUserId: allowedUserId ? parseInt(allowedUserId, 10) : undefined,
     });
 
+    agentProcess.onStatusChanged((status) => {
+      if (status.status !== 'running') {
+        this.cronNoopDetector.cancelAgentVerifications(name);
+      }
+    });
+
     // Send Telegram notification on crashes and session refreshes
     if (telegramApi && chatId) {
       const tgApi = telegramApi;
@@ -620,6 +626,7 @@ export class AgentManager {
 
     if (entry.poller) entry.poller.stop();
     if (entry.activityPoller) entry.activityPoller.stop();
+    this.cronNoopDetector.cancelAgentVerifications(name);
     entry.checker.stop();
     await entry.process.stop();
     this.agents.delete(name);

@@ -15,7 +15,7 @@ interface CronSaltCandidate {
 }
 
 export function cronFireSalt(firedAt: string, cronName: string): string {
-  return `[CRON FIRED ${firedAt}] ${cronName}`;
+  return `[CRON FIRED ${firedAt}] ${cronName}:`;
 }
 
 export function resolveClaudeTranscriptPath(
@@ -194,6 +194,20 @@ export class CronNoopDetector {
     const key = this.keyFor(pending);
     pending.timer = setTimeout(() => this.verify(key), this.verifyDelayMs);
     this.pending.set(key, pending);
+  }
+
+  cancelAgentVerifications(agentName: string): number {
+    let cancelled = 0;
+    for (const [key, pending] of this.pending.entries()) {
+      if (pending.agentName !== agentName) continue;
+      if (pending.timer) clearTimeout(pending.timer);
+      this.pending.delete(key);
+      cancelled += 1;
+    }
+    if (cancelled > 0) {
+      this.logger(`[cron-noop-detector] cancelled ${cancelled} pending verification(s) for ${agentName}`);
+    }
+    return cancelled;
   }
 
   private verify(key: string): void {

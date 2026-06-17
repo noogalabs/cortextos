@@ -57,6 +57,28 @@ describe('cron-noop-detector transcript lookup', () => {
     expect(transcriptContainsCronTurn(transcript, salt, firedAt).found).toBe(true);
   });
 
+  it('does not match cron names that only share a prefix', () => {
+    const firedAt = '2026-06-17T12:00:00.000Z';
+    const fooSalt = cronFireSalt(firedAt, 'foo');
+    const fooBarSalt = cronFireSalt(firedAt, 'foo-bar');
+    const transcript = join(testDir, 'session.jsonl');
+    writeFileSync(
+      transcript,
+      transcriptLine('2026-06-17T12:00:01.000Z', `${fooBarSalt} Run foo-bar`),
+    );
+
+    expect(transcriptContainsCronTurn(transcript, fooSalt, firedAt).found).toBe(false);
+    expect(transcriptContainsCronTurn(transcript, fooBarSalt, firedAt).found).toBe(true);
+  });
+
+  it('keeps the salt aligned with the injected cron delimiter', () => {
+    const firedAt = '2026-06-17T12:00:00.000Z';
+
+    expect(`[CRON FIRED ${firedAt}] heartbeat: Read HEARTBEAT.md`).toContain(
+      cronFireSalt(firedAt, 'heartbeat'),
+    );
+  });
+
   it('finds salted cron turns even when verbose output pushes them beyond the old tail window', () => {
     const firedAt = '2026-06-17T12:00:00.000Z';
     const salt = cronFireSalt(firedAt, 'heartbeat');
@@ -241,6 +263,20 @@ describe('CronNoopDetector', () => {
     } finally {
       rmSync(testDir, { recursive: true, force: true });
     }
+  });
+
+  it('cancels pending verification timers for a stopped or restarted agent', async () => {
+    const detector = makeDetector();
+    register(detector);
+
+    expect(detector.cancelAgentVerifications(agentName)).toBe(1);
+    await vi.advanceTimersByTimeAsync(verifyDelayMs * 4);
+
+    expect(logs).toHaveLength(0);
+    expect(events).toHaveLength(0);
+    expect(injects).toHaveLength(0);
+    expect(notifications).toHaveLength(0);
+    expect(detector.cancelAgentVerifications(agentName)).toBe(0);
   });
 
   it('skips codex and hermes runtimes without registering timers', async () => {
