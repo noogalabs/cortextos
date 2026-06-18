@@ -6,11 +6,15 @@ import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
+import { appendExecutionLog } from './cron-execution-log.js';
+import { CronNoopDetector } from './cron-noop-detector.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
+import { logEvent } from '../bus/event.js';
+import { sendMessage } from '../bus/message.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
@@ -26,6 +30,8 @@ export class AgentManager {
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
+  /** Post-fire verifier that confirms Claude cron prompts reached the REPL transcript. */
+  private cronNoopDetector: CronNoopDetector;
   // Tracks agents that received a start request while still stopping.
   // stopAgent() honors these after cleanup completes so restart-all is race-free.
   private pendingRestarts: Set<string> = new Set();
@@ -39,6 +45,36 @@ export class AgentManager {
     this.ctxRoot = ctxRoot;
     this.frameworkRoot = frameworkRoot;
     this.org = org;
+    this.cronNoopDetector = new CronNoopDetector({
+      appendExecutionLog,
+      emitEvent: (agentName, event, severity, meta) => {
+        try {
+          const resolvedOrg = this.resolveAgentOrg(agentName);
+          const paths = resolvePaths(agentName, this.instanceId, resolvedOrg);
+          logEvent(paths, agentName, resolvedOrg || '', 'action', event, severity, meta);
+        } catch (err) {
+          console.log(`[cron-noop-detector] logEvent failed for ${agentName}/${event} (non-fatal): ${err}`);
+        }
+      },
+      getStatus: (agentName) => this.getAgentStatus(agentName),
+      inject: (agentName, text) => this.injectAgentDetailed(agentName, text),
+      hasActivitySince: (agentName, firedAt) => this.hasPostCronActivity(agentName, firedAt),
+      notifyOrchestrator: (agentName, text) => {
+        try {
+          const resolvedOrg = this.resolveAgentOrg(agentName);
+          const orchestratorName = this.resolveOrgOrchestrator(resolvedOrg);
+          if (!orchestratorName) {
+            console.log(`[cron-noop-detector] no orchestrator configured for org ${resolvedOrg}; persistent no-op notice not sent`);
+            return;
+          }
+          const paths = resolvePaths(agentName, this.instanceId, resolvedOrg);
+          sendMessage(paths, 'daemon', orchestratorName, 'normal', text);
+        } catch (err) {
+          console.log(`[cron-noop-detector] orchestrator notify failed for ${agentName} (non-fatal): ${err}`);
+        }
+      },
+      logger: (msg) => console.log(msg),
+    });
   }
 
   /**
@@ -132,6 +168,80 @@ export class AgentManager {
 
     // Ultimate fallback: daemon's startup org (single-org install behavior)
     return this.org;
+  }
+
+  private resolveOrgOrchestrator(org: string | undefined): string | null {
+    if (!org) return null;
+    try {
+      const contextJson = readFileSync(join(this.frameworkRoot, 'orgs', org, 'context.json'), 'utf-8');
+      const parsed = JSON.parse(contextJson);
+      return typeof parsed.orchestrator === 'string' && parsed.orchestrator ? parsed.orchestrator : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private hasPostCronActivity(agentName: string, firedAt: string): boolean {
+    const firedMs = Date.parse(firedAt);
+    if (!Number.isFinite(firedMs)) return false;
+
+    const resolvedOrg = this.resolveAgentOrg(agentName);
+    const paths = resolvePaths(agentName, this.instanceId, resolvedOrg);
+    return this.eventLogConfirmsActivity(paths.analyticsDir, agentName, firedMs);
+  }
+
+  private eventLogConfirmsActivity(analyticsDir: string, agentName: string, firedMs: number): boolean {
+    const eventsDir = join(analyticsDir, 'events', agentName);
+    if (!existsSync(eventsDir)) return false;
+
+    const dates = new Set([
+      new Date(firedMs).toISOString().slice(0, 10),
+      new Date().toISOString().slice(0, 10),
+    ]);
+
+    for (const date of dates) {
+      const eventPath = join(eventsDir, `${date}.jsonl`);
+      if (!existsSync(eventPath)) continue;
+      if (this.eventFileHasPostCronActivity(eventPath, firedMs)) return true;
+    }
+    return false;
+  }
+
+  private eventFileHasPostCronActivity(eventPath: string, firedMs: number): boolean {
+    const detectorEvents = new Set([
+      'cron_fire_unconfirmed',
+      'cron_fire_reinjected',
+      'cron_fire_noop_persistent',
+      'cron_fire_confirmed_by_activity',
+    ]);
+
+    try {
+      for (const line of readFileSync(eventPath, 'utf-8').split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let event: any;
+        try {
+          event = JSON.parse(trimmed);
+        } catch {
+          continue;
+        }
+
+        if (detectorEvents.has(String(event.event || ''))) continue;
+        const tsMs = Date.parse(String(event.timestamp || ''));
+        if (!Number.isFinite(tsMs) || tsMs < firedMs) continue;
+
+        if (event.category === 'heartbeat') {
+          const status = String(event.metadata?.status || '');
+          if (status.startsWith('[watchdog]')) continue;
+        }
+
+        return true;
+      }
+    } catch {
+      return false;
+    }
+
+    return false;
   }
 
   /**
@@ -254,6 +364,12 @@ export class AgentManager {
       telegramApi,
       chatId,
       allowedUserId: allowedUserId ? parseInt(allowedUserId, 10) : undefined,
+    });
+
+    agentProcess.onStatusChanged((status) => {
+      if (status.status !== 'running') {
+        this.cronNoopDetector.cancelAgentVerifications(name);
+      }
     });
 
     // Send Telegram notification on crashes and session refreshes
@@ -574,6 +690,7 @@ export class AgentManager {
 
     if (entry.poller) entry.poller.stop();
     if (entry.activityPoller) entry.activityPoller.stop();
+    this.cronNoopDetector.cancelAgentVerifications(name);
     entry.checker.stop();
     await entry.process.stop();
     this.agents.delete(name);
@@ -772,9 +889,25 @@ export class AgentManager {
    * Returns true if the agent is running and the inject succeeded; false otherwise.
    */
   injectAgent(agentName: string, text: string): boolean {
+    return this.injectAgentDetailed(agentName, text).ok;
+  }
+
+  injectAgentDetailed(
+    agentName: string,
+    text: string,
+  ): { ok: true } | { ok: false; code: 'NOT_FOUND' | 'NOT_RUNNING' | 'DEDUPED'; message: string } {
     const entry = this.agents.get(agentName);
-    if (!entry) return false;
-    return entry.process.injectMessage(text);
+    if (!entry) {
+      return { ok: false, code: 'NOT_FOUND', message: `agent "${agentName}" not in registry` };
+    }
+    const status = entry.process.getStatus().status;
+    if (status !== 'running') {
+      return { ok: false, code: 'NOT_RUNNING', message: `agent "${agentName}" status is ${status}` };
+    }
+    const ok = entry.process.injectMessage(text);
+    return ok
+      ? { ok: true }
+      : { ok: false, code: 'DEDUPED', message: `agent "${agentName}" rejected inject; likely duplicate message` };
   }
 
   /**
@@ -859,6 +992,22 @@ export class AgentManager {
       const injected = this.injectAgent(agentName, injection);
       if (!injected) {
         throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);
+      }
+      try {
+        const entry = this.agents.get(agentName);
+        const config = entry?.process.getConfig();
+        if (entry && config) {
+          this.cronNoopDetector.registerFire({
+            agentName,
+            agentDir: entry.process.getAgentDir(),
+            config,
+            cronName: cron.name,
+            prompt,
+            firedAt,
+          });
+        }
+      } catch (err) {
+        console.log(`[cron-noop-detector] register failed for ${agentName}/${cron.name} (non-fatal): ${err}`);
       }
     };
 

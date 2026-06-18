@@ -37,11 +37,12 @@ const HISTORY_LIMIT = 100;
 // ---------------------------------------------------------------------------
 
 type StatusFilter = 'all' | 'success' | 'failure';
+type CronExecutionStatus = 'fired' | 'confirmed' | 'noop_unconfirmed' | 'noop_reinjected' | 'noop_persistent' | 'retried' | 'failed';
 
 interface CronExecutionEntry {
   ts: string;
   cron: string;
-  status: 'fired' | 'retried' | 'failed';
+  status: CronExecutionStatus;
   attempt: number;
   duration_ms: number;
   error: string | null;
@@ -63,16 +64,21 @@ export interface CronHistoryProps {
 // ---------------------------------------------------------------------------
 
 function statusBadgeVariant(
-  status: 'fired' | 'retried' | 'failed',
+  status: CronExecutionStatus,
 ): 'default' | 'secondary' | 'destructive' | 'outline' {
-  if (status === 'fired') return 'default';
-  if (status === 'failed') return 'destructive';
+  if (status === 'fired' || status === 'confirmed') return 'default';
+  if (status === 'failed' || status === 'noop_persistent') return 'destructive';
+  if (status === 'noop_unconfirmed' || status === 'noop_reinjected') return 'outline';
   if (status === 'retried') return 'secondary';
   return 'outline';
 }
 
-function statusLabel(status: 'fired' | 'retried' | 'failed'): string {
+function statusLabel(status: CronExecutionStatus): string {
   if (status === 'fired') return 'success';
+  if (status === 'confirmed') return 'confirmed';
+  if (status === 'noop_unconfirmed') return 'unconfirmed';
+  if (status === 'noop_reinjected') return 're-injected';
+  if (status === 'noop_persistent') return 'persistent no-op';
   if (status === 'failed') return 'failed';
   return 'retried';
 }
