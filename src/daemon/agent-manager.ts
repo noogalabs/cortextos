@@ -214,6 +214,11 @@ export class AgentManager {
       'cron_fire_noop_persistent',
       'cron_fire_confirmed_by_activity',
     ]);
+    // Event-log timestamps are stored at whole-second precision. Floor the
+    // fire time to the same precision so a same-second post-fire event is not
+    // dropped; this intentionally accepts a same-second-before-fire event too
+    // as the unavoidable +/-1s fuzz from the stored timestamp precision.
+    const fireSec = Math.floor(firedMs / 1000) * 1000;
 
     try {
       for (const line of readFileSync(eventPath, 'utf-8').split('\n')) {
@@ -228,7 +233,7 @@ export class AgentManager {
 
         if (detectorEvents.has(String(event.event || ''))) continue;
         const tsMs = Date.parse(String(event.timestamp || ''));
-        if (!Number.isFinite(tsMs) || tsMs < firedMs) continue;
+        if (!Number.isFinite(tsMs) || tsMs < fireSec) continue;
 
         if (event.category === 'heartbeat') {
           const status = String(event.metadata?.status || '');

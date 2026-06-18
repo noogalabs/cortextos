@@ -292,6 +292,49 @@ describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', ()
   });
 });
 
+describe('AgentManager hasPostCronActivity event-log fallback', () => {
+  let testDir: string;
+  let eventPath: string;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-post-cron-activity-'));
+    eventPath = join(testDir, 'events.jsonl');
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('confirms a same-second post-fire event but still rejects a full earlier second', () => {
+    const am = new AgentManager('test-instance', testDir, testDir, 'acme');
+    const firedMs = Date.parse('2026-06-18T12:00:00.900Z');
+
+    writeFileSync(
+      eventPath,
+      [
+        JSON.stringify({
+          timestamp: '2026-06-18T11:59:59Z',
+          category: 'action',
+          event: 'session_start',
+        }),
+      ].join('\n'),
+    );
+    expect((am as any).eventFileHasPostCronActivity(eventPath, firedMs)).toBe(false);
+
+    writeFileSync(
+      eventPath,
+      [
+        JSON.stringify({
+          timestamp: '2026-06-18T12:00:00Z',
+          category: 'action',
+          event: 'session_start',
+        }),
+      ].join('\n'),
+    );
+    expect((am as any).eventFileHasPostCronActivity(eventPath, firedMs)).toBe(true);
+  });
+});
+
 describe('buildReplyContext - Telegram reply context (BUG fix: media replies lost)', () => {
   it('returns undefined when no reply message', () => {
     expect(buildReplyContext(undefined)).toBeUndefined();
