@@ -109,6 +109,7 @@ describe('CronNoopDetector', () => {
   let injects: string[];
   let transcriptPath: string | null;
   let status: 'running' | 'starting';
+  let hasActivitySince: ReturnType<typeof vi.fn>;
 
   function makeDetector(): CronNoopDetector {
     return new CronNoopDetector({
@@ -121,6 +122,7 @@ describe('CronNoopDetector', () => {
         return { ok: true };
       },
       notifyOrchestrator: (_agent, text) => notifications.push(text),
+      hasActivitySince,
       transcriptPathFor: () => transcriptPath,
       now: () => new Date(),
     });
@@ -147,6 +149,7 @@ describe('CronNoopDetector', () => {
     injects = [];
     transcriptPath = null;
     status = 'running';
+    hasActivitySince = vi.fn(() => false);
   });
 
   afterEach(() => {
@@ -169,6 +172,30 @@ describe('CronNoopDetector', () => {
     } finally {
       rmSync(testDir, { recursive: true, force: true });
     }
+  });
+
+  it('confirms from post-fire activity evidence when the transcript misses the salted turn', async () => {
+    hasActivitySince = vi.fn(() => true);
+    register(makeDetector());
+
+    await vi.advanceTimersByTimeAsync(verifyDelayMs);
+
+    expect(hasActivitySince).toHaveBeenCalledWith(agentName, '2026-06-17T12:00:00.000Z');
+    expect(logs.map((l) => l.status)).toEqual(['confirmed']);
+    expect(events.map((e) => e.event)).toEqual(['cron_fire_confirmed_by_activity']);
+    expect(injects).toHaveLength(0);
+    expect(notifications).toHaveLength(0);
+  });
+
+  it('continues the no-op path when transcript and activity evidence are both absent', async () => {
+    hasActivitySince = vi.fn(() => false);
+    register(makeDetector());
+
+    await vi.advanceTimersByTimeAsync(verifyDelayMs);
+
+    expect(logs.map((l) => l.status)).toEqual(['noop_unconfirmed']);
+    expect(events.map((e) => e.event)).toEqual(['cron_fire_unconfirmed']);
+    expect(injects).toHaveLength(0);
   });
 
   it('noop path logs unconfirmed then performs exactly one re-inject', async () => {

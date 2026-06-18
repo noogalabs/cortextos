@@ -131,6 +131,7 @@ export interface CronNoopDetectorOptions {
   getStatus: (agentName: string) => AgentStatus | null;
   inject: (agentName: string, text: string) => InjectResult;
   notifyOrchestrator: (agentName: string, text: string) => void;
+  hasActivitySince?: (agentName: string, firedAt: string) => boolean;
   logger?: (msg: string) => void;
   now?: () => Date;
   transcriptPathFor?: (agentDir: string, config: AgentConfig) => string | null;
@@ -144,6 +145,7 @@ export class CronNoopDetector {
   private readonly getStatus: CronNoopDetectorOptions['getStatus'];
   private readonly inject: CronNoopDetectorOptions['inject'];
   private readonly notifyOrchestrator: CronNoopDetectorOptions['notifyOrchestrator'];
+  private readonly hasActivitySince: (agentName: string, firedAt: string) => boolean;
   private readonly logger: (msg: string) => void;
   private readonly now: () => Date;
   private readonly transcriptPathFor: (agentDir: string, config: AgentConfig) => string | null;
@@ -155,6 +157,7 @@ export class CronNoopDetector {
     this.getStatus = options.getStatus;
     this.inject = options.inject;
     this.notifyOrchestrator = options.notifyOrchestrator;
+    this.hasActivitySince = options.hasActivitySince ?? (() => false);
     this.logger = options.logger ?? (() => {});
     this.now = options.now ?? (() => new Date());
     this.transcriptPathFor = options.transcriptPathFor ?? ((agentDir, config) => resolveClaudeTranscriptPath(config, agentDir));
@@ -230,6 +233,27 @@ export class CronNoopDetector {
         return;
       }
 
+      if (this.activityConfirmsCronFire(pending)) {
+        this.appendExecutionLog(pending.agentName, {
+          ts: this.now().toISOString(),
+          cron: pending.cronName,
+          status: 'confirmed',
+          attempt: pending.window,
+          duration_ms: 0,
+          error: null,
+        });
+        this.emitEvent(pending.agentName, 'cron_fire_confirmed_by_activity', 'info', {
+          agent: pending.agentName,
+          cron: pending.cronName,
+          fired_at: pending.firedAt,
+          salt: pending.salt,
+          transcript_path: lookup.path ?? transcriptPath ?? null,
+          reinjects: pending.reinjects,
+        });
+        this.pending.delete(key);
+        return;
+      }
+
       if (pending.window === 1) {
         this.appendExecutionLog(pending.agentName, {
           ts: this.now().toISOString(),
@@ -261,6 +285,15 @@ export class CronNoopDetector {
     } catch (err) {
       this.pending.delete(key);
       this.logger(`[cron-noop-detector] verification failed for ${pending.agentName}/${pending.cronName}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private activityConfirmsCronFire(pending: PendingCronVerification): boolean {
+    try {
+      return this.hasActivitySince(pending.agentName, pending.firedAt);
+    } catch (err) {
+      this.logger(`[cron-noop-detector] activity evidence check failed for ${pending.agentName}/${pending.cronName}: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     }
   }
 

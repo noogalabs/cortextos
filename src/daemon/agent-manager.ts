@@ -58,6 +58,7 @@ export class AgentManager {
       },
       getStatus: (agentName) => this.getAgentStatus(agentName),
       inject: (agentName, text) => this.injectAgentDetailed(agentName, text),
+      hasActivitySince: (agentName, firedAt) => this.hasPostCronActivity(agentName, firedAt),
       notifyOrchestrator: (agentName, text) => {
         try {
           const resolvedOrg = this.resolveAgentOrg(agentName);
@@ -178,6 +179,69 @@ export class AgentManager {
     } catch {
       return null;
     }
+  }
+
+  private hasPostCronActivity(agentName: string, firedAt: string): boolean {
+    const firedMs = Date.parse(firedAt);
+    if (!Number.isFinite(firedMs)) return false;
+
+    const resolvedOrg = this.resolveAgentOrg(agentName);
+    const paths = resolvePaths(agentName, this.instanceId, resolvedOrg);
+    return this.eventLogConfirmsActivity(paths.analyticsDir, agentName, firedMs);
+  }
+
+  private eventLogConfirmsActivity(analyticsDir: string, agentName: string, firedMs: number): boolean {
+    const eventsDir = join(analyticsDir, 'events', agentName);
+    if (!existsSync(eventsDir)) return false;
+
+    const dates = new Set([
+      new Date(firedMs).toISOString().slice(0, 10),
+      new Date().toISOString().slice(0, 10),
+    ]);
+
+    for (const date of dates) {
+      const eventPath = join(eventsDir, `${date}.jsonl`);
+      if (!existsSync(eventPath)) continue;
+      if (this.eventFileHasPostCronActivity(eventPath, firedMs)) return true;
+    }
+    return false;
+  }
+
+  private eventFileHasPostCronActivity(eventPath: string, firedMs: number): boolean {
+    const detectorEvents = new Set([
+      'cron_fire_unconfirmed',
+      'cron_fire_reinjected',
+      'cron_fire_noop_persistent',
+      'cron_fire_confirmed_by_activity',
+    ]);
+
+    try {
+      for (const line of readFileSync(eventPath, 'utf-8').split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let event: any;
+        try {
+          event = JSON.parse(trimmed);
+        } catch {
+          continue;
+        }
+
+        if (detectorEvents.has(String(event.event || ''))) continue;
+        const tsMs = Date.parse(String(event.timestamp || ''));
+        if (!Number.isFinite(tsMs) || tsMs < firedMs) continue;
+
+        if (event.category === 'heartbeat') {
+          const status = String(event.metadata?.status || '');
+          if (status.startsWith('[watchdog]')) continue;
+        }
+
+        return true;
+      }
+    } catch {
+      return false;
+    }
+
+    return false;
   }
 
   /**
