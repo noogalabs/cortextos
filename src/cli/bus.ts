@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
+import { softRestartAllExit } from './soft-restart-exit.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
@@ -691,6 +692,7 @@ busCommand
       console.log('Activity posted');
     } else {
       console.error('Failed to post activity. Check that ACTIVITY_CHAT_ID is set in your org secrets.env or .env file.');
+      process.exit(1);
     }
   });
 
@@ -1605,6 +1607,7 @@ busCommand
 
     console.log(`Restarting ${targets.length} agent(s) with ${opts.stagger}s stagger: ${targets.join(', ')}`);
 
+    let failed = 0;
     for (let i = 0; i < targets.length; i++) {
       const agent = targets[i];
       if (i > 0) {
@@ -1621,9 +1624,15 @@ busCommand
         console.log(`[${i + 1}/${targets.length}] Restarted ${agent}`);
       } else {
         console.error(`[${i + 1}/${targets.length}] Failed to restart ${agent}: ${resp.error}`);
+        failed++;
       }
     }
 
+    const restartExit = softRestartAllExit(failed, targets.length);
+    if (restartExit.error) {
+      console.error(restartExit.error);
+      process.exit(restartExit.exitCode);
+    }
     console.log('soft-restart-all complete.');
   });
 
