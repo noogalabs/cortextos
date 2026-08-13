@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## [Unreleased]
+
+### Fixed — `GET /api/workflows/crons` re-read each agent's execution log once per cron
+
+`readLastExecution(agent, cronName)` re-read and re-parsed the agent's entire
+`cron-execution.log` once **per cron**. At 10 crons per agent that is ten full
+reads of the same file per request. `/health` already read each agent's log
+exactly once, which is why it benchmarked several times faster than `/crons`
+over the same dataset.
+
+Replaced with a single backward pass per agent building a
+`Map<cronName, lastEntry>`; keeping the first hit per name preserves "last entry
+in file order wins" exactly. Cost is now O(agents) reads instead of O(crons).
+
+Measured on `tests/integration/phase4-performance.test.ts`:
+
+| dataset | p50 before | p50 after | p95 before | p95 after |
+|---|---|---|---|---|
+| 50 crons  | 79.0ms | **19.4ms** | 88.7ms | **21.5ms** |
+| 100 crons | 76.3ms | **18.0ms** | 77.3ms | **18.8ms** |
+
 ## [0.2.0] — 2026-05-04 — External Persistent Crons
 
 Crons move from session-local (`/loop`, `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`. Auto-migrates from existing `config.json` on first daemon boot. Fully backward-compatible additive feature.
