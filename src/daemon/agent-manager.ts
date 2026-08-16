@@ -24,11 +24,19 @@ import { CRONS_DIRECTORY, CRONS_FILENAME } from '../bus/crons-schema.js';
 
 type LogFn = (msg: string) => void;
 
+type AgentEntry = {
+  process: AgentProcess;
+  checker: FastChecker;
+  poller?: TelegramPoller;
+  activityPoller?: TelegramPoller;
+  stopped?: boolean;
+};
+
 /**
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
-  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller }> = new Map();
+  private agents: Map<string, AgentEntry> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
@@ -41,6 +49,10 @@ export class AgentManager {
   private ctxRoot: string;
   private frameworkRoot: string;
   private org: string;
+
+  private stillMapped(name: string, entry: AgentEntry): boolean {
+    return this.agents.get(name) === entry;
+  }
 
   // silent-dormancy fix: epoch ms of when this AgentManager (i.e. the daemon)
   // was constructed. Used as the Face-B liveness baseline for enabled agents
@@ -262,7 +274,8 @@ export class AgentManager {
    * `CTX_ORG` the daemon was started with.
    */
   async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
-    if (this.agents.has(name)) {
+    const existing = this.agents.get(name);
+    if (existing) {
       // BUG-031: this branch was the workaround for the BUG-011 PTY race
       // (restart-all could send stop+start simultaneously, and the new
       // start would arrive while the old stop's PTY exit was still in
@@ -276,8 +289,11 @@ export class AgentManager {
       // the core stability test plan + cycle 2 of PR #13 both confirmed
       // this branch is dormant. Once we have weeks of zero-warning
       // production data, we can delete the queue mechanism entirely.
-      console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: ${name} still in registry during startAgent — pendingRestarts queueing engaged. This should not happen with PR #11 in place.`);
-      this.pendingRestarts.add(name);
+      if (existing.stopped) {
+        this.pendingRestarts.add(name);
+      } else {
+        console.log(`[agent-manager] ${name} already starting/running — duplicate start ignored.`);
+      }
       return;
     }
 
@@ -397,10 +413,12 @@ export class AgentManager {
       });
     }
 
-    this.agents.set(name, { process: agentProcess, checker });
+    const ownEntry: AgentEntry = { process: agentProcess, checker };
+    this.agents.set(name, ownEntry);
 
     // Start agent
     await agentProcess.start();
+    if (ownEntry.stopped || !this.stillMapped(name, ownEntry)) return;
 
     // Subtask 2.2: Auto-migrate crons from config.json → crons.json before
     // starting the scheduler, so the scheduler always has a populated crons.json
@@ -440,6 +458,7 @@ export class AgentManager {
       const poller = new TelegramPoller(telegramApi, stateDir);
 
       poller.onMessage((msg) => {
+        if (ownEntry.stopped) return;
         // ALLOWED_USER gate: if configured, ignore messages from other users.
         // Use numeric comparison to avoid string coercion issues.
         if (allowedUserId) {
@@ -541,6 +560,7 @@ export class AgentManager {
       });
 
       poller.onCallback((query) => {
+        if (ownEntry.stopped) return;
         // Route to fast-checker for hook response handling (perm_allow/deny, askopt, etc.)
         // handleCallback writes hook-response files and edits Telegram messages
         checker.handleCallback(query).catch(err => {
@@ -549,6 +569,7 @@ export class AgentManager {
       });
 
       poller.onReaction((reaction) => {
+        if (ownEntry.stopped) return;
         // ALLOWED_USER gate: same rule as message handler. If configured,
         // ignore reactions from other users.
         if (allowedUserId) {
@@ -575,13 +596,17 @@ export class AgentManager {
         checker.queueTelegramMessage(formatted);
       });
 
-      poller.start().catch(err => {
-        log(`Telegram poller error: ${err}`);
-      });
+      const supervisePoller = async () => {
+        while (this.stillMapped(name, ownEntry) && !ownEntry.stopped) {
+          await poller.start();
+          if (poller.lastExitReason !== 'conflict-self-die' || ownEntry.stopped) return;
+          await new Promise(resolve => setTimeout(resolve, 30_000));
+        }
+      };
+      supervisePoller().catch(err => log(`Telegram poller error: ${err}`));
 
       // Store poller reference so stopAgent() can clean it up
-      const entry = this.agents.get(name);
-      if (entry) entry.poller = poller;
+      ownEntry.poller = poller;
 
       log('Telegram poller started');
 
@@ -593,7 +618,7 @@ export class AgentManager {
       // — follow-up task_1776054009969_099 tracks migrating to a dedicated
       // singleton or Telegram webhook if the coupling ever causes real
       // operator pain. Non-orchestrator agents skip this entirely.
-      await this.maybeStartActivityChannelPoller(name, org, agentDir, log);
+      await this.maybeStartActivityChannelPoller(name, org, agentDir, log, ownEntry);
     }
   }
 
@@ -612,6 +637,7 @@ export class AgentManager {
     org: string | undefined,
     agentDir: string,
     log: LogFn,
+    ownEntry: AgentEntry,
   ): Promise<void> {
     if (!org) return;
     const orgDir = join(this.frameworkRoot, 'orgs', org);
@@ -659,9 +685,8 @@ export class AgentManager {
     const activityPoller = new TelegramPoller(activityApi, stateDir, 1000, 'activity');
 
     activityPoller.onCallback((query) => {
-      const entry = this.agents.get(name);
-      if (!entry) return;
-      entry.checker.handleActivityCallback(query, activityApi).catch((err) => {
+      if (ownEntry.stopped) return;
+      ownEntry.checker.handleActivityCallback(query, activityApi).catch((err) => {
         log(`Activity-channel callback error: ${err}`);
       });
     });
@@ -670,17 +695,22 @@ export class AgentManager {
     // but any inbound chatter (broadcasts, user DMs, etc.) gets logged
     // so operators can see what is flowing. No PTY injection.
     activityPoller.onMessage((msg) => {
+      if (ownEntry.stopped) return;
       const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
       const text = stripControlChars(msg.text || msg.caption || '');
       log(`[activity-channel inbound] from ${from}: ${text.slice(0, 120)}`);
     });
 
-    activityPoller.start().catch((err) => {
-      log(`Activity-channel poller error: ${err}`);
-    });
+    const superviseActivityPoller = async () => {
+      while (this.stillMapped(name, ownEntry) && !ownEntry.stopped) {
+        await activityPoller.start();
+        if (activityPoller.lastExitReason !== 'conflict-self-die' || ownEntry.stopped) return;
+        await new Promise(resolve => setTimeout(resolve, 30_000));
+      }
+    };
+    superviseActivityPoller().catch(err => log(`Activity-channel poller error: ${err}`));
 
-    const entry = this.agents.get(name);
-    if (entry) entry.activityPoller = activityPoller;
+    ownEntry.activityPoller = activityPoller;
 
     log(`Activity-channel poller started (chat ${activityChatId})`);
   }
@@ -695,18 +725,19 @@ export class AgentManager {
       return;
     }
 
+    entry.stopped = true;
+    const scheduler = this.cronSchedulers.get(name);
     if (entry.poller) entry.poller.stop();
     if (entry.activityPoller) entry.activityPoller.stop();
     this.cronNoopDetector.cancelAgentVerifications(name);
     entry.checker.stop();
     await entry.process.stop();
-    this.agents.delete(name);
+    if (this.stillMapped(name, entry)) this.agents.delete(name);
 
     // Stop and remove the agent's cron scheduler (if one was wired)
-    const scheduler = this.cronSchedulers.get(name);
     if (scheduler) {
       scheduler.stop();
-      this.cronSchedulers.delete(name);
+      if (this.cronSchedulers.get(name) === scheduler) this.cronSchedulers.delete(name);
     }
 
     // BUG-031: honor any restart that was queued while we were stopping.
