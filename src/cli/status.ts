@@ -94,15 +94,19 @@ function displayStatuses(statuses: AgentStatus[]): void {
   console.log(header);
   console.log(separator);
 
+  let anyDormant = false;
   for (const s of statuses) {
     const name = s.name.padEnd(18);
-    const status = s.status.padEnd(12);
+    let label: string = s.status;
+    if (s.dormant) { label = 'dormant†'; anyDormant = true; }
+    const status = label.padEnd(12);
     const pid = (s.pid?.toString() || '-').padEnd(10);
     const uptime = s.uptime ? formatUptime(s.uptime).padEnd(12) : '-'.padEnd(12);
     const model = s.model || '-';
     console.log(`  ${name}${status}${pid}${uptime}${model}`);
   }
 
+  if (anyDormant) console.log('  † enabled but heartbeat stale relative to liveness baseline (possible silent dormancy)\n');
   console.log('');
 }
 
