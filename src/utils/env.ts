@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, writeFileSync } from 'fs';
-import { join, basename } from 'path';
+import { join, basename, resolve as resolvePath } from 'path';
 import { homedir } from 'os';
 import type { CtxEnv } from '../types/index.js';
 import { ensureDir } from './atomic.js';
