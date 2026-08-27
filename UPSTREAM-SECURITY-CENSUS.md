@@ -97,7 +97,9 @@ the CommonMark mismatch where a four-backtick run closes a three-backtick
 opener even though an exact-equality fence tracker considers it still open.
 Production cron, inbox, Telegram, and media casualties carry that mismatch and
 prove the forged sibling header remains inside the dynamically larger fence. A
-parameterized arm covers every inner backtick-run length from 3 through 64 and
+parameterized arm reaches the production `buildCronInjection` path for every
+inner backtick-run length from 3 through 64 (so weakening longest-run sizing to
+a fixed three-backtick fence kills the casualty) and
 requires the rendered outer fence to be exactly one backtick longer.
 
 The finite sink census covers the two PTY ingress modules. `AgentProcess`
