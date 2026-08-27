@@ -6,6 +6,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { jwtVerify } from 'jose';
+import { getToken } from 'next-auth/jwt';
 
 // Allowed CORS origins - localhost dev + configured deployment URL + mobile app
 // Built once at module load: env-derived origins are validated via `new URL()`,
@@ -81,10 +82,28 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
-  // Check for next-auth session token cookie (web dashboard)
-  const hasSession =
-    request.cookies.has('authjs.session-token') ||
-    request.cookies.has('__Secure-authjs.session-token');
+  // Verify the NextAuth session token rather than trusting cookie-name presence.
+  // Keep every API route, including /api/workflows/health, behind this gate.
+  const authSecretForSession = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET;
+  let hasSession = false;
+  if (authSecretForSession) {
+    try {
+      hasSession = !!(await getToken({
+        req: request,
+        secret: authSecretForSession,
+      }));
+    } catch {
+      hasSession = false;
+    }
+  } else {
+    const res = NextResponse.json(
+      { error: 'Server misconfiguration: auth secret not configured' },
+      { status: 500 },
+    );
+    res.headers.set('Access-Control-Allow-Origin', corsOrigin);
+    res.headers.set('Vary', 'Origin');
+    return res;
+  }
 
   // Check for Bearer token (mobile app)
   const authHeader = request.headers.get('Authorization');
