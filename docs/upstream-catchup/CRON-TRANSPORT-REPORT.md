@@ -11,6 +11,22 @@
 - External transport activation, trust-policy changes, cron activation policy,
   restart, and deployment: excluded
 
+## Current-main integration custody
+
+The family was recomposed onto fork main after the reviewed equivalence,
+security, daemon, CLI/bus, and post-merge hardening families landed.
+
+- Current-main base: `7154eda9fdeb3be80425d7910f6afeee6f9a65ac`
+- Integrated subject: `03f5e2ef223347b5d1672df3efb2368fae81c611`
+- Integrated tree: `583cf29d665cbdb7ebede3b144741122c7e1e57a`
+- Full-index diff SHA-256: `769adfe96a65ad0a2aa507d337c2b93f5a3a2d0b6dd087214a6eda5d1971a3ee`
+- Reproduction: `git diff --full-index 7154eda9fdeb3be80425d7910f6afeee6f9a65ac..03f5e2ef223347b5d1672df3efb2368fae81c611 | shasum -a 256`
+
+The integration merge was text-clean. The family mechanic remains confined to
+the shared Telegram send path and its casualty; the landed daemon injection,
+lifecycle, and security boundaries remain present and pass together in the
+composed suite.
+
 ## Represented at the base
 
 `1d001cb8`, `49b61a66`, `e9b65af9`, `7109f9a9`, `a3a75beb`,
@@ -68,8 +84,14 @@ No transport identity, cron activation, or network default was guessed.
 
 ## Validation
 
-- TypeScript build: pass.
+- Exact-head CI run `33079858006`: success on integrated subject `03f5e2ef`.
+  Build/type job `98543782910`, dashboard job `98543782508`, and unit/parity
+  job `98543934655` all concluded success. The unit job executed 1,938 tests
+  across 116 files plus 48 Codex parity tests across 6 files.
+- Local TypeScript build and typecheck: pass.
 - Telegram plain-text casualty: raw comparison/ampersand/angle brackets survive
   with no `parse_mode` field.
-- Telegram unit suite and cron suites are run at the family head.
-- No push, PR, daemon restart, or deployment is part of this branch.
+- Local Telegram, cron-scheduler, and FastChecker slice: 189 tests passed across
+  8 files at the integrated head.
+- Pull request and exact-head CI are part of the integration custody record.
+  No daemon restart or deployment is part of this branch.
