@@ -559,7 +559,18 @@ export class AgentProcess {
       return false;
     }
 
-    // Check for existing conversation
+    // Codex app-server sessions use their own persisted thread state. A stale
+    // Claude JSONL from an earlier runtime must not select Codex resume mode.
+    if (this.config.runtime === 'codex-app-server') {
+      return existsSync(join(
+        this.env.ctxRoot,
+        'state',
+        this.name,
+        'codex-app-server-thread.json',
+      ));
+    }
+
+    // Default (Claude runtime): check for an existing conversation.
     const launchDir = this.config.working_directory || this.env.agentDir;
     if (!launchDir) return false;
 
@@ -584,17 +595,7 @@ export class AgentProcess {
   private buildStartupPrompt(): string {
     const onboardedPath = join(this.env.ctxRoot, 'state', this.name, '.onboarded');
     const onboardingPath = join(this.env.agentDir, 'ONBOARDING.md');
-    const heartbeatPath = join(this.env.ctxRoot, 'state', this.name, 'heartbeat.json');
     let onboardingAppend = '';
-
-    // If agent has a heartbeat but no .onboarded marker, they completed onboarding but
-    // forgot to write the marker. Auto-write it so they don't re-onboard next restart.
-    if (!existsSync(onboardedPath) && existsSync(heartbeatPath)) {
-      try {
-        const { writeFileSync } = require('fs');
-        writeFileSync(onboardedPath, '', 'utf-8');
-      } catch { /* ignore */ }
-    }
 
     if (!existsSync(onboardedPath) && existsSync(onboardingPath)) {
       onboardingAppend = ' IMPORTANT: This is your FIRST BOOT. Before doing anything else, read ONBOARDING.md and complete the onboarding protocol.';

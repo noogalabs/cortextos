@@ -129,6 +129,24 @@ describe('AgentProcess codex-app-server runtime', () => {
     expect(mockCodexAppServerPty.setTelegramHandle).toHaveBeenCalledWith(api, '12345');
   });
 
+  it('ignores stale Claude JSONL when no Codex thread state exists', async () => {
+    fsMocks.existsSync.mockImplementation((path: any) =>
+      String(path).includes('.claude/projects'),
+    );
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    await ap.start();
+    expect(mockCodexAppServerPty.spawn).toHaveBeenCalledWith('fresh', expect.any(String));
+  });
+
+  it('resumes Codex only from its persisted thread state', async () => {
+    fsMocks.existsSync.mockImplementation((path: any) =>
+      String(path).endsWith('/state/codex-app-agent/codex-app-server-thread.json'),
+    );
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    await ap.start();
+    expect(mockCodexAppServerPty.spawn).toHaveBeenCalledWith('continue', expect.any(String));
+  });
+
   it('uses direct kill path on stop, not Claude /exit choreography', async () => {
     const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
     await ap.start();
@@ -146,4 +164,3 @@ describe('AgentProcess codex-app-server runtime', () => {
     expect(mockCodexAppServerPty.kill).toHaveBeenCalled();
   }, 10000);
 });
-

@@ -80,6 +80,43 @@ vi.mock('fs', async () => {
   };
 });
 
+describe('AgentProcess explicit onboarding marker', () => {
+  it('does not infer onboarding completion from heartbeat presence', async () => {
+    fsMocks.existsSync.mockImplementation((path: string) => {
+      if (path.endsWith('/.force-fresh')) return false;
+      if (path.endsWith('/.onboarded')) return false;
+      if (path.endsWith('/heartbeat.json')) return true;
+      if (path.endsWith('/ONBOARDING.md')) return true;
+      return false;
+    });
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    const prompt = mockPty.spawn.mock.calls[0]?.[1] ?? '';
+    expect(prompt).toContain('FIRST BOOT');
+    expect(fsMocks.writeFileSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('/.onboarded'),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('suppresses first-boot routing only for an explicit marker', async () => {
+    fsMocks.existsSync.mockImplementation((path: string) => {
+      if (path.endsWith('/.force-fresh')) return false;
+      if (path.endsWith('/.onboarded')) return true;
+      if (path.endsWith('/heartbeat.json')) return true;
+      if (path.endsWith('/ONBOARDING.md')) return true;
+      return false;
+    });
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect(mockPty.spawn.mock.calls[0]?.[1] ?? '').not.toContain('FIRST BOOT');
+  });
+});
+
 const { AgentProcess } = await import('../../../src/daemon/agent-process.js');
 const { rawDaemonInjection } = await import('../../../src/utils/validate.js');
 
