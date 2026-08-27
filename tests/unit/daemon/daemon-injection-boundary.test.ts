@@ -46,7 +46,7 @@ describe('daemon injection final boundary', () => {
   });
 
   it('test_named_structural_raw_body_uses_longest_backtick_run_plus_one_for_arbitrary_n', () => {
-    for (let n = 3; n <= 32; n += 1) {
+    for (let n = 3; n <= 64; n += 1) {
       const run = '`'.repeat(n);
       const rendered = renderDaemonInjection(structuralDaemonInjection(
         'CRON FIRED',
