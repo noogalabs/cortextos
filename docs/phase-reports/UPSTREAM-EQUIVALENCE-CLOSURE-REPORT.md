@@ -71,13 +71,18 @@ The checked-in probes cover:
   teardown race proving an old entry cannot delete its replacement identity;
 - death-confirmed teardown construction-site census plus a wedged-child casualty
   proving an alive child after the post-`SIGKILL` deadline rejects teardown,
-  remains non-stopped, and refuses successor admission.
+  remains non-stopped, and refuses successor admission;
+- a manager-path restart casualty proving death-unconfirmed rejection retains
+  the mapped predecessor and leaves the successor start path untouched, while
+  authoritative containment on retry admits exactly one successor.
 
 Both behavior guards were mutation-armed while their source strings remained:
 neutralizing the death-unconfirmed throw made the wedged-child casualty fail,
-and weakening the map identity predicate to mere name presence made stale
-teardown delete the replacement and fail its casualty. The existing source
-census therefore remains a structural complement rather than the sole proof.
+removing the manager's await-before-admission ordering made the manager-path
+casualty fail, and weakening the map identity predicate to mere name presence
+made stale teardown delete the replacement and fail its casualty. The existing
+source census therefore remains a structural complement rather than the sole
+proof.
 
 Commands run successfully on the branch:
 
@@ -88,7 +93,7 @@ node scripts/verify-lifecycle-status-cli.mjs
 npm test -- --run tests/unit/daemon
 ```
 
-The final daemon command passed 17 test files / 327 tests, including the focused
+The final daemon command passed 17 test files / 328 tests, including the focused
 process, manager, and equivalence-closure casualties. Build, typecheck, and the
 lifecycle CLI verifier all exited zero.
 
