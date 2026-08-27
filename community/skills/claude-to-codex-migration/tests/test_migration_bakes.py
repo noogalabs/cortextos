@@ -21,6 +21,30 @@ def ok(cond, label):
     if cond: P += 1; print(f"  PASS {label}")
     else: F += 1; print(f"  FAIL {label}")
 
+# ---------- GAP D: orchestrator identity prose is case-insensitive ----------
+print("[GAP D] orchestrator identity prose is case-insensitive")
+_orch_root = tempfile.mkdtemp()
+try:
+    _sentence = os.path.join(_orch_root, "sentence-case")
+    _lower = os.path.join(_orch_root, "lowercase")
+    _control = os.path.join(_orch_root, "non-orchestrator")
+    for _path in (_sentence, _lower, _control):
+        os.makedirs(_path)
+    with open(os.path.join(_sentence, "IDENTITY.md"), "w") as _f:
+        _f.write("You are the Orchestrator for this fleet.\n")
+    with open(os.path.join(_lower, "SOUL.md"), "w") as _f:
+        _f.write("role: orchestrator\n")
+    with open(os.path.join(_control, "IDENTITY.md"), "w") as _f:
+        _f.write("You are the analyst for this fleet.\n")
+    ok(convert._agent_declares_orchestrator(_sentence),
+       "sentence-case orchestrator self-declaration is detected")
+    ok(convert._agent_declares_orchestrator(_lower),
+       "lowercase orchestrator self-declaration remains detected")
+    ok(not convert._agent_declares_orchestrator(_control),
+       "non-orchestrator identity prose remains excluded")
+finally:
+    shutil.rmtree(_orch_root, ignore_errors=True)
+
 # ---------- defect 14 + instance-discovery: parameterized principal-send reroute ----------
 # FAKE discovered values only (synthetic names, no roster names/real-chatid anywhere).
 print("[14] principal-send reroute (discovered orchestrator/principal, nothing hardcoded)")

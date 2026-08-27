@@ -83,6 +83,10 @@ expression with repeated global inline flags after alternation. The fork moved
 those flags to `re.compile(..., re.IGNORECASE | re.MULTILINE)` without changing
 the expression's matching contract; this is the sole code adaptation inside the
 approved package and is required for the bake suite to import at all.
+The bake suite now pins that adaptation at its behavioral seam: sentence-case
+(`You are the Orchestrator`) and lowercase orchestrator declarations both pass
+through `_agent_declares_orchestrator`, while non-orchestrator prose remains
+excluded. Dropping `re.IGNORECASE` kills exactly the sentence-case casualty.
 
 ## Validation
 
@@ -101,7 +105,7 @@ Results:
 
 - root template/FastChecker slice: 2 files, 79 tests passed;
 - dashboard slice: 8 files, 114 tests passed;
-- migration skill bake suite: 93 probes passed, 0 failed;
+- migration skill bake suite: 96 probes passed, 0 failed;
 - catalog/install slice: 2 files, 34 tests passed;
 - root production build passed;
 - dashboard production build and TypeScript phase passed.
