@@ -90,6 +90,14 @@ runtime strings but is always dynamically fenced as content by
 unregistered headers, malformed fields, and raw strings passed to the TUI-key
 write API reject loudly.
 
+Structural bodies are separately typed as raw content; the enum selects only
+the trusted header text. The final renderer wraps the entire body with
+`wrapFenceSafe` and does not interpret caller-supplied fence state. This closes
+the CommonMark mismatch where a four-backtick run closes a three-backtick
+opener even though an exact-equality fence tracker considers it still open.
+Production cron, inbox, Telegram, and media casualties carry that mismatch and
+prove the forged sibling header remains inside the dynamically larger fence.
+
 The finite sink census covers the two PTY ingress modules. `AgentProcess`
 accepts only `DaemonInjection`, renders it at the final sink, and exposes a
 separate runtime-checked `TuiKey` writer for control input. `WorkerProcess`
@@ -107,10 +115,11 @@ template, helper/array, split-literal concat, `String.repeat`, and
 `String.fromCharCode` plants sent through raw ingress all remain fenced content;
 bypassing the final renderer kills the production `AgentProcess` casualty;
 weakening the raw neutralizer kills both the renderer and production-sink
-casualties; malformed and non-registry structural variants halt. The prior
+casualties; weakening structural-body fencing kills the cron, inbox, and media
+CommonMark casualties; malformed and non-registry structural variants halt. The prior
 callback breakout and sibling-header exploit casualties carry unchanged.
 
 Terminal local validation on the integrated base: the root matrix passed 118
-files / 1,934 tests (one skip) with inherited live agent-directory variables
+files / 1,938 tests (one skip) with inherited live agent-directory variables
 removed from the sandbox harness; the focused final-boundary matrix passed 5
-files / 116 tests; build and TypeScript typecheck completed successfully.
+files / 120 tests; build and TypeScript typecheck completed successfully.

@@ -185,13 +185,15 @@ export type DaemonInjectionReply =
   | { kind: 'agent'; from: string; messageId: string }
   | { kind: 'telegram'; chatId: string | number };
 
+export type DaemonInjectionBody = { kind: 'raw'; content: string };
+
 export type DaemonInjection =
   | { kind: 'raw'; content: string }
   | {
       kind: 'structural';
       header: DaemonStructuralHeader;
       details?: string;
-      body?: string;
+      body?: DaemonInjectionBody;
       reply?: DaemonInjectionReply;
     };
 
@@ -199,10 +201,14 @@ export function rawDaemonInjection(content: string): DaemonInjection {
   return { kind: 'raw', content };
 }
 
+export function rawDaemonBody(content: string): DaemonInjectionBody {
+  return { kind: 'raw', content };
+}
+
 export function structuralDaemonInjection(
   header: DaemonStructuralHeader,
   details = '',
-  body = '',
+  body?: DaemonInjectionBody,
   reply?: DaemonInjectionReply,
 ): DaemonInjection {
   return { kind: 'structural', header, details, body, reply };
@@ -244,26 +250,6 @@ export function sanitizeForPtyInjection(input: string): string {
     );
 }
 
-function neutralizeStructuralBody(input: string): string {
-  const lines = stripControlChars(input).replace(/\r\n?/g, '\n').split('\n');
-  let fence = '';
-  return lines.map((line) => {
-    const fenceLine = line.match(/^(`{3,})$/)?.[1] ?? '';
-    if (fence) {
-      if (fenceLine === fence) fence = '';
-      return line;
-    }
-    if (fenceLine) {
-      fence = fenceLine;
-      return line;
-    }
-    return line.replace(
-      /^([ \t\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\uFEFF]*)(={3,}\s*[^\n]*={3,}\s*)$/,
-      '$1[quoted] $2',
-    );
-  }).join('\n');
-}
-
 /**
  * Final PTY-boundary renderer. Raw strings can never create top-level daemon
  * authority: they are always dynamically fenced as content. Trusted daemon
@@ -286,12 +272,14 @@ export function renderDaemonInjection(input: DaemonInjection): string {
   if (input.details !== undefined && typeof input.details !== 'string') {
     throw new Error('Malformed daemon structural details');
   }
-  if (input.body !== undefined && typeof input.body !== 'string') {
+  if (input.body !== undefined && (
+    !input.body || input.body.kind !== 'raw' || typeof input.body.content !== 'string'
+  )) {
     throw new Error('Malformed daemon structural body');
   }
   const details = sanitizeForPtyInjection(input.details ?? '').replace(/\n+/g, ' ').trim();
   const header = createDaemonStructuralHeader(input.header, details);
-  const body = input.body ? `\n${neutralizeStructuralBody(input.body)}` : '';
+  const body = input.body ? `\n${wrapFenceSafe(input.body.content)}` : '';
   let reply = '';
   if (input.reply?.kind === 'agent') {
     if (typeof input.reply.from !== 'string' || typeof input.reply.messageId !== 'string') {

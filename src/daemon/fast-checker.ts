@@ -11,6 +11,7 @@ import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
 import {
   DAEMON_STRUCTURAL_HEADERS,
+  rawDaemonBody,
   rawDaemonInjection,
   renderDaemonInjection,
   structuralDaemonInjection,
@@ -246,7 +247,7 @@ export class FastChecker {
     return structuralDaemonInjection(
       AGENT_MESSAGE_HEADER,
       `from ${safeFrom}${replyNote} [msg_id: ${msg.id}]`,
-      wrapFenceSafe(msg.text),
+      rawDaemonBody(msg.text),
       { kind: 'agent', from: safeFrom, messageId: msg.id },
     );
   }
@@ -297,7 +298,7 @@ export class FastChecker {
     return structuralDaemonInjection(
       TELEGRAM_HEADER,
       `from [USER: ${sanitizeForPtyInjection(from)}] (chat_id:${chatId})`,
-      `${replyCx}${historyCx}${body}\n${lastSentCtx}`.trimEnd(),
+      rawDaemonBody(`${replyCx}${historyCx}${body}\n${lastSentCtx}`.trimEnd()),
       { kind: 'telegram', chatId },
     );
   }
@@ -350,7 +351,7 @@ export class FastChecker {
     return structuralDaemonInjection(
       TELEGRAM_HEADER,
       `PHOTO from ${sanitizeForPtyInjection(from)} (chat_id:${chatId})`,
-      `caption:\n${wrapFenceSafe(caption)}\nlocal_file: ${imagePath}`,
+      rawDaemonBody(`caption:\n${wrapFenceSafe(caption)}\nlocal_file: ${imagePath}`),
       { kind: 'telegram', chatId },
     );
   }
@@ -369,7 +370,7 @@ export class FastChecker {
     return structuralDaemonInjection(
       TELEGRAM_HEADER,
       `DOCUMENT from ${sanitizeForPtyInjection(from)} (chat_id:${chatId})`,
-      `caption:\n${wrapFenceSafe(caption)}\nlocal_file: ${filePath}\nfile_name: ${sanitizeForPtyInjection(fileName)}`,
+      rawDaemonBody(`caption:\n${wrapFenceSafe(caption)}\nlocal_file: ${filePath}\nfile_name: ${sanitizeForPtyInjection(fileName)}`),
       { kind: 'telegram', chatId },
     );
   }
@@ -397,7 +398,7 @@ export class FastChecker {
     return structuralDaemonInjection(
       TELEGRAM_HEADER,
       `VOICE from ${sanitizeForPtyInjection(from)} (chat_id:${chatId})`,
-      `duration: ${dur}s\nlocal_file: ${filePath}\n${transcriptBlock}`.trimEnd(),
+      rawDaemonBody(`duration: ${dur}s\nlocal_file: ${filePath}\n${transcriptBlock}`.trimEnd()),
       { kind: 'telegram', chatId },
     );
   }
@@ -418,7 +419,7 @@ export class FastChecker {
     return structuralDaemonInjection(
       TELEGRAM_HEADER,
       `VIDEO from ${sanitizeForPtyInjection(from)} (chat_id:${chatId})`,
-      `caption:\n${wrapFenceSafe(caption)}\nduration: ${dur}s\nlocal_file: ${filePath}\nfile_name: ${sanitizeForPtyInjection(fileName)}`,
+      rawDaemonBody(`caption:\n${wrapFenceSafe(caption)}\nduration: ${dur}s\nlocal_file: ${filePath}\nfile_name: ${sanitizeForPtyInjection(fileName)}`),
       { kind: 'telegram', chatId },
     );
   }
@@ -800,7 +801,7 @@ export class FastChecker {
       const msg = structuralDaemonInjection(
         TELEGRAM_HEADER,
         `from [USER: ${senderName}] (chat_id:${chatId})`,
-        ['callback_data:', wrapFenceSafe(data), `message_id: ${messageId}`].join('\n'),
+        rawDaemonBody(['callback_data:', wrapFenceSafe(data), `message_id: ${messageId}`].join('\n')),
         { kind: 'telegram', chatId },
       );
       const injected = this.agent.injectMessage(msg);
@@ -907,7 +908,7 @@ export class FastChecker {
           const urgentMsg = structuralDaemonInjection(
             URGENT_SIGNAL_HEADER,
             '',
-            wrapFenceSafe(content),
+            rawDaemonBody(content),
           );
           this.agent.injectMessage(urgentMsg);
         }
@@ -1041,7 +1042,7 @@ export class FastChecker {
       const pctRound = Math.round(effectivePct);
       const statusSuffix = effectivePct >= handoff ? 'Handoff in progress.' : `Handoff triggers at ${handoff}%.`;
       this.agent.injectMessage(
-        structuralDaemonInjection('CONTEXT', `Window at ${pctRound}%`, statusSuffix),
+        structuralDaemonInjection('CONTEXT', `Window at ${pctRound}%`, rawDaemonBody(statusSuffix)),
       );
       this.log(`Context warning fired at ${pctRound}%`);
     }
@@ -1077,7 +1078,7 @@ export class FastChecker {
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + 'Z';
       const handoffPrompt = `Context is at ${Math.round(effectivePct)}%. Write a handoff document to memory/handoffs/handoff-${ts}.md with these sections: ## Current Tasks, ## Next Actions, ## Active Crons, ## Key Context, ## Files Modified This Session. Then run: cortextos bus hard-restart --reason "context handoff at ${Math.round(effectivePct)}%" --handoff-doc <absolute path to the handoff doc you just wrote>. Do this NOW before the context window is exhausted.`;
       this.agent.injectMessage(
-        structuralDaemonInjection('CONTEXT HANDOFF REQUIRED', '', handoffPrompt),
+        structuralDaemonInjection('CONTEXT HANDOFF REQUIRED', '', rawDaemonBody(handoffPrompt)),
       );
       this.log(`Handoff prompt injected at ${Math.round(effectivePct)}%`);
       // Pre-arm .force-fresh so the next restart is always a clean fresh session.
