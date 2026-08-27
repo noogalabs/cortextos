@@ -17,7 +17,8 @@ import { logEvent } from '../bus/event.js';
 import { sendMessage } from '../bus/message.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
-import { stripControlChars } from '../utils/validate.js';
+import { rawDaemonBody, rawDaemonInjection, stripControlChars, structuralDaemonInjection } from '../utils/validate.js';
+import type { DaemonInjection } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
 import { computeDormancy, parseHeartbeatIntervalMs } from '../utils/dormancy.js';
 import { CRONS_DIRECTORY, CRONS_FILENAME } from '../bus/crons-schema.js';
@@ -31,6 +32,10 @@ type AgentEntry = {
   activityPoller?: TelegramPoller;
   stopped?: boolean;
 };
+
+export function buildCronInjection(firedAt: string, cronName: string, prompt: string): DaemonInjection {
+  return structuralDaemonInjection('CRON FIRED', `${firedAt} ${cronName}`, rawDaemonBody(prompt));
+}
 
 /**
  * Manages all agents in a cortextOS instance.
@@ -508,7 +513,7 @@ export class AgentManager {
             const relFilePath = toRel(media.file_path);
 
             log(`[DEBUG] media.type=${media.type} image_path=${JSON.stringify(relImagePath)} file_path=${JSON.stringify(relFilePath)}`);
-            let formatted: string;
+            let formatted: DaemonInjection;
             if (media.type === 'photo') {
               formatted = FastChecker.formatTelegramPhotoMessage(from, effectiveChatId, media.text, relImagePath);
             } else if (media.type === 'document') {
@@ -1040,7 +1045,7 @@ export class AgentManager {
     if (status !== 'running') {
       return { ok: false, code: 'NOT_RUNNING', message: `agent "${agentName}" status is ${status}` };
     }
-    const ok = entry.process.injectMessage(text);
+    const ok = entry.process.injectMessage(rawDaemonInjection(text));
     return ok
       ? { ok: true }
       : { ok: false, code: 'DEDUPED', message: `agent "${agentName}" rejected inject; likely duplicate message` };
@@ -1124,8 +1129,7 @@ export class AgentManager {
       // Without the salt, every recurring cron after its first fire would be
       // dedup-rejected and treated as a dispatch failure.
       const firedAt = new Date().toISOString();
-      const injection = `[CRON FIRED ${firedAt}] ${cron.name}: ${prompt}`;
-      const injected = this.injectAgent(agentName, injection);
+      const injected = entry.process.injectMessage(buildCronInjection(firedAt, cron.name, prompt));
       if (!injected) {
         throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);
       }
