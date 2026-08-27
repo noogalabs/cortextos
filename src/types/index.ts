@@ -779,4 +779,8 @@ export interface AgentStatus {
   sessionStart?: string;
   crashCount?: number;
   model?: string;
+  awaitingConfirmation?: boolean;
+  dormant?: boolean; // silent-dormancy fix: enabled agent whose heartbeat is stale
+  // relative to its own liveness baseline (uptime, or daemon uptime if absent-from-map)
+  dormancyReason?: string; // human explanation of the dormancy verdict
 }

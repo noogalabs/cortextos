@@ -5,12 +5,15 @@ import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
 import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
 import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
-import { MessageDedup, injectMessage } from '../pty/inject.js';
+import { KEYS, MessageDedup, injectMessage } from '../pty/inject.js';
+import type { TuiKey } from '../pty/inject.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import { renderDaemonInjection } from '../utils/validate.js';
+import type { DaemonInjection } from '../utils/validate.js';
 
 type LogFn = (msg: string) => void;
 
@@ -29,6 +32,17 @@ export class AgentProcess {
   private sessionStart: Date | null = null;
   private status: AgentStatus['status'] = 'stopped';
   private stopping: boolean = false;
+  // Change B (join-in-flight re-entry): the single in-flight teardown promise.
+  // A stop() that arrives while a teardown is already running awaits THIS
+  // instead of returning immediately. The only re-entrant caller is the
+  // manager's eviction path (`await stale.process.stop()`), which must block
+  // until the real, death-confirmed teardown completes rather than racing a
+  // fresh spawn against a still-alive predecessor (the duplicate-PTY defect).
+  private stopInFlight: Promise<void> | null = null;
+  // A bounded SIGKILL poll is an observation deadline, not permission to
+  // declare the child dead. Keep teardown contained until the exit callback
+  // provides authoritative death evidence.
+  private deathUnconfirmedPid: number | null = null;
   // BUG-040 fix: persists across stop() return until handleExit clears it.
   // Required because BUG-032's CRLF + 5s wait can cause graceful shutdown to
   // exceed the 5s Promise.race timeout in stop(), which would otherwise reset
@@ -180,9 +194,33 @@ export class AgentProcess {
 
   /**
    * Stop the agent gracefully.
+   *
+   * Change B (join-in-flight): a re-entrant stop() awaits the in-flight teardown
+   * instead of the previous silent early no-op (`if (this.stopping) return;`).
+   * The only re-entrant caller is the manager's eviction path
+   * (`await stale.process.stop()`), which WANTS to block until the predecessor
+   * is truly dead before spawning fresh — the previous no-op let it return
+   * immediately and spawn a second live PTY alongside the still-alive first one.
    */
   async stop(): Promise<void> {
-    if (this.stopping) return;
+    if (this.stopping) {
+      if (this.stopInFlight) await this.stopInFlight;
+      if (this.deathUnconfirmedPid !== null) {
+        throw new Error(
+          `death unconfirmed for agent ${this.name} (pid ${this.deathUnconfirmedPid})`,
+        );
+      }
+      return;
+    }
+    this.stopInFlight = this.runStop();
+    try {
+      await this.stopInFlight;
+    } finally {
+      this.stopInFlight = null;
+    }
+  }
+
+  private async runStop(): Promise<void> {
     this.stopping = true;
     // BUG-040 fix: stopRequested persists ACROSS stop()'s return until
     // handleExit clears it. This is the safety net for the case where the
@@ -232,6 +270,11 @@ export class AgentProcess {
       } catch {
         // Ignore write errors during shutdown
       }
+      // Change A (death-confirmed stop): capture the OS child pid BEFORE
+      // pty.kill(). node-pty's kill() can invalidate the handle, so getPid()
+      // is unreliable afterward — we need the pid to confirm death below.
+      const childPid = pty.getPid();
+
       // BUG-032 follow-up: only kill the PTY if the process is still alive.
       // After /exit + 5s wait, the child has usually exited cleanly. Calling
       // pty.kill() on an already-exited PTY tears down the file descriptor,
@@ -253,6 +296,41 @@ export class AgentProcess {
       // timeout reduces "Ignoring late exit from previous lifecycle" log noise.
       if (exitPromise) {
         await Promise.race([exitPromise, sleep(15000)]);
+      }
+
+      // Change A (death-confirmed stop): node-pty's kill() sends SIGHUP with no
+      // escalation, so a child that traps/ignores SIGHUP (or is simply slow to
+      // unwind) outlives the graceful window above. stop() would then return
+      // with the OS child still alive and untracked — free to co-emit alongside
+      // the next spawn under this agent name (the duplicate-PTY defect). If the
+      // child is still alive after the bounded race, escalate to SIGKILL and
+      // poll until the OS confirms it is gone before returning. This branch runs
+      // ONLY when the child survived the graceful window, so a normal fast exit
+      // adds ZERO latency and never sees a SIGKILL (no false kills).
+      if (childPid && isChildAlive(childPid)) {
+        this.log(`Graceful stop timed out — escalating to SIGKILL (pid ${childPid})`);
+        try {
+          process.kill(childPid, 'SIGKILL');
+        } catch {
+          // ESRCH: exited between the liveness check and the kill — fine.
+        }
+        // Bounded poll: 5s deadline / 100ms interval (hardcoded — a stop must
+        // not block the daemon indefinitely on a wedged, unkillable child).
+        const deadline = Date.now() + 5000;
+        while (isChildAlive(childPid) && Date.now() < deadline) {
+          await sleep(100);
+        }
+        if (isChildAlive(childPid)) {
+          this.deathUnconfirmedPid = childPid;
+          const error = new Error(
+            `death unconfirmed for agent ${this.name}: pid ${childPid} still alive 5s after SIGKILL`,
+          );
+          this.log(`ERROR: ${error.message}; refusing successor admission`);
+          // Do not clear `stopping`, mark stopped, or resolve teardown. The
+          // manager awaits this rejection before map eviction/restart, so the
+          // predecessor remains the authoritative mapped identity.
+          throw error;
+        }
       }
     }
 
@@ -285,10 +363,12 @@ export class AgentProcess {
   /**
    * Inject a message into the agent's PTY.
    */
-  injectMessage(content: string): boolean {
+  injectMessage(input: DaemonInjection): boolean {
     if (!this.pty || this.status !== 'running') {
       return false;
     }
+
+    const content = renderDaemonInjection(input);
 
     if (this.dedup.isDuplicate(content)) {
       this.log('Dedup: skipping duplicate message');
@@ -347,7 +427,10 @@ export class AgentProcess {
    * Write raw data to the agent's PTY.
    * Used for TUI navigation (key sequences).
    */
-  write(data: string): void {
+  write(data: TuiKey): void {
+    if (!(Object.values(KEYS) as readonly string[]).includes(data)) {
+      throw new Error('AgentProcess.write accepts only registered TUI keys');
+    }
     if (this.pty) {
       this.pty.write(data);
     }
@@ -417,6 +500,13 @@ export class AgentProcess {
     // awaiting. Either flag short-circuits crash recovery.
     if (this.stopRequested || this.stopping) {
       this.stopRequested = false;
+      if (this.deathUnconfirmedPid !== null) {
+        this.deathUnconfirmedPid = null;
+        this.stopping = false;
+        this.status = 'stopped';
+        this.notifyStatusChange();
+        this.log('Stopped after authoritative child exit');
+      }
       return;
     }
 
@@ -469,7 +559,18 @@ export class AgentProcess {
       return false;
     }
 
-    // Check for existing conversation
+    // Codex app-server sessions use their own persisted thread state. A stale
+    // Claude JSONL from an earlier runtime must not select Codex resume mode.
+    if (this.config.runtime === 'codex-app-server') {
+      return existsSync(join(
+        this.env.ctxRoot,
+        'state',
+        this.name,
+        'codex-app-server-thread.json',
+      ));
+    }
+
+    // Default (Claude runtime): check for an existing conversation.
     const launchDir = this.config.working_directory || this.env.agentDir;
     if (!launchDir) return false;
 
@@ -494,17 +595,7 @@ export class AgentProcess {
   private buildStartupPrompt(): string {
     const onboardedPath = join(this.env.ctxRoot, 'state', this.name, '.onboarded');
     const onboardingPath = join(this.env.agentDir, 'ONBOARDING.md');
-    const heartbeatPath = join(this.env.ctxRoot, 'state', this.name, 'heartbeat.json');
     let onboardingAppend = '';
-
-    // If agent has a heartbeat but no .onboarded marker, they completed onboarding but
-    // forgot to write the marker. Auto-write it so they don't re-onboard next restart.
-    if (!existsSync(onboardedPath) && existsSync(heartbeatPath)) {
-      try {
-        const { writeFileSync } = require('fs');
-        writeFileSync(onboardedPath, '', 'utf-8');
-      } catch { /* ignore */ }
-    }
 
     if (!existsSync(onboardedPath) && existsSync(onboardingPath)) {
       onboardingAppend = ' IMPORTANT: This is your FIRST BOOT. Before doing anything else, read ONBOARDING.md and complete the onboarding protocol.';
@@ -721,4 +812,18 @@ export class AgentProcess {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Change A: OS-level pid liveness probe using the signal-0 idiom. Local copy of
+// the same helper duplicated in agent-manager.ts (isPidAlive), utils/lock.ts,
+// and pty/opencode-pty.ts: signal 0 sends nothing, it only tests process
+// existence + our permission to signal it. A process owned by another user
+// (EPERM) is alive; only ESRCH (process gone) counts as dead.
+function isChildAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }

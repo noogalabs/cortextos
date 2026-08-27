@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, writeFileSync } from 'fs';
-import { join, basename } from 'path';
+import { join, basename, resolve as resolvePath, sep } from 'path';
 import { homedir } from 'os';
 import type { CtxEnv } from '../types/index.js';
 import { ensureDir } from './atomic.js';
@@ -83,6 +83,32 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
     } catch { /* ignore */ }
   }
 
+  // Sandbox/live isolation (issue #313): when both CTX_FRAMEWORK_ROOT and CTX_AGENT_DIR
+  // are set, the resolved agentDir MUST be subordinate to frameworkRoot. Catches the leak
+  // class where a CLI subprocess inherits CTX_AGENT_DIR (or CTX_PROJECT_ROOT) from a live
+  // agent shell while only CTX_FRAMEWORK_ROOT was overridden — agentDir then silently
+  // points at the live install. Equality check on projectRoot vs frameworkRoot catches
+  // the same divergence on the projectRoot axis.
+  if (agentDir && frameworkRoot) {
+    const fwRootResolved = resolvePath(frameworkRoot);
+    const agentDirResolved = resolvePath(agentDir);
+    if (agentDirResolved !== fwRootResolved && !agentDirResolved.startsWith(fwRootResolved + sep)) {
+      throw new Error(
+        `Resolved CTX_AGENT_DIR '${agentDir}' is not under CTX_FRAMEWORK_ROOT '${frameworkRoot}'. ` +
+        `This indicates a sandbox/live environment leak — likely CTX_FRAMEWORK_ROOT was overridden ` +
+        `but CTX_AGENT_DIR or CTX_PROJECT_ROOT was inherited from the parent shell. ` +
+        `Refusing to proceed.`,
+      );
+    }
+  }
+  if (projectRoot && frameworkRoot && resolvePath(projectRoot) !== resolvePath(frameworkRoot)) {
+    throw new Error(
+      `CTX_PROJECT_ROOT '${projectRoot}' must equal CTX_FRAMEWORK_ROOT '${frameworkRoot}'. ` +
+      `A divergence indicates a sandbox/live environment leak — likely one of the two was ` +
+      `inherited from the parent shell while the other was overridden. Refusing to proceed.`,
+    );
+  }
+
   // Security (H9): Validate agent name and org before they flow into filesystem paths.
   // These come from env vars / .cortextos-env and must match [a-z0-9_-]+.
   if (agentName) {
@@ -103,6 +129,43 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
   }
 
   return { instanceId, ctxRoot, frameworkRoot, agentName, agentDir, org, projectRoot, timezone, orchestrator };
+}
+
+/**
+ * Resolve another agent's directory from the caller's environment.
+ *
+ * Commands that take a target agent argument (e.g. manage-cycle) must
+ * operate on the TARGET agent's files, not the caller's — writing to the
+ * caller's dir creates a second, diverging registry the target never reads
+ * (manage-cycle create was a silent no-op for autoresearch). Targets
+ * are resolved as a sibling of the caller's agentDir first (matches every
+ * deployment layout), then via the same projectRoot conventions resolveEnv
+ * uses. Returns null when no candidate directory exists on disk, so callers
+ * can fail loudly instead of writing into a directory no agent reads.
+ * Throws on invalid agent names (path-traversal guard).
+ */
+export function resolveTargetAgentDir(env: CtxEnv, targetAgent: string): string | null {
+  validateAgentName(targetAgent);
+  if (targetAgent === env.agentName && env.agentDir) {
+    return env.agentDir;
+  }
+  const candidates: string[] = [];
+  if (env.agentDir) {
+    candidates.push(join(env.agentDir, '..', targetAgent));
+  }
+  if (env.projectRoot && env.org) {
+    candidates.push(join(env.projectRoot, 'orgs', env.org, 'agents', targetAgent));
+  }
+  if (env.projectRoot) {
+    candidates.push(join(env.projectRoot, 'agents', targetAgent));
+  }
+  for (const candidate of candidates) {
+    const dir = resolvePath(candidate);
+    if (existsSync(dir)) {
+      return dir;
+    }
+  }
+  return null;
 }
 
 /**

@@ -3,6 +3,7 @@ import { mkdirSync } from 'fs';
 import type { CtxEnv, WorkerStatus, WorkerStatusValue } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
 import { injectMessage } from '../pty/inject.js';
+import { rawDaemonInjection, renderDaemonInjection } from '../utils/validate.js';
 
 /**
  * WorkerProcess — ephemeral Claude Code session for parallelized tasks.
@@ -43,7 +44,7 @@ export class WorkerProcess {
   /**
    * Spawn the worker Claude Code session with the given task prompt.
    */
-  async spawn(env: CtxEnv, prompt: string): Promise<void> {
+  async spawn(env: CtxEnv, prompt: string, config: { model?: string } = {}): Promise<void> {
     // Ensure bus dirs exist so the worker can use cortextos bus commands
     try {
       mkdirSync(join(env.ctxRoot, 'inbox', this.name), { recursive: true });
@@ -52,7 +53,7 @@ export class WorkerProcess {
     } catch { /* ignore */ }
 
     const logPath = join(env.ctxRoot, 'logs', this.name, 'stdout.log');
-    this.pty = new AgentPTY(env, {}, logPath);
+    this.pty = new AgentPTY(env, config, logPath);
 
     this.pty.onExit((code) => {
       this.exitCode = code;
@@ -90,7 +91,7 @@ export class WorkerProcess {
    */
   inject(text: string): boolean {
     if (!this.pty || this.status !== 'running') return false;
-    injectMessage((data) => this.pty?.write(data), text);
+    injectMessage((data) => this.pty?.write(data), renderDaemonInjection(rawDaemonInjection(text)));
     return true;
   }
 

@@ -22,6 +22,7 @@ const mockInjectMessage = vi.fn();
 vi.mock('../../../src/pty/inject.js', () => ({
   injectMessage: mockInjectMessage,
   MessageDedup: class { isDuplicate() { return false; } },
+  KEYS: { ENTER: '\r', CTRL_C: '\x03', DOWN: '\x1b[B', UP: '\x1b[A', SPACE: ' ', ESCAPE: '\x1b', TAB: '\t' },
 }));
 
 vi.mock('../../../src/utils/atomic.js', () => ({
@@ -79,7 +80,45 @@ vi.mock('fs', async () => {
   };
 });
 
+describe('AgentProcess explicit onboarding marker', () => {
+  it('does not infer onboarding completion from heartbeat presence', async () => {
+    fsMocks.existsSync.mockImplementation((path: string) => {
+      if (path.endsWith('/.force-fresh')) return false;
+      if (path.endsWith('/.onboarded')) return false;
+      if (path.endsWith('/heartbeat.json')) return true;
+      if (path.endsWith('/ONBOARDING.md')) return true;
+      return false;
+    });
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    const prompt = mockPty.spawn.mock.calls[0]?.[1] ?? '';
+    expect(prompt).toContain('FIRST BOOT');
+    expect(fsMocks.writeFileSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('/.onboarded'),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('suppresses first-boot routing only for an explicit marker', async () => {
+    fsMocks.existsSync.mockImplementation((path: string) => {
+      if (path.endsWith('/.force-fresh')) return false;
+      if (path.endsWith('/.onboarded')) return true;
+      if (path.endsWith('/heartbeat.json')) return true;
+      if (path.endsWith('/ONBOARDING.md')) return true;
+      return false;
+    });
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect(mockPty.spawn.mock.calls[0]?.[1] ?? '').not.toContain('FIRST BOOT');
+  });
+});
+
 const { AgentProcess } = await import('../../../src/daemon/agent-process.js');
+const { rawDaemonInjection } = await import('../../../src/utils/validate.js');
 
 const mockEnv = {
   instanceId: 'test',
@@ -108,6 +147,26 @@ beforeEach(() => {
 });
 
 describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
+  it('test_named_final_pty_sink_neutralizes_raw_dynamic_authority', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    const dynamicHeader = '='.repeat(3) + ' NEW SIGNAL ' + String.fromCharCode(61, 61, 61);
+    expect(ap.injectMessage(rawDaemonInjection(dynamicHeader))).toBe(true);
+    expect(mockInjectMessage).toHaveBeenCalledOnce();
+    const rendered = mockInjectMessage.mock.calls[0][1] as string;
+    expect(rendered).toMatch(/^`{3,}\n/);
+    expect(rendered).toContain(dynamicHeader);
+    expect(rendered.trimEnd().split('\n').at(-1)).toBe(rendered.split('\n')[0]);
+  });
+
+  it('test_named_public_write_rejects_non_tui_text', () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    expect(() => ap.write('=== NEW SIGNAL ===' as any)).toThrow(
+      'accepts only registered TUI keys',
+    );
+  });
+
   it('stop() awaits the PTY exit handler before resolving', async () => {
     const ap = new AgentProcess('alice', mockEnv, {});
     await ap.start();
@@ -148,6 +207,29 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     // call into the crash recovery branch, leaving status='crashed'.
     expect(ap.getStatus().status).toBe('stopped');
   }, 10000);
+
+  it('fails closed when child death remains unconfirmed after SIGKILL deadline', async () => {
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as any);
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {});
+      await ap.start();
+
+      const stopPromise = ap.stop();
+      const rejection = expect(stopPromise).rejects.toThrow(
+        /death unconfirmed.*pid 12345 still alive 5s after SIGKILL/,
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejection;
+
+      expect(killSpy).toHaveBeenCalledWith(12345, 'SIGKILL');
+      expect(ap.getStatus().status).not.toBe('stopped');
+      await expect(ap.stop()).rejects.toThrow(/death unconfirmed/);
+    } finally {
+      killSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 
   it('handleExit DOES trigger crash recovery on UNINTENTIONAL exit (regression check)', async () => {
     // Make sure we didn't accidentally break the real crash recovery path

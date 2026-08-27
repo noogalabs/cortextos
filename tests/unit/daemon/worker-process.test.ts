@@ -12,8 +12,10 @@ const mockPty = {
   }),
 };
 
+const mockAgentPtyConstructor = vi.fn(function AgentPTY() { return mockPty; });
+
 vi.mock('../../../src/pty/agent-pty.js', () => ({
-  AgentPTY: function AgentPTY() { return mockPty; },
+  AgentPTY: mockAgentPtyConstructor,
 }));
 
 const mockInjectMessage = vi.fn();
@@ -44,6 +46,7 @@ beforeEach(() => {
   mockPty.kill.mockClear();
   mockPty.write.mockClear();
   mockInjectMessage.mockClear();
+  mockAgentPtyConstructor.mockClear();
 });
 
 describe('WorkerProcess', () => {
@@ -78,6 +81,28 @@ describe('WorkerProcess', () => {
       await w.spawn(mockEnv, 'do the task');
       expect(w.getStatus().status).toBe('running');
       expect(w.getStatus().pid).toBe(12345);
+    });
+  });
+
+  describe('model propagation', () => {
+    it('uses an empty PTY config when no model is supplied', async () => {
+      const w = new WorkerProcess('default-model', '/tmp/proj', undefined);
+      await w.spawn(mockEnv, 'task');
+      expect(mockAgentPtyConstructor).toHaveBeenCalledWith(
+        mockEnv,
+        {},
+        '/tmp/test-ctx/logs/default-model/stdout.log',
+      );
+    });
+
+    it('passes an explicitly selected model to the PTY', async () => {
+      const w = new WorkerProcess('selected-model', '/tmp/proj', undefined);
+      await w.spawn(mockEnv, 'task', { model: 'claude-sonnet-4-6' });
+      expect(mockAgentPtyConstructor).toHaveBeenCalledWith(
+        mockEnv,
+        { model: 'claude-sonnet-4-6' },
+        '/tmp/test-ctx/logs/selected-model/stdout.log',
+      );
     });
   });
 
