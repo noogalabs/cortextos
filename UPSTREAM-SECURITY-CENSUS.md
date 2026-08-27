@@ -96,7 +96,9 @@ the trusted header text. The final renderer wraps the entire body with
 the CommonMark mismatch where a four-backtick run closes a three-backtick
 opener even though an exact-equality fence tracker considers it still open.
 Production cron, inbox, Telegram, and media casualties carry that mismatch and
-prove the forged sibling header remains inside the dynamically larger fence.
+prove the forged sibling header remains inside the dynamically larger fence. A
+parameterized arm covers every inner backtick-run length from 3 through 32 and
+requires the rendered outer fence to be exactly one backtick longer.
 
 The finite sink census covers the two PTY ingress modules. `AgentProcess`
 accepts only `DaemonInjection`, renders it at the final sink, and exposes a
@@ -120,6 +122,6 @@ CommonMark casualties; malformed and non-registry structural variants halt. The 
 callback breakout and sibling-header exploit casualties carry unchanged.
 
 Terminal local validation on the integrated base: the root matrix passed 118
-files / 1,938 tests (one skip) with inherited live agent-directory variables
+files / 1,939 tests (one skip) with inherited live agent-directory variables
 removed from the sandbox harness; the focused final-boundary matrix passed 5
-files / 120 tests; build and TypeScript typecheck completed successfully.
+files / 121 tests; build and TypeScript typecheck completed successfully.
