@@ -34,20 +34,22 @@ therefore evidence of current fork authority, not a newly enabled policy.
 - `f1b8aad9`: render complete task ids and support project filtering.
 - `756b931b`: convert command action failures to a controlled CLI error boundary.
 
-### Policy-gated question (1)
+### Non-applicable: conflicts with standing policy (1)
 
 - `f2b399a4`: introduces `cortextos update --yes`, which can apply an upstream
-  merge after setting `CORTEXTOS_CONFIRM_UPSTREAM_MERGE`. That changes fork
-  update authority and is not a mechanical wiring fix. It is not ported.
-
-Question: should this fork expose an update-apply command at all, and if so what
-fork-safe source, confirmation, review, and divergence rules replace upstream's
-direct merge behavior?
+  merge after setting `CORTEXTOS_CONFIRM_UPSTREAM_MERGE`. That conflicts with
+  this fork's standing policy: upstream adoption occurs through review-gated
+  batches, not a direct operator auto-apply path. It is not ported. David may
+  override that policy only through an explicit daylight ruling.
 
 ### Obsolete / no applicable payload (1)
 
 - `2b6932e7`: removes a Codex token-expiry auto-send block that does not exist in
   this base's usage script. Carrying a deletion with no target would be noise.
+
+The frozen family therefore closes **33 of 35** commits through equivalence or
+implemented mechanics. The other two have terminal dispositions above; neither
+is an unclassified remainder.
 
 ## Validation
 
