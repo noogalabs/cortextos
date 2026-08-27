@@ -142,9 +142,11 @@ def orchestrator_route_re(orchestrator):
 # signal is a role/template field IF present OR an explicit self-declaration in the
 # agent's identity files. Absent/ambiguous => param-only safe-degrade.
 _ORCH_IDENTITY_RE = re.compile(
-    r"(?im)^\s*(?:#+\s*)?role\s*[:=]\s*orchestrator\b"
-    r"|(?i)\b(?:you are|i am)\s+(?:the\s+|an\s+)?orchestrator\b"
-    r"|(?i)\borchestrator\s+(?:agent|role)\s+for\s+(?:the\s+)?(?:org|fleet)\b")
+    r"^\s*(?:#+\s*)?role\s*[:=]\s*orchestrator\b"
+    r"|\b(?:you are|i am)\s+(?:the\s+|an\s+)?orchestrator\b"
+    r"|\borchestrator\s+(?:agent|role)\s+for\s+(?:the\s+)?(?:org|fleet)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _agent_declares_orchestrator(agent_dir):
