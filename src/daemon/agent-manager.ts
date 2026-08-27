@@ -19,14 +19,24 @@ import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHi
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
+import { computeDormancy, parseHeartbeatIntervalMs } from '../utils/dormancy.js';
+import { CRONS_DIRECTORY, CRONS_FILENAME } from '../bus/crons-schema.js';
 
 type LogFn = (msg: string) => void;
+
+type AgentEntry = {
+  process: AgentProcess;
+  checker: FastChecker;
+  poller?: TelegramPoller;
+  activityPoller?: TelegramPoller;
+  stopped?: boolean;
+};
 
 /**
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
-  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller }> = new Map();
+  private agents: Map<string, AgentEntry> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
@@ -40,6 +50,15 @@ export class AgentManager {
   private frameworkRoot: string;
   private org: string;
 
+  private stillMapped(name: string, entry: AgentEntry): boolean {
+    return this.agents.get(name) === entry;
+  }
+
+  // silent-dormancy fix: epoch ms of when this AgentManager (i.e. the daemon)
+  // was constructed. Used as the Face-B liveness baseline for enabled agents
+  // that are absent from the mapped set — there is no per-agent uptime for
+  // them, so staleness is measured relative to daemon start.
+  private daemonStartMs: number = Date.now();
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
@@ -255,7 +274,8 @@ export class AgentManager {
    * `CTX_ORG` the daemon was started with.
    */
   async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
-    if (this.agents.has(name)) {
+    const existing = this.agents.get(name);
+    if (existing) {
       // BUG-031: this branch was the workaround for the BUG-011 PTY race
       // (restart-all could send stop+start simultaneously, and the new
       // start would arrive while the old stop's PTY exit was still in
@@ -269,8 +289,11 @@ export class AgentManager {
       // the core stability test plan + cycle 2 of PR #13 both confirmed
       // this branch is dormant. Once we have weeks of zero-warning
       // production data, we can delete the queue mechanism entirely.
-      console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: ${name} still in registry during startAgent — pendingRestarts queueing engaged. This should not happen with PR #11 in place.`);
-      this.pendingRestarts.add(name);
+      if (existing.stopped) {
+        this.pendingRestarts.add(name);
+      } else {
+        console.log(`[agent-manager] ${name} already starting/running — duplicate start ignored.`);
+      }
       return;
     }
 
@@ -390,10 +413,12 @@ export class AgentManager {
       });
     }
 
-    this.agents.set(name, { process: agentProcess, checker });
+    const ownEntry: AgentEntry = { process: agentProcess, checker };
+    this.agents.set(name, ownEntry);
 
     // Start agent
     await agentProcess.start();
+    if (ownEntry.stopped || !this.stillMapped(name, ownEntry)) return;
 
     // Subtask 2.2: Auto-migrate crons from config.json → crons.json before
     // starting the scheduler, so the scheduler always has a populated crons.json
@@ -433,6 +458,7 @@ export class AgentManager {
       const poller = new TelegramPoller(telegramApi, stateDir);
 
       poller.onMessage((msg) => {
+        if (ownEntry.stopped) return;
         // ALLOWED_USER gate: if configured, ignore messages from other users.
         // Use numeric comparison to avoid string coercion issues.
         if (allowedUserId) {
@@ -534,6 +560,7 @@ export class AgentManager {
       });
 
       poller.onCallback((query) => {
+        if (ownEntry.stopped) return;
         // Route to fast-checker for hook response handling (perm_allow/deny, askopt, etc.)
         // handleCallback writes hook-response files and edits Telegram messages
         checker.handleCallback(query).catch(err => {
@@ -542,6 +569,7 @@ export class AgentManager {
       });
 
       poller.onReaction((reaction) => {
+        if (ownEntry.stopped) return;
         // ALLOWED_USER gate: same rule as message handler. If configured,
         // ignore reactions from other users.
         if (allowedUserId) {
@@ -568,13 +596,17 @@ export class AgentManager {
         checker.queueTelegramMessage(formatted);
       });
 
-      poller.start().catch(err => {
-        log(`Telegram poller error: ${err}`);
-      });
+      const supervisePoller = async () => {
+        while (this.stillMapped(name, ownEntry) && !ownEntry.stopped) {
+          await poller.start();
+          if (poller.lastExitReason !== 'conflict-self-die' || ownEntry.stopped) return;
+          await new Promise(resolve => setTimeout(resolve, 30_000));
+        }
+      };
+      supervisePoller().catch(err => log(`Telegram poller error: ${err}`));
 
       // Store poller reference so stopAgent() can clean it up
-      const entry = this.agents.get(name);
-      if (entry) entry.poller = poller;
+      ownEntry.poller = poller;
 
       log('Telegram poller started');
 
@@ -586,7 +618,7 @@ export class AgentManager {
       // — follow-up task_1776054009969_099 tracks migrating to a dedicated
       // singleton or Telegram webhook if the coupling ever causes real
       // operator pain. Non-orchestrator agents skip this entirely.
-      await this.maybeStartActivityChannelPoller(name, org, agentDir, log);
+      await this.maybeStartActivityChannelPoller(name, org, agentDir, log, ownEntry);
     }
   }
 
@@ -605,6 +637,7 @@ export class AgentManager {
     org: string | undefined,
     agentDir: string,
     log: LogFn,
+    ownEntry: AgentEntry,
   ): Promise<void> {
     if (!org) return;
     const orgDir = join(this.frameworkRoot, 'orgs', org);
@@ -652,9 +685,8 @@ export class AgentManager {
     const activityPoller = new TelegramPoller(activityApi, stateDir, 1000, 'activity');
 
     activityPoller.onCallback((query) => {
-      const entry = this.agents.get(name);
-      if (!entry) return;
-      entry.checker.handleActivityCallback(query, activityApi).catch((err) => {
+      if (ownEntry.stopped) return;
+      ownEntry.checker.handleActivityCallback(query, activityApi).catch((err) => {
         log(`Activity-channel callback error: ${err}`);
       });
     });
@@ -663,17 +695,22 @@ export class AgentManager {
     // but any inbound chatter (broadcasts, user DMs, etc.) gets logged
     // so operators can see what is flowing. No PTY injection.
     activityPoller.onMessage((msg) => {
+      if (ownEntry.stopped) return;
       const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
       const text = stripControlChars(msg.text || msg.caption || '');
       log(`[activity-channel inbound] from ${from}: ${text.slice(0, 120)}`);
     });
 
-    activityPoller.start().catch((err) => {
-      log(`Activity-channel poller error: ${err}`);
-    });
+    const superviseActivityPoller = async () => {
+      while (this.stillMapped(name, ownEntry) && !ownEntry.stopped) {
+        await activityPoller.start();
+        if (activityPoller.lastExitReason !== 'conflict-self-die' || ownEntry.stopped) return;
+        await new Promise(resolve => setTimeout(resolve, 30_000));
+      }
+    };
+    superviseActivityPoller().catch(err => log(`Activity-channel poller error: ${err}`));
 
-    const entry = this.agents.get(name);
-    if (entry) entry.activityPoller = activityPoller;
+    ownEntry.activityPoller = activityPoller;
 
     log(`Activity-channel poller started (chat ${activityChatId})`);
   }
@@ -688,18 +725,19 @@ export class AgentManager {
       return;
     }
 
+    entry.stopped = true;
+    const scheduler = this.cronSchedulers.get(name);
     if (entry.poller) entry.poller.stop();
     if (entry.activityPoller) entry.activityPoller.stop();
     this.cronNoopDetector.cancelAgentVerifications(name);
     entry.checker.stop();
     await entry.process.stop();
-    this.agents.delete(name);
+    if (this.stillMapped(name, entry)) this.agents.delete(name);
 
     // Stop and remove the agent's cron scheduler (if one was wired)
-    const scheduler = this.cronSchedulers.get(name);
     if (scheduler) {
       scheduler.stop();
-      this.cronSchedulers.delete(name);
+      if (this.cronSchedulers.get(name) === scheduler) this.cronSchedulers.delete(name);
     }
 
     // BUG-031: honor any restart that was queued while we were stopping.
@@ -782,11 +820,109 @@ export class AgentManager {
    * Get status of all agents.
    */
   getAllStatuses(): AgentStatus[] {
+    const nowMs = Date.now();
+    const daemonUptimeMs = nowMs - this.daemonStartMs;
+    // silent-dormancy fix: agents not in enabled-agents.json default to enabled
+    // (matching discoverAndStart's default-on behavior); an explicit
+    // `enabled: false` entry is the only way to be disabled.
+    const enabledList = this.readInstanceEnableList();
+    const isEnabled = (name: string): boolean => enabledList[name]?.enabled !== false;
+
     const statuses: AgentStatus[] = [];
-    for (const [, entry] of this.agents) {
-      statuses.push(entry.process.getStatus());
+    const mapped = new Set<string>();
+    for (const [name, entry] of this.agents) {
+      const status = entry.process.getStatus();
+      mapped.add(name);
+      // Face A — staleness relative to the agent's own process uptime.
+      const d = computeDormancy({
+        agent: name,
+        org: enabledList[name]?.org,
+        enabled: isEnabled(name),
+        mapped: true,
+        nowMs,
+        lastSeenMs: this.readHeartbeatMs(name),
+        uptimeMs: status.uptime != null ? status.uptime * 1000 : null,
+        daemonUptimeMs,
+        expectedIntervalMs: this.readHeartbeatIntervalMs(name),
+      });
+      if (d.dormant) {
+        status.dormant = true;
+        status.dormancyReason = d.reason;
+      }
+      statuses.push(status);
     }
+
+    // Face B — roster-diff: enabled agents absent from the mapped set. There is
+    // no per-agent uptime, so staleness is measured relative to daemon start.
+    for (const name of Object.keys(enabledList)) {
+      if (mapped.has(name) || !isEnabled(name)) continue;
+      const d = computeDormancy({
+        agent: name,
+        org: enabledList[name]?.org,
+        enabled: true,
+        mapped: false,
+        nowMs,
+        lastSeenMs: this.readHeartbeatMs(name),
+        uptimeMs: null,
+        daemonUptimeMs,
+        expectedIntervalMs: this.readHeartbeatIntervalMs(name),
+      });
+      statuses.push({
+        name,
+        status: 'stopped',
+        ...(d.dormant ? { dormant: true, dormancyReason: d.reason } : {}),
+      });
+    }
+
     return statuses;
+  }
+
+  /**
+   * silent-dormancy fix: read the epoch ms of an agent's last heartbeat from
+   * its canonical state/<agent>/heartbeat.json. Returns null if missing or
+   * unparseable — best effort, never throws.
+   */
+  private readHeartbeatMs(agent: string): number | null {
+    const hbPath = join(this.ctxRoot, 'state', agent, 'heartbeat.json');
+    if (!existsSync(hbPath)) return null;
+    try {
+      const hb = JSON.parse(readFileSync(hbPath, 'utf-8'));
+      const ts = hb.last_heartbeat || hb.timestamp;
+      if (!ts) return null;
+      const ms = new Date(ts).getTime();
+      return isNaN(ms) ? null : ms;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * silent-dormancy fix: read an agent's expected heartbeat cadence (ms) from
+   * its ENABLED `heartbeat` cron, so computeDormancy derives the staleness
+   * threshold from the agent's OWN configured cadence rather than a fixed
+   * default. Returns null when there is no enabled `heartbeat` cron or its
+   * schedule form is unparseable — best effort, never throws; the caller then
+   * falls back to FALLBACK_INTERVAL_MS (24h).
+   *
+   * Root resolution is load-bearing. We build the crons path directly from
+   * `this.ctxRoot` (mirroring readHeartbeatMs) using CRONS_DIRECTORY/
+   * CRONS_FILENAME — NOT `readCrons()` from bus/crons.ts, whose cronsFilePath
+   * resolves its root from `process.env.CTX_ROOT ?? process.cwd()`
+   * independently of the daemon's own ctxRoot. A wrong root would read zero
+   * crons and silently drop every agent to the 24h fallback.
+   */
+  private readHeartbeatIntervalMs(agent: string): number | null {
+    const cronsPath = join(this.ctxRoot, CRONS_DIRECTORY, agent, CRONS_FILENAME);
+    if (!existsSync(cronsPath)) return null;
+    try {
+      const parsed = JSON.parse(readFileSync(cronsPath, 'utf-8'));
+      const crons: CronDefinition[] = Array.isArray(parsed?.crons) ? parsed.crons : [];
+      const heartbeat = crons.find(c => c.name === 'heartbeat' && c.enabled !== false);
+      if (!heartbeat) return null;
+      return parseHeartbeatIntervalMs(heartbeat.schedule);
+    } catch {
+      return null;
+    }
   }
 
   /**

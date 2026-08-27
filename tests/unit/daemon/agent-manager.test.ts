@@ -290,6 +290,74 @@ describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', ()
     expect(stopSpy).not.toHaveBeenCalled();
     expect(startSpy).not.toHaveBeenCalled();
   });
+
+  it('refuses successor admission until the mapped predecessor is authoritatively contained', async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const deathUnconfirmed = new Error(
+      'Agent alice still alive after SIGKILL deadline; refusing successor admission',
+    );
+    const predecessor = {
+      stopped: false,
+      process: {
+        stop: vi.fn()
+          .mockRejectedValueOnce(deathUnconfirmed)
+          .mockResolvedValueOnce(undefined),
+      },
+      checker: { stop: vi.fn() },
+      poller: { stop: vi.fn() },
+    };
+    (am as any).agents.set('alice', predecessor);
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await expect(am.restartAgent('alice')).rejects.toBe(deathUnconfirmed);
+
+    expect((am as any).agents.get('alice')).toBe(predecessor);
+    expect(startSpy).not.toHaveBeenCalled();
+
+    await am.restartAgent('alice');
+
+    expect(predecessor.process.stop).toHaveBeenCalledTimes(2);
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(startSpy).toHaveBeenCalledWith('alice', '');
+    expect((am as any).agents.has('alice')).toBe(false);
+  });
+});
+
+describe('AgentManager map-entry identity containment', () => {
+  it('stale teardown cannot delete a replacement identity', async () => {
+    const testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-identity-test-'));
+    const ctxRoot = join(testDir, 'instance');
+    const frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+
+    try {
+      const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+      let releaseStop!: () => void;
+      const oldStop = new Promise<void>((resolve) => { releaseStop = resolve; });
+      const oldEntry = {
+        stopped: false,
+        process: { stop: vi.fn(() => oldStop) },
+        checker: { stop: vi.fn() },
+      };
+      const replacement = {
+        stopped: false,
+        process: { stop: vi.fn() },
+        checker: { stop: vi.fn() },
+      };
+      (am as any).agents.set('alice', oldEntry);
+
+      const teardown = am.stopAgent('alice');
+      await Promise.resolve();
+      (am as any).agents.set('alice', replacement);
+      releaseStop();
+      await teardown;
+
+      expect((am as any).agents.get('alice')).toBe(replacement);
+      expect(replacement.process.stop).not.toHaveBeenCalled();
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('buildReplyContext - Telegram reply context (BUG fix: media replies lost)', () => {
