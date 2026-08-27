@@ -149,6 +149,29 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     expect(ap.getStatus().status).toBe('stopped');
   }, 10000);
 
+  it('fails closed when child death remains unconfirmed after SIGKILL deadline', async () => {
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as any);
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {});
+      await ap.start();
+
+      const stopPromise = ap.stop();
+      const rejection = expect(stopPromise).rejects.toThrow(
+        /death unconfirmed.*pid 12345 still alive 5s after SIGKILL/,
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejection;
+
+      expect(killSpy).toHaveBeenCalledWith(12345, 'SIGKILL');
+      expect(ap.getStatus().status).not.toBe('stopped');
+      await expect(ap.stop()).rejects.toThrow(/death unconfirmed/);
+    } finally {
+      killSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('handleExit DOES trigger crash recovery on UNINTENTIONAL exit (regression check)', async () => {
     // Make sure we didn't accidentally break the real crash recovery path
     const ap = new AgentProcess('alice', mockEnv, {});

@@ -24,13 +24,15 @@ import { goalsCommand } from './goals.js';
 import { setupCommand } from './setup.js';
 import { spawnWorkerCommand, terminateWorkerCommand, listWorkersCommand, injectWorkerCommand } from './workers.js';
 import { importAgentCommand } from './import-agent.js';
+import { lifecycleCommand } from './lifecycle.js';
+import { CORTEXTOS_VERSION } from '../version.js';
 
 const program = new Command();
 
 program
   .name('cortextos')
   .description('Persistent 24/7 Claude Code agents with multi-agent orchestration')
-  .version('0.1.1');
+  .version(CORTEXTOS_VERSION);
 
 program.addCommand(initCommand);
 program.addCommand(installCommand);
@@ -58,6 +60,7 @@ program.addCommand(terminateWorkerCommand);
 program.addCommand(listWorkersCommand);
 program.addCommand(injectWorkerCommand);
 program.addCommand(importAgentCommand);
+program.addCommand(lifecycleCommand);
 
 // crash-alert: SessionEnd hook — cross-platform replacement for crash-alert.sh
 const crashAlertCommand = new Command('crash-alert')
@@ -69,4 +72,13 @@ const crashAlertCommand = new Command('crash-alert')
   });
 program.addCommand(crashAlertCommand);
 
-program.parse();
+// Use parseAsync + a catch so a thrown Error from any action handler (e.g.
+// "Task <id> not found" from complete-task/update-task) prints a clean one-line
+// message and exits non-zero, instead of escaping as an uncaught exception that
+// crashes with a full stack trace (the sync program.parse() had no error
+// boundary). commander v14 awaits action results, so sync throws surface here as
+// rejections. Keeps a task's status transition from silently "sticking" on error.
+program.parseAsync(process.argv).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});
