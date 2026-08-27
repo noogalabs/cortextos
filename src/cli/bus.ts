@@ -20,7 +20,7 @@ import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
-import { resolveEnv } from '../utils/env.js';
+import { resolveEnv, resolveTargetAgentDir } from '../utils/env.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
@@ -347,14 +347,16 @@ busCommand
   .command('list-tasks')
   .option('--agent <name>', 'Filter by agent')
   .option('--status <s>', 'Filter by status')
+  .option('--project <name>', 'Filter by project (e.g. human-tasks)')
   .option('--format <fmt>', 'Output format: json or text', 'text')
   .option('--respect-deps', 'Sort DAG-aware: unblocked tasks first, blocked tasks last')
-  .action((opts: { agent?: string; status?: string; format?: string; respectDeps?: boolean }) => {
+  .action((opts: { agent?: string; status?: string; project?: string; format?: string; respectDeps?: boolean }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const tasks = listTasks(paths, {
       agent: opts.agent,
       status: opts.status as TaskStatus,
+      project: opts.project,
       respectDeps: opts.respectDeps ?? false,
     });
 
@@ -368,26 +370,42 @@ busCommand
       console.log('  No tasks found.');
       return;
     }
-
-    const PRIORITY_ICON: Record<string, string> = { urgent: '🔴', high: '🟠', normal: '🔵', low: '⚪' };
-    const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
-
-    console.log(`\n  Tasks (${tasks.length})\n`);
-    const header = '  Status  Pri  ID                        Assignee         Title';
-    const separator = '  ' + '-'.repeat(header.length - 2);
-    console.log(header);
-    console.log(separator);
-
-    for (const t of tasks) {
-      const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
-      const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
-      const id = t.id.substring(0, 26).padEnd(26);
-      const assignee = (t.assigned_to || '-').substring(0, 16).padEnd(17);
-      const title = t.title.substring(0, 50);
-      console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
-    }
-    console.log('');
+    console.log(formatTaskTable(tasks));
   });
+
+/**
+ * Render the list-tasks text table. IDs are copy-paste targets for
+ * update-task/complete-task, so they are NEVER truncated — column widths
+ * come from the data (same pattern as the crons table). Every column is
+ * separated by 2+ spaces; the only column that may truncate is the trailing
+ * title, and truncation is marked with "…". (The previous fixed-width render
+ * cut every 27-char id to 26 with no delimiter before the assignee, which
+ * produced plausible-but-wrong ids when copied.)
+ */
+export function formatTaskTable(tasks: Task[]): string {
+  const PRIORITY_ICON: Record<string, string> = { urgent: '🔴', high: '🟠', normal: '🔵', low: '⚪' };
+  const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
+  const TITLE_MAX = 50;
+
+  const idW = Math.max(2, ...tasks.map(t => t.id.length));
+  const assigneeW = Math.max(8, ...tasks.map(t => (t.assigned_to || '-').length));
+
+  const lines: string[] = [];
+  lines.push(`\n  Tasks (${tasks.length})\n`);
+  const header = `  Status  Pri  ${'ID'.padEnd(idW)}  ${'Assignee'.padEnd(assigneeW)}  Title`;
+  lines.push(header);
+  lines.push('  ' + '-'.repeat(header.length - 2));
+  for (const t of tasks) {
+    const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
+    const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
+    const id = t.id.padEnd(idW);
+    const assignee = (t.assigned_to || '-').padEnd(assigneeW);
+    const title = t.title.length > TITLE_MAX ? t.title.substring(0, TITLE_MAX - 1) + '…' : t.title;
+    lines.push(`  ${statusIcon}${priIcon}${id}  ${assignee}  ${title}`);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
 
 busCommand
   .command('log-event')
@@ -810,7 +828,24 @@ busCommand
   .option('--cycle <name>', 'Cycle name')
   .action((action: string, agent: string, opts: { metric?: string; metricType?: string; surface?: string; direction?: string; window?: string; measurement?: string; loopInterval?: string; enabled?: string; cycle?: string }) => {
     const env = resolveEnv();
-    const agentDir = env.agentDir || process.cwd();
+    // Cycles live in the TARGET agent's experiments/config.json — the file
+    // the autoresearch skill reads in that agent's session. Writing to the
+    // caller's dir instead silently created a second registry the target
+    // never reads.
+    let agentDir: string | null = null;
+    try {
+      agentDir = resolveTargetAgentDir(env, agent);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+    if (!agentDir && agent === env.agentName) {
+      agentDir = env.agentDir || process.cwd();
+    }
+    if (!agentDir) {
+      console.error(`Cannot resolve agent directory for '${agent}'. Cycles are stored in the target agent's experiments/config.json — check the agent name.`);
+      process.exit(1);
+    }
     if (opts.direction && opts.direction !== 'higher' && opts.direction !== 'lower') {
       console.error(`Invalid --direction '${opts.direction}'. Must be 'higher' or 'lower'`);
       process.exit(1);
