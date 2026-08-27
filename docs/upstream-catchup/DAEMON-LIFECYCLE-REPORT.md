@@ -103,3 +103,35 @@ lifecycle tests pass on the host.
 - Windows-adjacent PTY/lifecycle selection: 1 discovered file, 9 tests passed.
 - Worktree was clean after the source/test commit; no daemon restart or
   deployment was performed.
+
+## Current-main integration custody
+
+The original family head `867e634f4ae7292d09d155b400151d6a9b26fe56`
+was reviewed against the historical fork base `d7ca29d6`. Before landing, the
+family was composed with current fork main
+`0832e6bed60a78c46daf3db0d3a2c3a48f64474e` so CI and review exercise the
+actual landing tree rather than carrying old-head evidence across integration.
+
+The merge was text-clean. The landed-family overlap census contains exactly
+four paths:
+
+- `src/daemon/agent-manager.ts`
+- `src/daemon/agent-process.ts`
+- `src/daemon/worker-process.ts`
+- `tests/unit/daemon/agent-process.test.ts`
+
+The composed tree preserves the previously landed fail-closed predecessor
+death/admission behavior and the typed daemon-injection boundary, while
+retaining all three daemon/lifecycle family mechanics: selected worker-model
+transport, Codex-only resume selection, and explicit onboarded-marker
+admission.
+
+Validation on the composed tree:
+
+- TypeScript build: pass.
+- TypeScript typecheck: pass.
+- Lifecycle status CLI verifier: pass.
+- Full daemon unit suite: 18 files, 356 tests passed, including the manager
+  death-unconfirmed successor-admission casualty, the typed-injection/fence
+  boundary casualties, and the three daemon/lifecycle family probes.
+- No daemon restart or deployment was performed.
