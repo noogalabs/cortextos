@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'fs';
+import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
+import ts from 'typescript';
 import {
   rawDaemonInjection,
   renderDaemonInjection,
@@ -71,5 +72,49 @@ describe('daemon injection final boundary', () => {
     expect(workerProcess).toContain('renderDaemonInjection(rawDaemonInjection(text))');
     expect(daemonSources.match(/import \{[^}]*\binjectMessage\b[^}]*\} from ['"]\.\.\/pty\/inject\.js['"]/g)).toHaveLength(2);
     expect(daemonSources).not.toMatch(/injectMessage\(\s*\([^)]*\)\s*=>[^,]+,\s*text\s*\)/);
+  });
+
+  it('test_named_every_daemon_pty_write_is_a_rendered_sink_or_registered_control', () => {
+    const root = process.cwd();
+    const daemonDir = join(root, 'src/daemon');
+    const files = readdirSync(daemonDir, { withFileTypes: true })
+      .filter(entry => entry.isFile() && entry.name.endsWith('.ts'))
+      .map(entry => join(daemonDir, entry.name));
+    const writes: Array<{ file: string; receiver: string; argument: string }> = [];
+
+    for (const file of files) {
+      const sourceText = readFileSync(file, 'utf8');
+      const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true);
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+          && node.expression.name.text === 'write') {
+          const receiver = node.expression.expression.getText(source).replace(/\?$/, '');
+          if (receiver.endsWith('pty') || receiver === 'this.agent') {
+            writes.push({
+              file: file.slice(daemonDir.length + 1),
+              receiver,
+              argument: node.arguments[0]?.getText(source) ?? '',
+            });
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(source);
+    }
+
+    const agentProcessWrites = writes.filter(write => write.file === 'agent-process.ts');
+    expect(agentProcessWrites.map(write => write.argument).sort()).toEqual([
+      "'/exit\\r\\n'",
+      "'\\x03'",
+      "'\\x04'",
+      'data',
+      'data',
+    ]);
+    const workerWrites = writes.filter(write => write.file === 'worker-process.ts');
+    expect(workerWrites.map(write => write.argument).sort()).toEqual(["'\\x03'", 'data']);
+    const checkerWrites = writes.filter(write => write.file === 'fast-checker.ts');
+    expect(checkerWrites).toHaveLength(8);
+    expect(checkerWrites.every(write => /^KEYS\.[A-Z_]+$/.test(write.argument))).toBe(true);
+    expect(writes).toHaveLength(15);
   });
 });

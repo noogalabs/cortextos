@@ -97,7 +97,10 @@ wraps worker text as raw before the same renderer. Manager, cron, Telegram,
 reaction, media, callback, urgent-signal, and context/handoff producers now
 construct typed values rather than authority-bearing strings. The legacy
 source census stays labeled defense in depth and is no longer claimed as
-provenance enforcement.
+provenance enforcement. A TypeScript-AST inventory enumerates every daemon
+`pty.write` and `AgentProcess.write` call: the two rendered message sinks,
+registered TUI navigation calls, and the bounded shutdown control sequences.
+Any additional write site or changed argument class fails the census.
 
 Named arms prove the boundary rather than any expression spelling: literal,
 template, helper/array, split-literal concat, `String.repeat`, and
@@ -108,6 +111,6 @@ casualties; malformed and non-registry structural variants halt. The prior
 callback breakout and sibling-header exploit casualties carry unchanged.
 
 Terminal local validation on the integrated base: the root matrix passed 118
-files / 1,932 tests (one skip) with inherited live agent-directory variables
+files / 1,934 tests (one skip) with inherited live agent-directory variables
 removed from the sandbox harness; the focused final-boundary matrix passed 5
-files / 115 tests; build and TypeScript typecheck completed successfully.
+files / 116 tests; build and TypeScript typecheck completed successfully.
