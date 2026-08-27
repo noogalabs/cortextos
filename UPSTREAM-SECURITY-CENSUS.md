@@ -75,24 +75,24 @@ headers such as `URGENT SIGNAL` and `REACTION` could remain byte-exact after a
 fence breakout.
 
 The recut makes `DAEMON_STRUCTURAL_HEADERS` the authoritative registry shared
-by producers and the unfenced sanitizer, and wraps arbitrary callback data with
-`wrapFenceSafe` at construction. A production-path casualty injects a callback
+by the unfenced sanitizer and a single `createDaemonStructuralHeader` producer
+API. Every structural header emitted by the daemon is constructed through that
+runtime-checked API; non-registry names and unneutralized header details refuse
+loudly. Arbitrary callback data remains wrapped with `wrapFenceSafe` at
+construction. A production-path casualty injects a callback
 containing a backtick breakout plus both sibling headers and proves the complete
 payload remains inside a dynamically larger fence. Removing that fence kills
-the casualty. A source census compares every structural producer variable with
-the registry-derived set, while sanitizer tests iterate the registry itself.
-Producer completeness is enforced by constant evaluation over the TypeScript
-AST, not by quote-style-specific text matching or literal-leaf inspection. The
-census resolves string literals, no-substitution templates, parenthesized
-expressions, `+` concatenation, template expressions, and identifier-bound
-initializers. Single-quoted returns, helper/array literals, fragmented
-concatenation, and interpolated unregistered headers are named casualties.
-Disabling concatenation evaluation kills the fragmented-header casualty;
-disabling template evaluation kills the interpolated-header casualty. Future
-sibling headers therefore cannot bypass the registry by changing quote style,
-splitting the header across literals, or hiding its constant text behind an
-identifier/template carrier.
+the casualty. The provenance census inverts the prior detection ladder: every
+producer call must take a registry-derived header identifier, and every daemon
+source file is forbidden from carrying raw structural-envelope construction
+outside the closed API. Single-quoted returns, helper/array literals,
+fragmented concatenation, interpolated templates, and direct array assembly are
+named bypass casualties. The API itself is behaviorally pinned to construct
+exactly the registry set and reject an unregistered sibling. Future sibling
+headers therefore inherit the sanitizer and producer boundary by construction;
+the AST census remains defense in depth against bypassing that boundary rather
+than an alternate authority for recognizing ever-more expression shapes.
 
-Terminal local validation: the six-file security matrix passed 238/238, the
-four-file CLI validation matrix passed 29/29, the dashboard matrix passed
-117/117, and the production TypeScript build completed successfully.
+Terminal integrated validation on the post-PR7/PR10 base: the root matrix
+passed 117 files / 1,927 tests (one skip), the dashboard matrix passed 9 files /
+117 tests, and both production TypeScript builds completed successfully.

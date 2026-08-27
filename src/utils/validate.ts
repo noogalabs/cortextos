@@ -176,6 +176,29 @@ export const DAEMON_STRUCTURAL_HEADERS = [
   'URGENT SIGNAL',
 ] as const;
 
+export type DaemonStructuralHeader = typeof DAEMON_STRUCTURAL_HEADERS[number];
+
+/**
+ * The sole producer for daemon structural header lines.
+ *
+ * Callers provide a registry member plus an already-sanitized detail suffix;
+ * raw structural lines in that suffix refuse loudly. Keeping the framing here makes sibling headers closed by
+ * construction: no prompt producer needs (or is allowed) to assemble the
+ * trusted `=== ... ===` envelope itself.
+ */
+export function createDaemonStructuralHeader(
+  header: DaemonStructuralHeader,
+  details = '',
+): string {
+  if (!(DAEMON_STRUCTURAL_HEADERS as readonly string[]).includes(header)) {
+    throw new Error(`Unregistered daemon structural header: ${String(header)}`);
+  }
+  if (/(?:^|[\r\n])\s*===/.test(details)) {
+    throw new Error('Daemon structural header details must not contain an unneutralized header');
+  }
+  return `=== ${header}${details ? ` ${details}` : ''} ===`;
+}
+
 const DAEMON_STRUCTURAL_HEADER_PATTERN = DAEMON_STRUCTURAL_HEADERS.join('|');
 
 export function sanitizeForPtyInjection(input: string): string {
