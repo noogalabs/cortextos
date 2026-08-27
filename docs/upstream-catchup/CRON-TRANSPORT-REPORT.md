@@ -62,7 +62,7 @@ This brings the represented total to 74/86.
 - `8475381d`, `25aea16b`: new Slack and Nostr transports; excluded.
 - `f41017ab`, `4d3238cd`: unpooled IPv4/Happy-Eyeballs transport changes,
   including a default-on switch; network transport policy is stopped for a
-  daylight ruling.
+  dedicated review/spec ruling.
 
 No transport identity, cron activation, or network default was guessed.
 
