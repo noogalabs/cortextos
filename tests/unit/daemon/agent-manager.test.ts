@@ -292,6 +292,43 @@ describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', ()
   });
 });
 
+describe('AgentManager map-entry identity containment', () => {
+  it('stale teardown cannot delete a replacement identity', async () => {
+    const testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-identity-test-'));
+    const ctxRoot = join(testDir, 'instance');
+    const frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+
+    try {
+      const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+      let releaseStop!: () => void;
+      const oldStop = new Promise<void>((resolve) => { releaseStop = resolve; });
+      const oldEntry = {
+        stopped: false,
+        process: { stop: vi.fn(() => oldStop) },
+        checker: { stop: vi.fn() },
+      };
+      const replacement = {
+        stopped: false,
+        process: { stop: vi.fn() },
+        checker: { stop: vi.fn() },
+      };
+      (am as any).agents.set('alice', oldEntry);
+
+      const teardown = am.stopAgent('alice');
+      await Promise.resolve();
+      (am as any).agents.set('alice', replacement);
+      releaseStop();
+      await teardown;
+
+      expect((am as any).agents.get('alice')).toBe(replacement);
+      expect(replacement.process.stop).not.toHaveBeenCalled();
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('buildReplyContext - Telegram reply context (BUG fix: media replies lost)', () => {
   it('returns undefined when no reply message', () => {
     expect(buildReplyContext(undefined)).toBeUndefined();

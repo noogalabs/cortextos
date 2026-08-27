@@ -36,6 +36,10 @@ export class AgentProcess {
   // until the real, death-confirmed teardown completes rather than racing a
   // fresh spawn against a still-alive predecessor (the duplicate-PTY defect).
   private stopInFlight: Promise<void> | null = null;
+  // A bounded SIGKILL poll is an observation deadline, not permission to
+  // declare the child dead. Keep teardown contained until the exit callback
+  // provides authoritative death evidence.
+  private deathUnconfirmedPid: number | null = null;
   // BUG-040 fix: persists across stop() return until handleExit clears it.
   // Required because BUG-032's CRLF + 5s wait can cause graceful shutdown to
   // exceed the 5s Promise.race timeout in stop(), which would otherwise reset
@@ -198,6 +202,11 @@ export class AgentProcess {
   async stop(): Promise<void> {
     if (this.stopping) {
       if (this.stopInFlight) await this.stopInFlight;
+      if (this.deathUnconfirmedPid !== null) {
+        throw new Error(
+          `death unconfirmed for agent ${this.name} (pid ${this.deathUnconfirmedPid})`,
+        );
+      }
       return;
     }
     this.stopInFlight = this.runStop();
@@ -309,7 +318,15 @@ export class AgentProcess {
           await sleep(100);
         }
         if (isChildAlive(childPid)) {
-          this.log(`WARNING: pid ${childPid} still alive 5s after SIGKILL — proceeding anyway`);
+          this.deathUnconfirmedPid = childPid;
+          const error = new Error(
+            `death unconfirmed for agent ${this.name}: pid ${childPid} still alive 5s after SIGKILL`,
+          );
+          this.log(`ERROR: ${error.message}; refusing successor admission`);
+          // Do not clear `stopping`, mark stopped, or resolve teardown. The
+          // manager awaits this rejection before map eviction/restart, so the
+          // predecessor remains the authoritative mapped identity.
+          throw error;
         }
       }
     }
@@ -475,6 +492,13 @@ export class AgentProcess {
     // awaiting. Either flag short-circuits crash recovery.
     if (this.stopRequested || this.stopping) {
       this.stopRequested = false;
+      if (this.deathUnconfirmedPid !== null) {
+        this.deathUnconfirmedPid = null;
+        this.stopping = false;
+        this.status = 'stopped';
+        this.notifyStatusChange();
+        this.log('Stopped after authoritative child exit');
+      }
       return;
     }
 

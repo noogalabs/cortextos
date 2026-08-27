@@ -33,7 +33,7 @@ race/liveness guards and inspect exact-head CI logs before merge.
 | `28500e76` | Ported | Heartbeat refresh is opt-in so on-behalf bus activity cannot spoof agent liveness. |
 | `0247aaab` | Adapted | Silent dormancy calculation, per-agent cadence threshold, absent-enabled-agent census, and status rendering, without unrelated upstream transport/runtime bytes. |
 | `5a8e7cbc` | Adapted | Runtime-aware handoff grace and futile high-resume-baseline suppression on the fork's existing context-handoff lifecycle. |
-| `9f39d4db` | Ported | Death-confirmed stop, bounded `SIGKILL` escalation, and join-in-flight teardown. |
+| `9f39d4db` | Ported | Death-confirmed stop, bounded `SIGKILL` escalation, join-in-flight teardown, and fail-closed containment when the observation deadline expires without authoritative child-death evidence. |
 
 ## OpenCode exclusion ruling
 
@@ -67,8 +67,17 @@ The checked-in probes cover:
 - heartbeat refresh caller gating;
 - dormancy thresholds and status classification;
 - Codex-versus-default handoff grace;
-- map-entry identity/stopped-entry construction-site census;
-- death-confirmed teardown construction-site census.
+- map-entry identity/stopped-entry construction-site census plus a real stale-
+  teardown race proving an old entry cannot delete its replacement identity;
+- death-confirmed teardown construction-site census plus a wedged-child casualty
+  proving an alive child after the post-`SIGKILL` deadline rejects teardown,
+  remains non-stopped, and refuses successor admission.
+
+Both behavior guards were mutation-armed while their source strings remained:
+neutralizing the death-unconfirmed throw made the wedged-child casualty fail,
+and weakening the map identity predicate to mere name presence made stale
+teardown delete the replacement and fail its casualty. The existing source
+census therefore remains a structural complement rather than the sole proof.
 
 Commands run successfully on the branch:
 
@@ -76,12 +85,12 @@ Commands run successfully on the branch:
 npm run build
 npx tsc --noEmit
 node scripts/verify-lifecycle-status-cli.mjs
-npm test -- --run tests/unit/lifecycle tests/unit/daemon/equivalence-closure.test.ts tests/unit/daemon/cron-scheduler.test.ts tests/unit/telegram/poller.test.ts tests/unit/utils/dormancy.test.ts tests/unit/bus/event.test.ts tests/unit/telegram/logging.test.ts tests/unit/daemon/agent-process.test.ts
+npm test -- --run tests/unit/daemon
 ```
 
-The final focused command passed 9 test files / 168 tests. An earlier expanded
-scoped command passed 7 files / 192 tests. Build, typecheck, and the lifecycle CLI
-verifier all exited zero.
+The final daemon command passed 17 test files / 327 tests, including the focused
+process, manager, and equivalence-closure casualties. Build, typecheck, and the
+lifecycle CLI verifier all exited zero.
 
 ## Known harness limitation
 
