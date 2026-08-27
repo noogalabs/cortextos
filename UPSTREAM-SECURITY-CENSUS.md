@@ -3,7 +3,8 @@
 ## Custody
 
 - Family: security primitives from the 275-commit upstream catch-up census.
-- Base: `d7ca29d6c179af7900fb648ba236e5aa69a25349`.
+- Integrated base: `4c1cbb2486ad1aba5b5f4570e34cbe5a575912d2`
+  (post CLI/bus and equivalence-closure landings).
 - Scope rule: structural security primitives only. No new transport, permission
   mode, or public endpoint is enabled by this family.
 - Gap Rule: trust-boundary and policy divergences stop for an explicit ruling;
@@ -66,7 +67,7 @@ when its command/path semantics differ?
   cookie-name presence check must kill the forged-cookie casualty; adding the
   health route to the public-path list must kill the health-auth casualty.
 
-## Callback structural-injection recut
+## Typed final-boundary structural injection
 
 Exact review of the first candidate found that unhandled Telegram
 `callback_data` was passed through the lossy unfenced sanitizer. That sanitizer
@@ -74,25 +75,39 @@ originally recognized only `AGENT MESSAGE` and `TELEGRAM`, so sibling daemon
 headers such as `URGENT SIGNAL` and `REACTION` could remain byte-exact after a
 fence breakout.
 
-The recut makes `DAEMON_STRUCTURAL_HEADERS` the authoritative registry shared
-by the unfenced sanitizer and a single `createDaemonStructuralHeader` producer
-API. Every structural header emitted by the daemon is constructed through that
-runtime-checked API; non-registry names and unneutralized header details refuse
-loudly. Arbitrary callback data remains wrapped with `wrapFenceSafe` at
-construction. A production-path casualty injects a callback
-containing a backtick breakout plus both sibling headers and proves the complete
-payload remains inside a dynamically larger fence. Removing that fence kills
-the casualty. The provenance census inverts the prior detection ladder: every
-producer call must take a registry-derived header identifier, and every daemon
-source file is forbidden from carrying raw structural-envelope construction
-outside the closed API. Single-quoted returns, helper/array literals,
-fragmented concatenation, interpolated templates, and direct array assembly are
-named bypass casualties. The API itself is behaviorally pinned to construct
-exactly the registry set and reject an unregistered sibling. Future sibling
-headers therefore inherit the sanitizer and producer boundary by construction;
-the AST census remains defense in depth against bypassing that boundary rather
-than an alternate authority for recognizing ever-more expression shapes.
+Three retired candidates tried to prove source-string provenance with regex or
+AST expression censuses. Direct concat, `String.repeat`, and
+`String.fromCharCode` plants proved that JavaScript strings retain no such
+provenance. Those detectors remain defense in depth only; they are not the
+security boundary.
 
-Terminal integrated validation on the post-PR7/PR10 base: the root matrix
-passed 117 files / 1,927 tests (one skip), the dashboard matrix passed 9 files /
-117 tests, and both production TypeScript builds completed successfully.
+The terminal recut moves authority to the final PTY boundary. Every daemon
+message is a closed `DaemonInjection` discriminated union. A `structural`
+variant carries a registry enum plus sanitized details/body and is the only
+variant whose header bytes are rendered. A `raw` variant accepts arbitrary
+runtime strings but is always dynamically fenced as content by
+`renderDaemonInjection` immediately before the PTY write. Unknown variants,
+unregistered headers, malformed fields, and raw strings passed to the TUI-key
+write API reject loudly.
+
+The finite sink census covers the two PTY ingress modules. `AgentProcess`
+accepts only `DaemonInjection`, renders it at the final sink, and exposes a
+separate runtime-checked `TuiKey` writer for control input. `WorkerProcess`
+wraps worker text as raw before the same renderer. Manager, cron, Telegram,
+reaction, media, callback, urgent-signal, and context/handoff producers now
+construct typed values rather than authority-bearing strings. The legacy
+source census stays labeled defense in depth and is no longer claimed as
+provenance enforcement.
+
+Named arms prove the boundary rather than any expression spelling: literal,
+template, helper/array, split-literal concat, `String.repeat`, and
+`String.fromCharCode` plants sent through raw ingress all remain fenced content;
+bypassing the final renderer kills the production `AgentProcess` casualty;
+weakening the raw neutralizer kills both the renderer and production-sink
+casualties; malformed and non-registry structural variants halt. The prior
+callback breakout and sibling-header exploit casualties carry unchanged.
+
+Terminal local validation on the integrated base: the root matrix passed 118
+files / 1,932 tests (one skip) with inherited live agent-directory variables
+removed from the sandbox harness; the focused final-boundary matrix passed 5
+files / 115 tests; build and TypeScript typecheck completed successfully.

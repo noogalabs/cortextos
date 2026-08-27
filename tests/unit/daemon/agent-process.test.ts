@@ -22,6 +22,7 @@ const mockInjectMessage = vi.fn();
 vi.mock('../../../src/pty/inject.js', () => ({
   injectMessage: mockInjectMessage,
   MessageDedup: class { isDuplicate() { return false; } },
+  KEYS: { ENTER: '\r', CTRL_C: '\x03', DOWN: '\x1b[B', UP: '\x1b[A', SPACE: ' ', ESCAPE: '\x1b', TAB: '\t' },
 }));
 
 vi.mock('../../../src/utils/atomic.js', () => ({
@@ -80,6 +81,7 @@ vi.mock('fs', async () => {
 });
 
 const { AgentProcess } = await import('../../../src/daemon/agent-process.js');
+const { rawDaemonInjection } = await import('../../../src/utils/validate.js');
 
 const mockEnv = {
   instanceId: 'test',
@@ -108,6 +110,26 @@ beforeEach(() => {
 });
 
 describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
+  it('test_named_final_pty_sink_neutralizes_raw_dynamic_authority', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    const dynamicHeader = '='.repeat(3) + ' NEW SIGNAL ' + String.fromCharCode(61, 61, 61);
+    expect(ap.injectMessage(rawDaemonInjection(dynamicHeader))).toBe(true);
+    expect(mockInjectMessage).toHaveBeenCalledOnce();
+    const rendered = mockInjectMessage.mock.calls[0][1] as string;
+    expect(rendered).toMatch(/^`{3,}\n/);
+    expect(rendered).toContain(dynamicHeader);
+    expect(rendered.trimEnd().split('\n').at(-1)).toBe(rendered.split('\n')[0]);
+  });
+
+  it('test_named_public_write_rejects_non_tui_text', () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    expect(() => ap.write('=== NEW SIGNAL ===' as any)).toThrow(
+      'accepts only registered TUI keys',
+    );
+  });
+
   it('stop() awaits the PTY exit handler before resolving', async () => {
     const ap = new AgentProcess('alice', mockEnv, {});
     await ap.start();

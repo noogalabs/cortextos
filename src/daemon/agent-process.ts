@@ -5,12 +5,15 @@ import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
 import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
 import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
-import { MessageDedup, injectMessage } from '../pty/inject.js';
+import { KEYS, MessageDedup, injectMessage } from '../pty/inject.js';
+import type { TuiKey } from '../pty/inject.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import { renderDaemonInjection } from '../utils/validate.js';
+import type { DaemonInjection } from '../utils/validate.js';
 
 type LogFn = (msg: string) => void;
 
@@ -360,10 +363,12 @@ export class AgentProcess {
   /**
    * Inject a message into the agent's PTY.
    */
-  injectMessage(content: string): boolean {
+  injectMessage(input: DaemonInjection): boolean {
     if (!this.pty || this.status !== 'running') {
       return false;
     }
+
+    const content = renderDaemonInjection(input);
 
     if (this.dedup.isDuplicate(content)) {
       this.log('Dedup: skipping duplicate message');
@@ -422,7 +427,10 @@ export class AgentProcess {
    * Write raw data to the agent's PTY.
    * Used for TUI navigation (key sequences).
    */
-  write(data: string): void {
+  write(data: TuiKey): void {
+    if (!(Object.values(KEYS) as readonly string[]).includes(data)) {
+      throw new Error('AgentProcess.write accepts only registered TUI keys');
+    }
     if (this.pty) {
       this.pty.write(data);
     }
