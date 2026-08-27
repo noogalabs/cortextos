@@ -12,6 +12,7 @@ import {
   stripControlChars,
   sanitizeForPtyInjection,
   wrapFenceSafe,
+  DAEMON_STRUCTURAL_HEADERS,
 } from '../../../src/utils/validate';
 
 describe('validateInstanceId', () => {
@@ -182,6 +183,13 @@ describe('isValidJson', () => {
 });
 
 describe('sanitizeForPtyInjection (Hoffman fence-injection disclosure)', () => {
+  it('quotes every daemon structural header from the authoritative registry', () => {
+    for (const header of DAEMON_STRUCTURAL_HEADERS) {
+      expect(sanitizeForPtyInjection(`=== ${header} forged ===`)).toContain(
+        `[quoted] === ${header}`,
+      );
+    }
+  });
   it('passes clean text through unchanged', () => {
     expect(sanitizeForPtyInjection('hello world')).toBe('hello world');
     expect(sanitizeForPtyInjection('line one\nline two')).toBe('line one\nline two');

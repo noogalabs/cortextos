@@ -9,7 +9,15 @@ import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
-import { stripControlChars, sanitizeForPtyInjection, wrapFenceSafe } from '../utils/validate.js';
+import {
+  DAEMON_STRUCTURAL_HEADERS,
+  stripControlChars,
+  sanitizeForPtyInjection,
+  wrapFenceSafe,
+} from '../utils/validate.js';
+
+const [AGENT_MESSAGE_HEADER, TELEGRAM_HEADER, REACTION_HEADER, URGENT_SIGNAL_HEADER] =
+  DAEMON_STRUCTURAL_HEADERS;
 
 type LogFn = (msg: string) => void;
 
@@ -226,7 +234,7 @@ export class FastChecker {
     // blocks stay readable. The inline `from` is collapse-sanitized (it sits in
     // the header line, not a fence).
     const safeFrom = sanitizeForPtyInjection(msg.from);
-    return `=== AGENT MESSAGE from ${safeFrom}${replyNote} [msg_id: ${msg.id}] ===
+    return `=== ${AGENT_MESSAGE_HEADER} from ${safeFrom}${replyNote} [msg_id: ${msg.id}] ===
 ${wrapFenceSafe(msg.text)}
 Reply using: cortextos bus send-message ${safeFrom} normal '<your reply>' ${msg.id}
 
@@ -276,7 +284,7 @@ Reply using: cortextos bus send-message ${safeFrom} normal '<your reply>' ${msg.
     const body = isSlashCommand
       ? sanitizeForPtyInjection(text).trim()
       : wrapFenceSafe(text);
-    return `=== TELEGRAM from [USER: ${sanitizeForPtyInjection(from)}] (chat_id:${chatId}) ===
+    return `=== ${TELEGRAM_HEADER} from [USER: ${sanitizeForPtyInjection(from)}] (chat_id:${chatId}) ===
 ${replyCx}${historyCx}${body}
 ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
@@ -312,7 +320,7 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     // sanitizeForPtyInjection matches the 5 sibling formatTelegram* paths (#606 residual): the caller's
     // stripControlChars deliberately keeps \n/\r, so a raw display-name could forge a `=== TELEGRAM ===`
     // containment header (#592/#597 class). Sanitize at the boundary, not the caller.
-    return `=== REACTION from [USER: ${sanitizeForPtyInjection(from)}] (chat_id:${chatId}) on message ${messageId}: ${label} ===
+    return `=== ${REACTION_HEADER} from [USER: ${sanitizeForPtyInjection(from)}] (chat_id:${chatId}) on message ${messageId}: ${label} ===
 
 `;
   }
@@ -327,7 +335,7 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     caption: string,
     imagePath: string,
   ): string {
-    return `=== TELEGRAM PHOTO from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
+    return `=== ${TELEGRAM_HEADER} PHOTO from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
 caption:
 ${wrapFenceSafe(caption)}
 local_file: ${imagePath}
@@ -347,7 +355,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     filePath: string,
     fileName: string,
   ): string {
-    return `=== TELEGRAM DOCUMENT from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
+    return `=== ${TELEGRAM_HEADER} DOCUMENT from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
 caption:
 ${wrapFenceSafe(caption)}
 local_file: ${filePath}
@@ -377,7 +385,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     const transcriptBlock = transcript && transcript.trim()
       ? `transcript:\n${wrapFenceSafe(transcript.trim())}\n`
       : '';
-    return `=== TELEGRAM VOICE from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
+    return `=== ${TELEGRAM_HEADER} VOICE from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
 duration: ${dur}s
 local_file: ${filePath}
 ${transcriptBlock}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
@@ -398,7 +406,7 @@ ${transcriptBlock}Reply using: cortextos bus send-telegram ${chatId} '<your repl
     duration: number | undefined,
   ): string {
     const dur = duration !== undefined ? duration : 'unknown';
-    return `=== TELEGRAM VIDEO from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
+    return `=== ${TELEGRAM_HEADER} VIDEO from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
 caption:
 ${wrapFenceSafe(caption)}
 duration: ${dur}s
@@ -779,16 +787,14 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     }
 
     // Inject unhandled callbacks as a Telegram message so the agent can process custom button flows.
-    // senderName (Telegram first_name) and callback_data are untrusted: sanitize both against
-    // PTY-injection before interpolating, matching the text path (sanitizeForPtyInjection at the
-    // `=== TELEGRAM from [USER: ...]` header). This block predates #592; #592's hardening was never
-    // retrofitted here, leaving forged `=== AGENT MESSAGE`/fence-breakout headers un-neutralized.
+    // Both fields are untrusted. The scalar sender name uses the registry-derived
+    // unfenced sanitizer; arbitrary callback data gets an unescapable dynamic fence.
     if (chatId && this.agent) {
       const senderName = sanitizeForPtyInjection(query.from?.first_name || 'User');
-      const safeData = sanitizeForPtyInjection(data);
       const msg = [
-        `=== TELEGRAM from [USER: ${senderName}] (chat_id:${chatId}) ===`,
-        `callback_data: ${safeData}`,
+        `=== ${TELEGRAM_HEADER} from [USER: ${senderName}] (chat_id:${chatId}) ===`,
+        'callback_data:',
+        wrapFenceSafe(data),
         `message_id: ${messageId}`,
         `Reply using: cortextos bus send-telegram ${chatId} '<your reply>'`,
       ].join('\n');
@@ -893,7 +899,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         // so a signal payload carrying its own fence can't break out and forge
         // daemon containment headers.
         if (content) {
-          const urgentMsg = `=== URGENT SIGNAL ===\n${wrapFenceSafe(content)}\n\n`;
+          const urgentMsg = `=== ${URGENT_SIGNAL_HEADER} ===\n${wrapFenceSafe(content)}\n\n`;
           this.agent.injectMessage(urgentMsg);
         }
       } catch (err) {

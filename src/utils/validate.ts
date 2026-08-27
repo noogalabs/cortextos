@@ -164,12 +164,29 @@ export function wrapFenceSafe(input: string): string {
  *    MEDIUM MATH SPACE, IDEOGRAPHIC SPACE, and BOM/ZWNBSP.
  * Lossy, but these fields are already truncated context hints — acceptable.
  */
+/**
+ * Authoritative registry of daemon structural headers accepted by the PTY
+ * injection protocol. Producers and the unfenced sanitizer share this list so
+ * a new sibling header cannot be added without inheriting neutralization.
+ */
+export const DAEMON_STRUCTURAL_HEADERS = [
+  'AGENT MESSAGE',
+  'TELEGRAM',
+  'REACTION',
+  'URGENT SIGNAL',
+] as const;
+
+const DAEMON_STRUCTURAL_HEADER_PATTERN = DAEMON_STRUCTURAL_HEADERS.join('|');
+
 export function sanitizeForPtyInjection(input: string): string {
   return stripControlChars(input)
     .replace(/\r\n?/g, '\n')
     .replace(/`{3,}/g, '``')
     .replace(
-      /^([ \t\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\uFEFF]*)(={3,}\s*(?:AGENT MESSAGE|TELEGRAM)\b|Reply using:\s*cortextos\s+bus)/gim,
+      new RegExp(
+        `^([ \\t\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000\\uFEFF]*)(={3,}\\s*(?:${DAEMON_STRUCTURAL_HEADER_PATTERN})\\b|Reply using:\\s*cortextos\\s+bus)`,
+        'gim',
+      ),
       '$1[quoted] $2',
     );
 }

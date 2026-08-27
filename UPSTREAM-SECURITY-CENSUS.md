@@ -65,3 +65,20 @@ when its command/path semantics differ?
 - Mutation/probe boundary: replacing the NextAuth verification result with a
   cookie-name presence check must kill the forged-cookie casualty; adding the
   health route to the public-path list must kill the health-auth casualty.
+
+## Callback structural-injection recut
+
+Exact review of the first candidate found that unhandled Telegram
+`callback_data` was passed through the lossy unfenced sanitizer. That sanitizer
+originally recognized only `AGENT MESSAGE` and `TELEGRAM`, so sibling daemon
+headers such as `URGENT SIGNAL` and `REACTION` could remain byte-exact after a
+fence breakout.
+
+The recut makes `DAEMON_STRUCTURAL_HEADERS` the authoritative registry shared
+by producers and the unfenced sanitizer, and wraps arbitrary callback data with
+`wrapFenceSafe` at construction. A production-path casualty injects a callback
+containing a backtick breakout plus both sibling headers and proves the complete
+payload remains inside a dynamically larger fence. Removing that fence kills
+the casualty. A source census compares every structural producer variable with
+the registry-derived set, while sanitizer tests iterate the registry itself;
+future sibling headers therefore cannot bypass the guard by omission.
