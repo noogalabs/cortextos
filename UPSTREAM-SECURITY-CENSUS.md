@@ -92,3 +92,7 @@ disabling template evaluation kills the interpolated-header casualty. Future
 sibling headers therefore cannot bypass the registry by changing quote style,
 splitting the header across literals, or hiding its constant text behind an
 identifier/template carrier.
+
+Terminal local validation: the six-file security matrix passed 238/238, the
+four-file CLI validation matrix passed 29/29, the dashboard matrix passed
+117/117, and the production TypeScript build completed successfully.
