@@ -24,6 +24,15 @@ The integration merge was text-clean. It composed the family with the landed
 daemon/security/lifecycle changes without changing the five ported surfaces or
 the 47-SHA disposition arithmetic.
 
+This report revision is the **report-only successor** to code-integrated
+subject `c4f2d668`. It changes no production source or tests; the code custody
+remains the predecessor tuple above. Because a tracked file cannot contain the
+hash of the commit that contains itself, the authoritative successor head,
+tree, and full-index patch are recorded in the external freeze and merge
+receipts derived after this report commit. The successor relationship is
+validated by an empty source/test diff from `c4f2d668` and by exact-head CI run
+`33080817777`, whose build/type, dashboard, and unit/parity jobs all passed.
+
 ## Proposed review tier
 
 **HEAVY.** Alongside two dashboard correctness fixes and a mechanical shell-date
