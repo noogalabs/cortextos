@@ -4,10 +4,25 @@
 
 `templates/docs/dashboard/community`
 
-Base: `d7ca29d6`. Canonical census: 47 upstream commits. This branch preserves
+Original family base: `d7ca29d6`. Canonical census: 47 upstream commits. This branch preserves
 the fork's current policy/runtime envelope and upstream's final state; it does
 not replay content that was later reverted or import policy/domain payloads
 without a ruling.
+
+## Current-main integration custody
+
+The family was recomposed onto fork main after the equivalence, security,
+daemon, CLI/bus, and post-merge hardening families landed.
+
+- Current-main base: `7154eda9fdeb3be80425d7910f6afeee6f9a65ac`
+- Integrated subject: `c4f2d668310b7936046997009d3945a7bdad8df5`
+- Integrated tree: `1f7327337116e284d8ea1aa19592d84629de2638`
+- Full-index diff SHA-256: `e9782a15ff8894e1dc58b26efef3344461ecc230f5db187b19b875ac4ab33ff4`
+- Reproduction: `git diff --full-index 7154eda9fdeb3be80425d7910f6afeee6f9a65ac..c4f2d668310b7936046997009d3945a7bdad8df5 | shasum -a 256`
+
+The integration merge was text-clean. It composed the family with the landed
+daemon/security/lifecycle changes without changing the five ported surfaces or
+the 47-SHA disposition arithmetic.
 
 ## Proposed review tier
 
@@ -103,12 +118,17 @@ npm test -- --run tests/sprint4-catalog.test.ts tests/unit/bus/catalog.test.ts
 
 Results:
 
-- root template/FastChecker slice: 2 files, 79 tests passed;
-- dashboard slice: 8 files, 114 tests passed;
+- root template/FastChecker slice: 2 files, 93 tests passed;
+- dashboard slice: 9 files, 117 tests passed;
 - migration skill bake suite: 96 probes passed, 0 failed;
 - catalog/install slice: 2 files, 34 tests passed;
 - root production build passed;
 - dashboard production build and TypeScript phase passed.
+
+Exact-head CI run `33080243796` concluded success on integrated subject
+`c4f2d668`: build/type job `98545161990`, dashboard job `98545162278`, and
+unit/parity job `98545302989` all passed. The unit job executed 1,938 tests
+across 116 files plus 48 Codex parity tests across 6 files.
 
 The dashboard build reports pre-existing Next/Turbopack warnings about dynamic
 module tracing, deprecated middleware naming, workspace-root inference, and
