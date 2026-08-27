@@ -9,7 +9,7 @@ import { FastChecker } from '../../../src/daemon/fast-checker';
 import { DAEMON_STRUCTURAL_HEADERS } from '../../../src/utils/validate';
 import type { BusPaths, TelegramCallbackQuery } from '../../../src/types';
 
-function literalStructuralHeaderProducers(source: string): string[] {
+function constantStructuralHeaderProducers(source: string): string[] {
   const file = ts.createSourceFile(
     'fast-checker.ts',
     source,
@@ -17,11 +17,54 @@ function literalStructuralHeaderProducers(source: string): string[] {
     true,
     ts.ScriptKind.TS,
   );
+  const initializers = new Map<string, ts.Expression>();
+  const collectInitializers = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node)
+        && ts.isIdentifier(node.name)
+        && node.initializer) {
+      initializers.set(node.name.text, node.initializer);
+    }
+    ts.forEachChild(node, collectInitializers);
+  };
+  collectInitializers(file);
+
+  const evaluate = (node: ts.Expression, resolving = new Set<string>()): string | undefined => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      return node.text;
+    }
+    if (ts.isParenthesizedExpression(node)) {
+      return evaluate(node.expression, resolving);
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = evaluate(node.left, resolving);
+      const right = evaluate(node.right, resolving);
+      return left === undefined || right === undefined ? undefined : left + right;
+    }
+    if (ts.isTemplateExpression(node)) {
+      let value = node.head.text;
+      for (const span of node.templateSpans) {
+        const expression = evaluate(span.expression, resolving);
+        if (expression === undefined) return undefined;
+        value += expression + span.literal.text;
+      }
+      return value;
+    }
+    if (ts.isIdentifier(node) && !resolving.has(node.text)) {
+      const initializer = initializers.get(node.text);
+      if (!initializer) return undefined;
+      const next = new Set(resolving);
+      next.add(node.text);
+      return evaluate(initializer, next);
+    }
+    return undefined;
+  };
+
   const findings: string[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      if (/^===\s+[A-Z][A-Z ]+(?:\s+from\b[^=]*)?\s*===/m.test(node.text)) {
-        findings.push(node.text);
+    if (ts.isExpression(node)) {
+      const value = evaluate(node);
+      if (value && /^===\s+[A-Z][A-Z ]+(?:\s+from\b[^=]*)?\s*===/m.test(value)) {
+        findings.push(value);
       }
     }
     ts.forEachChild(node, visit);
@@ -489,14 +532,20 @@ describe('FastChecker', () => {
       );
       expect([...new Set(producerVariables)].sort()).toEqual([...expectedVariables].sort());
       // Structural producers must interpolate registry-derived names. Inspect
-      // every literal AST node so quote style, helper functions, concatenation,
-      // and array storage cannot hide a new sibling producer from the census.
-      expect(literalStructuralHeaderProducers(source)).toEqual([]);
-      expect(literalStructuralHeaderProducers(
+      // every constant expression so quote style, helper functions, fragmented
+      // concatenation, interpolation, and array storage cannot hide a new sibling.
+      expect(constantStructuralHeaderProducers(source)).toEqual([]);
+      expect(constantStructuralHeaderProducers(
         "function bad() { return '=== NEW SIGNAL ===\\n'; }",
       )).toEqual(['=== NEW SIGNAL ===\n']);
-      expect(literalStructuralHeaderProducers(
+      expect(constantStructuralHeaderProducers(
         'const helper = () => { const parts = ["=== NEW SIGNAL ===", payload]; return parts.join("\\n"); };',
+      )).toEqual(['=== NEW SIGNAL ===']);
+      expect(constantStructuralHeaderProducers(
+        "function bad() { return '=== ' + 'NEW SIGNAL' + ' ==='; }",
+      )).toEqual(['=== NEW SIGNAL ===']);
+      expect(constantStructuralHeaderProducers(
+        'const NEW_SIGNAL = "NEW SIGNAL"; function bad() { return `=== ${NEW_SIGNAL} ===`; }',
       )).toEqual(['=== NEW SIGNAL ===']);
     });
 

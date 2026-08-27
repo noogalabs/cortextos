@@ -81,8 +81,14 @@ containing a backtick breakout plus both sibling headers and proves the complete
 payload remains inside a dynamically larger fence. Removing that fence kills
 the casualty. A source census compares every structural producer variable with
 the registry-derived set, while sanitizer tests iterate the registry itself.
-Producer completeness is enforced at the TypeScript AST literal-node grain,
-not by quote-style-specific text matching: single-quoted return values and
-double-quoted helper/array values are named casualties, and an actual planted
-array-held literal header kills the census. Future sibling headers therefore
-cannot bypass the registry through a different literal carrier or quote style.
+Producer completeness is enforced by constant evaluation over the TypeScript
+AST, not by quote-style-specific text matching or literal-leaf inspection. The
+census resolves string literals, no-substitution templates, parenthesized
+expressions, `+` concatenation, template expressions, and identifier-bound
+initializers. Single-quoted returns, helper/array literals, fragmented
+concatenation, and interpolated unregistered headers are named casualties.
+Disabling concatenation evaluation kills the fragmented-header casualty;
+disabling template evaluation kills the interpolated-header casualty. Future
+sibling headers therefore cannot bypass the registry by changing quote style,
+splitting the header across literals, or hiding its constant text behind an
+identifier/template carrier.
