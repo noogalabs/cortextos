@@ -109,16 +109,20 @@ export class TelegramAPI {
    *   5. Italic (_..._) — word-boundary aware to avoid snake_case false positives
    *   6. Links ([text](url)) → <a href="url">text</a>
    *
-   * Pass `plainText: true` to skip conversion (just HTML-escape and send raw).
+   * Pass `plainText: true` to skip conversion and send the original bytes
+   * without `parse_mode`; HTML escaping would be visible to the recipient.
    */
   private markdownToHtml(text: string, plainText = false): string {
+    // Plain-text messages are sent without parse_mode, so escaping here would
+    // leak visible entities such as &gt; and &amp; to the recipient.
+    if (plainText) return text;
+
     // Step 1: HTML-escape (& must be first to avoid double-escaping)
     let html = text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
 
-    if (plainText) return html;
 
     // Step 2: Fenced code blocks — multiline, processed before inline `
     html = html.replace(/```(?:\w*\n?)?([\s\S]*?)```/g, (_, code) =>

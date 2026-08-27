@@ -131,7 +131,7 @@ describe('TelegramAPI.sendMessage HTML mode', () => {
     const api = new TelegramAPI('111:AAA');
     const result = await api.sendMessage(
       'chat1',
-      '*not bold* `not code`',
+      '*not bold* `not code`; 5 > 4 & 3 < 4',
       undefined,
       { parseMode: null },
     );
@@ -139,8 +139,9 @@ describe('TelegramAPI.sendMessage HTML mode', () => {
     expect(result?.result?.message_id).toBe(333);
     expect(callLog).toHaveLength(1);
     expect(callLog[0].body).not.toHaveProperty('parse_mode');
-    // Content is HTML-escaped but not Markdown-converted
-    expect(callLog[0].body.text).toBe('*not bold* `not code`');
+    // Content is neither HTML-escaped nor Markdown-converted when Telegram
+    // receives it without a parse mode.
+    expect(callLog[0].body.text).toBe('*not bold* `not code`; 5 > 4 & 3 < 4');
     expect(warnLog).toHaveLength(0);
   });
 
