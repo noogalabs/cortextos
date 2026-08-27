@@ -12,17 +12,29 @@
 
 ## Disposition
 
-### Already patch-equivalent (28)
+### Directly patch-equivalent (25)
 
 `2b3409d8`, `21aeaf0d`, `3df05a54`, `f12f8b46`, `426c4101`,
 `7d5ab2b0`, `7732ebd1`, `c73a292e`, `98ce4539`, `6e36a0f3`,
 `2db93286`, `764dd84a`, `6869e458`, `8d16468b`, `c7db670a`,
-`d77820b4`, `55cf04ad`, `fbe58fee`, `a00ed2cb`, `ae644527`,
-`28ae5833`, `bc71008a`, `7782a35a`, `701161d6`, `28224eb0`,
+`d77820b4`, `ae644527`, `28ae5833`, `bc71008a`, `7782a35a`,
+`701161d6`, `28224eb0`,
 `2985b18d`, `56045eaf`, and `9a30342d` are already represented on
-the fork according to `git cherry` patch equivalence. No duplicate port is
+the fork according to the 25 direct `git cherry` patch-equivalence results. No duplicate port is
 carried. Existing notification behavior from `7732ebd1` and `7782a35a` is
 therefore evidence of current fork authority, not a newly enabled policy.
+
+### Merge shells represented by equivalent payloads (3)
+
+- `55cf04ad` carries `8d16468b` plus the `.gitkeep` initialization payload
+  `86ebce65`; both payloads are patch-equivalent on the fork.
+- `fbe58fee` carries `c7db670a` plus the `.gitkeep` initialization payload
+  `860b3590`; both payloads are patch-equivalent on the fork.
+- `a00ed2cb` carries the already-listed, patch-equivalent `d77820b4` payload.
+
+These merge objects are represented through their payloads, not falsely counted
+as additional direct `git cherry` results. Direct equivalents plus these three
+merge shells close the original 28-commit equivalence disposition.
 
 ### Missing mechanics represented here (5)
 
@@ -40,7 +52,7 @@ therefore evidence of current fork authority, not a newly enabled policy.
   merge after setting `CORTEXTOS_CONFIRM_UPSTREAM_MERGE`. That conflicts with
   this fork's standing policy: upstream adoption occurs through review-gated
   batches, not a direct operator auto-apply path. It is not ported. David may
-  override that policy only through an explicit daylight ruling.
+  override that policy through an explicit review/spec ruling.
 
 ### Obsolete / no applicable payload (1)
 
