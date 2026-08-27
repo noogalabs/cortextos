@@ -4,9 +4,31 @@ vi.mock('child_process', () => ({ execFile: vi.fn() }));
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import ts from 'typescript';
 import { FastChecker } from '../../../src/daemon/fast-checker';
 import { DAEMON_STRUCTURAL_HEADERS } from '../../../src/utils/validate';
 import type { BusPaths, TelegramCallbackQuery } from '../../../src/types';
+
+function literalStructuralHeaderProducers(source: string): string[] {
+  const file = ts.createSourceFile(
+    'fast-checker.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const findings: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      if (/^===\s+[A-Z][A-Z ]+(?:\s+from\b[^=]*)?\s*===/m.test(node.text)) {
+        findings.push(node.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return findings;
+}
 
 // Minimal mock for AgentProcess
 function createMockAgent(name = 'test-agent') {
@@ -466,10 +488,16 @@ describe('FastChecker', () => {
         match => match[1],
       );
       expect([...new Set(producerVariables)].sort()).toEqual([...expectedVariables].sort());
-      // Structural template producers must interpolate registry-derived names;
-      // a new literal sibling header is a census failure, not a hidden bypass.
-      const literalProducer = /(?:return|=)\s*`===\s+(?!\$\{)[A-Z][A-Z ]+(?:from|===)/g;
-      expect(source.match(literalProducer) ?? []).toEqual([]);
+      // Structural producers must interpolate registry-derived names. Inspect
+      // every literal AST node so quote style, helper functions, concatenation,
+      // and array storage cannot hide a new sibling producer from the census.
+      expect(literalStructuralHeaderProducers(source)).toEqual([]);
+      expect(literalStructuralHeaderProducers(
+        "function bad() { return '=== NEW SIGNAL ===\\n'; }",
+      )).toEqual(['=== NEW SIGNAL ===\n']);
+      expect(literalStructuralHeaderProducers(
+        'const helper = () => { const parts = ["=== NEW SIGNAL ===", payload]; return parts.join("\\n"); };',
+      )).toEqual(['=== NEW SIGNAL ===']);
     });
 
     it('perm_allow writes correct response file', async () => {

@@ -2,7 +2,7 @@
 
 ## Custody
 
-- Family: security primitives from the 273-commit upstream catch-up census.
+- Family: security primitives from the 275-commit upstream catch-up census.
 - Base: `d7ca29d6c179af7900fb648ba236e5aa69a25349`.
 - Scope rule: structural security primitives only. No new transport, permission
   mode, or public endpoint is enabled by this family.
@@ -80,5 +80,9 @@ by producers and the unfenced sanitizer, and wraps arbitrary callback data with
 containing a backtick breakout plus both sibling headers and proves the complete
 payload remains inside a dynamically larger fence. Removing that fence kills
 the casualty. A source census compares every structural producer variable with
-the registry-derived set, while sanitizer tests iterate the registry itself;
-future sibling headers therefore cannot bypass the guard by omission.
+the registry-derived set, while sanitizer tests iterate the registry itself.
+Producer completeness is enforced at the TypeScript AST literal-node grain,
+not by quote-style-specific text matching: single-quoted return values and
+double-quoted helper/array values are named casualties, and an actual planted
+array-held literal header kills the census. Future sibling headers therefore
+cannot bypass the registry through a different literal carrier or quote style.
