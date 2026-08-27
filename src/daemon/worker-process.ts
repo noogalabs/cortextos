@@ -3,6 +3,7 @@ import { mkdirSync } from 'fs';
 import type { CtxEnv, WorkerStatus, WorkerStatusValue } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
 import { injectMessage } from '../pty/inject.js';
+import { rawDaemonInjection, renderDaemonInjection } from '../utils/validate.js';
 
 /**
  * WorkerProcess — ephemeral Claude Code session for parallelized tasks.
@@ -90,7 +91,7 @@ export class WorkerProcess {
    */
   inject(text: string): boolean {
     if (!this.pty || this.status !== 'running') return false;
-    injectMessage((data) => this.pty?.write(data), text);
+    injectMessage((data) => this.pty?.write(data), renderDaemonInjection(rawDaemonInjection(text)));
     return true;
   }
 
