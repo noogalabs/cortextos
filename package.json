@@ -7,7 +7,7 @@
     "cortextos": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/verify-package-files.mjs",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -40,7 +40,8 @@
   "files": [
     "dist/",
     "schemas/",
-    "templates/"
+    "templates/",
+    "scripts/verify-package-files.mjs"
   ],
   "dependencies": {
     "@inquirer/prompts": "^8.3.2",
