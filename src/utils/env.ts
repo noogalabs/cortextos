@@ -239,3 +239,23 @@ export function sourceEnvFile(filePath: string): void {
     }
   }
 }
+
+/**
+ * The EXPLICITLY configured agent name, or null.
+ *
+ * Unlike resolveEnv().agentName, this never falls back to
+ * basename(process.cwd()) — any directory has a basename, so that fallback is
+ * an identity guess, not an attribution. Gates that require a NAMED actor
+ * (e.g. externally visible actions like Telegram reactions) must use this:
+ * only the process env or the cwd .cortextos-env file count as explicit.
+ */
+export function resolveExplicitAgentName(): string | null {
+  const fromEnv = process.env.CTX_AGENT_NAME?.trim();
+  if (fromEnv) return fromEnv;
+  const cortextosEnvPath = join(process.cwd(), '.cortextos-env');
+  if (existsSync(cortextosEnvPath)) {
+    const fromFile = parseEnvFile(cortextosEnvPath).CTX_AGENT_NAME?.trim();
+    if (fromFile) return fromFile;
+  }
+  return null;
+}

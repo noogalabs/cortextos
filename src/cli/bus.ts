@@ -20,7 +20,7 @@ import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
-import { resolveEnv, resolveTargetAgentDir } from '../utils/env.js';
+import { resolveEnv, resolveTargetAgentDir, resolveExplicitAgentName } from '../utils/env.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
@@ -1079,11 +1079,14 @@ busCommand
     const env = resolveEnv();
 
     // A reaction is an externally visible action on a member-facing surface.
-    // It must be attributable to a NAMED agent actor, and every reaction is
-    // audit-logged below. An unattributed context (no resolvable agent name)
-    // may not react at all.
-    if (!env.agentName) {
-      console.error('Error: react-telegram requires a named agent actor (CTX_AGENT_NAME). Unattributed reactions are not allowed.');
+    // It must be attributable to an EXPLICITLY named agent actor, and every
+    // reaction is audit-logged below. resolveEnv().agentName is NOT enough
+    // here: it falls back to basename(process.cwd()), which any directory
+    // satisfies, making a truthiness check a dead branch. Only the process
+    // env or the cwd .cortextos-env file count as attribution.
+    const explicitActor = resolveExplicitAgentName();
+    if (!explicitActor) {
+      console.error('Error: react-telegram requires an explicitly named agent actor (CTX_AGENT_NAME in the environment or .cortextos-env). Unattributed reactions are not allowed.');
       process.exit(1);
     }
     let botToken = '';
@@ -1112,10 +1115,10 @@ busCommand
       await api.setMessageReaction(chatId, messageId, emojis);
       // Audit every reaction through the standard event log: actor, target,
       // emoji. Externally visible actions must leave an internal record.
-      const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+      const paths = resolvePaths(explicitActor, env.instanceId, env.org);
       try {
-        logEvent(paths, env.agentName, env.org, 'action', 'telegram_reaction', 'info', JSON.stringify({
-          agent: env.agentName,
+        logEvent(paths, explicitActor, env.org, 'action', 'telegram_reaction', 'info', JSON.stringify({
+          agent: explicitActor,
           chat_id: chatId,
           message_id: messageId,
           emoji: emojis.length > 0 ? emoji : null,
