@@ -49,6 +49,11 @@ function resolveBuzzCredentials(): { relayUrl: string; secretKey: string; pubkey
  * open+authenticated socket. Callers are responsible for closing it.
  */
 async function connectAndAuthenticate(relayUrl: string, secretKey: string): Promise<WebSocket> {
+  // Fail loud with a clear runtime requirement rather than a bare
+  // ReferenceError: native WebSocket is unavailable on older Node.
+  if (typeof WebSocket === 'undefined') {
+    throw new Error('native WebSocket not available — Buzz requires Node 22+. Upgrade Node to use Buzz.');
+  }
   const ws = new WebSocket(relayUrl);
 
   await new Promise<void>((resolve, reject) => {

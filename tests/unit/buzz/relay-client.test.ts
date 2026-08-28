@@ -94,6 +94,43 @@ describe('BuzzRelayClient', () => {
     client.stop();
   });
 
+  it('a socket close BEFORE the AUTH challenge rejects the waiter and RECONNECTS (was a suspended-promise hang)', async () => {
+    // rejectAllPending() used to clear the auth-wait timer without settling
+    // waitForAuthChallenge()'s promise, so connectAndRun() hung forever and the
+    // reconnect loop died. A close before any AUTH challenge must produce a
+    // SECOND connection attempt, not suspend.
+    vi.useFakeTimers();
+    const client = new BuzzRelayClient('wss://relay.test', secretKey);
+    const startPromise = client.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    const ws1 = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    ws1.triggerOpen();
+    await Promise.resolve();
+    ws1.close(); // close before AUTH — the waiter must reject, not hang
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1_100); // past INITIAL_BACKOFF_MS (1000ms)
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+    client.stop();
+    void startPromise;
+    vi.useRealTimers();
+  });
+
+  it('gates loudly and does NOT enter the reconnect loop when native WebSocket is unavailable', async () => {
+    const saved = (globalThis as any).WebSocket;
+    delete (globalThis as any).WebSocket;
+    try {
+      const client = new BuzzRelayClient('wss://relay.test', secretKey);
+      await client.start(); // must RETURN promptly rather than throw-and-retry-forever
+      expect(FakeWebSocket.instances.length).toBe(0);
+    } finally {
+      (globalThis as any).WebSocket = saved;
+    }
+  });
+
   it('issues a REQ subscription for each subscribed channel after authentication', async () => {
     const client = new BuzzRelayClient('wss://relay.test', secretKey);
     client.subscribeChannels(['chan-1', 'chan-2']);
