@@ -18,11 +18,20 @@ import os from 'os';
 const ANTHROPIC_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const CLAUDE_CREDS = path.join(os.homedir(), '.claude', '.credentials.json');
 
-const CACHE_DIR = path.join(
-  process.env.CTX_ROOT ?? path.join(os.homedir(), '.cortextos', 'default'),
-  'state',
-  'dashboard',
-);
+/**
+ * CTX_ROOT with leading-tilde expansion: dashboard/.env.example documents
+ * `CTX_ROOT=~/.cortextos/default`, and Node does not expand `~` — without this
+ * the path would resolve relative to the dashboard working directory.
+ */
+function resolveCtxRoot(): string {
+  const raw = process.env.CTX_ROOT?.trim();
+  if (!raw) return path.join(os.homedir(), '.cortextos', 'default');
+  if (raw === '~') return os.homedir();
+  if (raw.startsWith('~/')) return path.join(os.homedir(), raw.slice(2));
+  return raw;
+}
+
+const CACHE_DIR = path.join(resolveCtxRoot(), 'state', 'dashboard');
 const CACHE_PATH = path.join(CACHE_DIR, 'quota-last-good.json');
 
 export interface QuotaSnapshot {
@@ -39,12 +48,7 @@ export interface QuotaResponse extends QuotaSnapshot {
   cache_age_ms: number;
 }
 
-const ACCOUNTS_PATH = path.join(
-  process.env.CTX_ROOT ?? path.join(os.homedir(), '.cortextos', 'default'),
-  'state',
-  'oauth',
-  'accounts.json',
-);
+const ACCOUNTS_PATH = path.join(resolveCtxRoot(), 'state', 'oauth', 'accounts.json');
 
 /**
  * Token precedence matches the CLI's checkUsageApi: the ACTIVE per-instance
@@ -167,6 +171,10 @@ const FRESH_WINDOW_MS = 30_000;
  * FOR ANY REASON (non-2xx, thrown network/DNS/timeout error, malformed JSON),
  * or null when nothing is available (cold-boot only).
  */
+/** In-flight upstream call, shared so concurrent cache misses coalesce into
+ * one fetch instead of a thundering herd on cold boot / window expiry. */
+let inFlight: Promise<QuotaSnapshot | null> | null = null;
+
 export async function fetchQuotaSnapshot(): Promise<QuotaResponse | null> {
   const recent = readCache();
   if (recent) {
@@ -177,10 +185,14 @@ export async function fetchQuotaSnapshot(): Promise<QuotaResponse | null> {
   }
 
   // A thrown fetch (network, DNS, timeout, bad JSON) must degrade to the
-  // last-good cache exactly like a non-2xx response — never a 500.
+  // last-good cache exactly like a non-2xx response — never a 500. Concurrent
+  // callers share one in-flight upstream request.
   let fresh: QuotaSnapshot | null = null;
   try {
-    fresh = await fetchFresh();
+    if (!inFlight) {
+      inFlight = fetchFresh().finally(() => { inFlight = null; });
+    }
+    fresh = await inFlight;
   } catch {
     fresh = null;
   }
