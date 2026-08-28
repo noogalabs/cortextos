@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   REQUIRED_BUILD_OUTPUTS,
+  npmPackInvocation,
   packedPathsFromNpm,
   validatePackedFiles,
   validatePackageManifest,
@@ -32,10 +33,12 @@ function buildScratchPackage(): string {
   const outputDirectory = join(packageRoot, 'dist');
   mkdirSync(outputDirectory, { recursive: true });
 
-  execFileSync('npx', ['tsup', '--silent', '--out-dir', outputDirectory], {
-    cwd: repositoryRoot,
-    stdio: 'pipe',
-  });
+  const args = ['tsup', '--silent', '--out-dir', outputDirectory];
+  const result = process.platform === 'win32'
+    ? spawnSync(`npx ${args.join(' ')}`, { cwd: repositoryRoot, stdio: 'pipe', shell: true })
+    : spawnSync('npx', args, { cwd: repositoryRoot, stdio: 'pipe' });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`scratch build failed with exit ${result.status}`);
 
   for (const path of ['package.json', 'README.md', 'LICENSE', 'schemas', 'templates']) {
     cpSync(join(repositoryRoot, path), join(packageRoot, path), { recursive: true });
@@ -49,6 +52,19 @@ function buildScratchPackage(): string {
 }
 
 describe('published-package completeness', () => {
+  it('uses the repository Windows shell convention for the npm.cmd wrapper', () => {
+    expect(npmPackInvocation('win32')).toEqual({
+      command: 'npm pack --dry-run --json --ignore-scripts',
+      args: undefined,
+      shell: true,
+    });
+    expect(npmPackInvocation('linux')).toEqual({
+      command: 'npm',
+      args: ['pack', '--dry-run', '--json', '--ignore-scripts'],
+      shell: false,
+    });
+  });
+
   it('emits every intended CLI, daemon, and hook bundle', { timeout: 60_000 }, () => {
     const packageRoot = buildScratchPackage();
     const packedPaths = packedPathsFromNpm(packageRoot);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -123,17 +123,38 @@ export function validatePackedFiles(pkg, packedPaths) {
   return [...new Set(errors)];
 }
 
+export function npmPackInvocation(runtimePlatform = process.platform) {
+  const args = ['pack', '--dry-run', '--json', '--ignore-scripts'];
+  // Match the repository's existing Windows npm convention in src/cli/install.ts:
+  // npm is a .cmd wrapper there, so let cmd.exe resolve a fixed command string.
+  return runtimePlatform === 'win32'
+    ? { command: `npm ${args.join(' ')}`, args: undefined, shell: true }
+    : { command: 'npm', args, shell: false };
+}
+
 export function packedPathsFromNpm(projectRoot) {
-  const output = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
-    cwd: projectRoot,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const result = JSON.parse(output);
-  if (!Array.isArray(result) || !Array.isArray(result[0]?.files)) {
+  const invocation = npmPackInvocation();
+  const result = invocation.args
+    ? spawnSync(invocation.command, invocation.args, {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    : spawnSync(invocation.command, {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: invocation.shell,
+    });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`npm pack --dry-run failed: ${result.stderr?.trim() || `exit ${result.status}`}`);
+  }
+  const output = JSON.parse(result.stdout);
+  if (!Array.isArray(output) || !Array.isArray(output[0]?.files)) {
     throw new Error('npm pack --dry-run returned an unexpected result');
   }
-  return result[0].files.map((file) => file.path);
+  return output[0].files.map((file) => file.path);
 }
 
 export function verifyPackage(projectRoot) {
