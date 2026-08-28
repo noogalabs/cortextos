@@ -9,6 +9,11 @@
  * Disable entirely with CTX_TELEGRAM_NO_TRANSCRIBE=1.
  * Override binaries / model with CTX_WHISPER_BIN, CTX_FFMPEG_BIN,
  * CTX_WHISPER_MODEL.
+ * Override transcription language with CTX_WHISPER_LANG (passed via
+ * whisper-cli's `-l` flag). Default is 'auto' (auto-detect). Note: `.en`
+ * models (e.g. ggml-tiny.en.bin) are English-only — the lang flag has no
+ * effect there. Use a multilingual model (no `.en` suffix) for non-English
+ * audio.
  */
 import { spawn } from 'child_process';
 import * as fs from 'fs';
@@ -26,10 +31,47 @@ function resolveBin(envVar: string, fallback: string): string {
   return process.env[envVar] || fallback;
 }
 
+/**
+ * Transcription language, from CTX_WHISPER_LANG.
+ *
+ * Contract (documented fallback + per-agent override):
+ * - Unset, empty, or whitespace-only -> 'auto' (whisper auto-detect), which is
+ *   the exact pre-adoption behavior for every agent that sets nothing.
+ * - Per-agent override: transcription runs inside the SHARED daemon process, so
+ *   an agent's .env is NOT visible here as process env. The daemon extracts
+ *   CTX_WHISPER_LANG from each agent's .env and passes it per call as
+ *   TranscribeOptions.language (see agent-manager), which takes precedence over
+ *   this env fallback. The daemon/org environment sets the fleet default.
+ *   Value is whisper-cli's -l code (e.g. en, no, de).
+ * - Invalid codes are NOT validated here: whisper-cli rejects them, and
+ *   transcribeVoice already returns null on any subprocess failure, so a bad
+ *   value degrades to "no transcript" - never a crash. The value is passed as a
+ *   spawn argv element, never through a shell.
+ */
+export function resolveLang(): string {
+  const lang = (process.env.CTX_WHISPER_LANG ?? '').trim();
+  return lang !== '' ? lang : 'auto';
+}
+
+/**
+ * Structural validity for a whisper -l value: 'auto' or a 2-3 letter language
+ * code. This is a SHAPE check, not a language-list check — whisper-cli remains
+ * the authority on which codes exist; this only catches config values that
+ * could never be a code at all (paths, sentences, punctuation), so bad
+ * per-agent config degrades LOUDLY to auto instead of silently to
+ * no-transcript.
+ */
+export function isValidWhisperLang(value: string): boolean {
+  return /^(auto|[a-zA-Z]{2,3})$/.test(value.trim());
+}
+
 export interface TranscribeOptions {
   timeoutMs?: number;
   modelPath?: string;
   log?: (line: string) => void;
+  /** Per-call language override (e.g. the owning agent's configured value).
+   * Falls back to resolveLang() (daemon-env CTX_WHISPER_LANG, then 'auto'). */
+  language?: string;
 }
 
 /**
@@ -47,6 +89,16 @@ export async function transcribeVoice(
   const modelPath = opts.modelPath || resolveModelPath();
   const ffmpegBin = resolveBin('CTX_FFMPEG_BIN', 'ffmpeg');
   const whisperBin = resolveBin('CTX_WHISPER_BIN', 'whisper-cli');
+  // Effective language: per-call (owning agent) first, then daemon env, then
+  // auto. An invalid nonempty value falls back to auto WITH a diagnostic —
+  // whisper-cli would reject it and the whole transcription would silently
+  // become "no transcript", which is the worse failure.
+  const requestedLang = opts.language?.trim() || resolveLang();
+  let lang = requestedLang;
+  if (!isValidWhisperLang(requestedLang)) {
+    log(`[transcribe] invalid transcription language '${requestedLang}' (expected 'auto' or a 2-3 letter code) — falling back to auto`);
+    lang = 'auto';
+  }
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (!fs.existsSync(modelPath)) {
@@ -68,7 +120,7 @@ export async function transcribeVoice(
   try {
     const whisper = await runProcess(
       whisperBin,
-      ['-m', modelPath, '-f', wavPath, '-nt', '-np'],
+      ['-m', modelPath, '-f', wavPath, '-l', lang, '-nt', '-np'],
       timeoutMs,
       true,
     );
