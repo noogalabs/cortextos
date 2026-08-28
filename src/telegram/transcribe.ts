@@ -9,6 +9,11 @@
  * Disable entirely with CTX_TELEGRAM_NO_TRANSCRIBE=1.
  * Override binaries / model with CTX_WHISPER_BIN, CTX_FFMPEG_BIN,
  * CTX_WHISPER_MODEL.
+ * Override transcription language with CTX_WHISPER_LANG (passed via
+ * whisper-cli's `-l` flag). Default is 'auto' (auto-detect). Note: `.en`
+ * models (e.g. ggml-tiny.en.bin) are English-only — the lang flag has no
+ * effect there. Use a multilingual model (no `.en` suffix) for non-English
+ * audio.
  */
 import { spawn } from 'child_process';
 import * as fs from 'fs';
@@ -24,6 +29,25 @@ function resolveModelPath(): string {
 
 function resolveBin(envVar: string, fallback: string): string {
   return process.env[envVar] || fallback;
+}
+
+/**
+ * Transcription language, from CTX_WHISPER_LANG.
+ *
+ * Contract (documented fallback + per-agent override):
+ * - Unset, empty, or whitespace-only -> 'auto' (whisper auto-detect), which is
+ *   the exact pre-adoption behavior for every agent that sets nothing.
+ * - Per-agent override: each agent process runs with its own .env loaded, so an
+ *   agent sets CTX_WHISPER_LANG in its agent .env; an org-wide default can go in
+ *   the shared secrets env. Value is whisper-cli's -l code (e.g. en, no, de).
+ * - Invalid codes are NOT validated here: whisper-cli rejects them, and
+ *   transcribeVoice already returns null on any subprocess failure, so a bad
+ *   value degrades to "no transcript" - never a crash. The value is passed as a
+ *   spawn argv element, never through a shell.
+ */
+export function resolveLang(): string {
+  const lang = (process.env.CTX_WHISPER_LANG ?? '').trim();
+  return lang !== '' ? lang : 'auto';
 }
 
 export interface TranscribeOptions {
@@ -47,6 +71,7 @@ export async function transcribeVoice(
   const modelPath = opts.modelPath || resolveModelPath();
   const ffmpegBin = resolveBin('CTX_FFMPEG_BIN', 'ffmpeg');
   const whisperBin = resolveBin('CTX_WHISPER_BIN', 'whisper-cli');
+  const lang = resolveLang();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (!fs.existsSync(modelPath)) {
@@ -68,7 +93,7 @@ export async function transcribeVoice(
   try {
     const whisper = await runProcess(
       whisperBin,
-      ['-m', modelPath, '-f', wavPath, '-nt', '-np'],
+      ['-m', modelPath, '-f', wavPath, '-l', lang, '-nt', '-np'],
       timeoutMs,
       true,
     );

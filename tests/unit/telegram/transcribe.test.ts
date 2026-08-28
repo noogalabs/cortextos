@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { transcribeVoice } from '../../../src/telegram/transcribe';
+import { transcribeVoice, resolveLang } from '../../../src/telegram/transcribe';
 
 describe('transcribeVoice', () => {
   let workDir: string;
@@ -88,5 +88,30 @@ describe('transcribeVoice', () => {
     const elapsed = Date.now() - start;
     expect(result).toBeNull();
     expect(elapsed).toBeLessThan(2000);
+  });
+});
+
+describe('resolveLang (CTX_WHISPER_LANG contract)', () => {
+  const saved = process.env.CTX_WHISPER_LANG;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.CTX_WHISPER_LANG;
+    else process.env.CTX_WHISPER_LANG = saved;
+  });
+
+  it('falls back to auto when unset', () => {
+    delete process.env.CTX_WHISPER_LANG;
+    expect(resolveLang()).toBe('auto');
+  });
+
+  it('falls back to auto on empty and whitespace-only values', () => {
+    process.env.CTX_WHISPER_LANG = '';
+    expect(resolveLang()).toBe('auto');
+    process.env.CTX_WHISPER_LANG = '   ';
+    expect(resolveLang()).toBe('auto');
+  });
+
+  it('returns the trimmed configured language code', () => {
+    process.env.CTX_WHISPER_LANG = ' no ';
+    expect(resolveLang()).toBe('no');
   });
 });
