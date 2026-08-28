@@ -39,7 +39,34 @@ export interface QuotaResponse extends QuotaSnapshot {
   cache_age_ms: number;
 }
 
+const ACCOUNTS_PATH = path.join(
+  process.env.CTX_ROOT ?? path.join(os.homedir(), '.cortextos', 'default'),
+  'state',
+  'oauth',
+  'accounts.json',
+);
+
+/**
+ * Token precedence matches the CLI's checkUsageApi: the ACTIVE per-instance
+ * OAuth account first (so the indicator shows the quota of the account the
+ * fleet is actually running on, not whatever token the dashboard process
+ * happened to inherit), then the process env, then Claude Code's global
+ * credentials file.
+ */
 function getOAuthToken(): { token: string; source: QuotaSnapshot['source'] } | null {
+  if (fs.existsSync(ACCOUNTS_PATH)) {
+    try {
+      const raw = fs.readFileSync(ACCOUNTS_PATH, 'utf-8');
+      const store = JSON.parse(raw) as {
+        active?: string;
+        accounts?: Record<string, { access_token?: string }>;
+      };
+      const token = store.active ? store.accounts?.[store.active]?.access_token : undefined;
+      if (token) return { token, source: 'accounts.json' };
+    } catch {
+      /* fall through */
+    }
+  }
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
     return { token: process.env.CLAUDE_CODE_OAUTH_TOKEN, source: 'env' };
   }
@@ -101,17 +128,25 @@ async function fetchFresh(): Promise<QuotaSnapshot | null> {
     sevenDayUtilization?: number;
   };
 
-  const normalize = (v: number | undefined): number => {
-    if (v === undefined || v === null) return 0;
+  // Nested shape is percent-scale by observation (utilization: 77.0 == 77%),
+  // so it is ALWAYS divided by 100 — the >1 heuristic would misread a
+  // genuinely-low nested reading (0.5 == 0.5% just after reset) as a 50%
+  // fraction. The heuristic survives only for legacy flat fields.
+  const fromPercent = (v: number | undefined): number | undefined =>
+    v === undefined || v === null ? undefined : v / 100;
+  const normalizeFlat = (v: number | undefined): number | undefined => {
+    if (v === undefined || v === null) return undefined;
     return v > 1 ? v / 100 : v;
   };
 
-  const fiveH = normalize(
-    data.five_hour?.utilization ?? data.five_hour_utilization ?? data.fiveHourUtilization,
-  );
-  const sevenD = normalize(
-    data.seven_day?.utilization ?? data.seven_day_utilization ?? data.sevenDayUtilization,
-  );
+  const fiveH =
+    fromPercent(data.five_hour?.utilization)
+    ?? normalizeFlat(data.five_hour_utilization ?? data.fiveHourUtilization)
+    ?? 0;
+  const sevenD =
+    fromPercent(data.seven_day?.utilization)
+    ?? normalizeFlat(data.seven_day_utilization ?? data.sevenDayUtilization)
+    ?? 0;
 
   return {
     five_hour_remaining_pct: Math.round((1 - fiveH) * 100),
@@ -121,19 +156,40 @@ async function fetchFresh(): Promise<QuotaSnapshot | null> {
   };
 }
 
+/** Serve-from-cache window: many tabs poll each minute; one upstream call per
+ * window serves them all instead of one call per mounted topbar. */
+const FRESH_WINDOW_MS = 30_000;
+
 /**
  * Fetch a quota response. Always returns the freshest available data:
- * a fresh API call when it succeeds, the cached last-good when it
- * doesn't, or null when neither is available (cold-boot only).
+ * a recent-enough cached snapshot (shared across dashboard clients), a fresh
+ * API call when the cache is older, the cached last-good when the call fails
+ * FOR ANY REASON (non-2xx, thrown network/DNS/timeout error, malformed JSON),
+ * or null when nothing is available (cold-boot only).
  */
 export async function fetchQuotaSnapshot(): Promise<QuotaResponse | null> {
-  const fresh = await fetchFresh();
+  const recent = readCache();
+  if (recent) {
+    const ageMs = Date.now() - new Date(recent.fetched_at).getTime();
+    if (ageMs >= 0 && ageMs < FRESH_WINDOW_MS) {
+      return { ...recent, stale: false, cache_age_ms: ageMs };
+    }
+  }
+
+  // A thrown fetch (network, DNS, timeout, bad JSON) must degrade to the
+  // last-good cache exactly like a non-2xx response — never a 500.
+  let fresh: QuotaSnapshot | null = null;
+  try {
+    fresh = await fetchFresh();
+  } catch {
+    fresh = null;
+  }
   if (fresh) {
     writeCache(fresh);
     return { ...fresh, stale: false, cache_age_ms: 0 };
   }
 
-  const cached = readCache();
+  const cached = recent ?? readCache();
   if (cached) {
     const cacheAgeMs = Date.now() - new Date(cached.fetched_at).getTime();
     return { ...cached, stale: true, cache_age_ms: Math.max(0, cacheAgeMs) };
