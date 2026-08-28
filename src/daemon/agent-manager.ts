@@ -342,12 +342,18 @@ export class AgentManager {
     let chatId: string | undefined;
     let allowedUserId: string | undefined;
     let botToken: string | undefined;
+    // Per-agent transcription language (adopt 85ddcf71): transcription runs in
+    // THIS shared daemon process, so an agent's .env value is never visible as
+    // process env — it must be extracted here and passed per call.
+    let whisperLang: string | undefined;
 
     if (existsSync(agentEnvFile)) {
       const envContent = readFileSync(agentEnvFile, 'utf-8');
       const botTokenMatch = envContent.match(/^BOT_TOKEN=(.+)$/m);
       const chatIdMatch = envContent.match(/^CHAT_ID=(.+)$/m);
       const allowedUserMatch = envContent.match(/^ALLOWED_USER=(.+)$/m);
+      const whisperLangMatch = envContent.match(/^CTX_WHISPER_LANG=(.+)$/m);
+      whisperLang = whisperLangMatch?.[1]?.trim() || undefined;
       botToken = botTokenMatch?.[1]?.trim();
       chatId = chatIdMatch?.[1]?.trim();
       allowedUserId = allowedUserMatch?.[1]?.trim() || undefined;
@@ -493,7 +499,7 @@ export class AgentManager {
 
         if (isMedia && telegramApi) {
           const downloadDir = join(agentDir, 'telegram-images');
-          processMediaMessage(msg, telegramApi, downloadDir).then((media) => {
+          processMediaMessage(msg, telegramApi, downloadDir, { transcribeLanguage: whisperLang }).then((media) => {
             if (!media) {
               log('Media processing returned null - falling back to text format');
               const text = stripControlChars(msg.caption || '');

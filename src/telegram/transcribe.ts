@@ -37,9 +37,12 @@ function resolveBin(envVar: string, fallback: string): string {
  * Contract (documented fallback + per-agent override):
  * - Unset, empty, or whitespace-only -> 'auto' (whisper auto-detect), which is
  *   the exact pre-adoption behavior for every agent that sets nothing.
- * - Per-agent override: each agent process runs with its own .env loaded, so an
- *   agent sets CTX_WHISPER_LANG in its agent .env; an org-wide default can go in
- *   the shared secrets env. Value is whisper-cli's -l code (e.g. en, no, de).
+ * - Per-agent override: transcription runs inside the SHARED daemon process, so
+ *   an agent's .env is NOT visible here as process env. The daemon extracts
+ *   CTX_WHISPER_LANG from each agent's .env and passes it per call as
+ *   TranscribeOptions.language (see agent-manager), which takes precedence over
+ *   this env fallback. The daemon/org environment sets the fleet default.
+ *   Value is whisper-cli's -l code (e.g. en, no, de).
  * - Invalid codes are NOT validated here: whisper-cli rejects them, and
  *   transcribeVoice already returns null on any subprocess failure, so a bad
  *   value degrades to "no transcript" - never a crash. The value is passed as a
@@ -54,6 +57,9 @@ export interface TranscribeOptions {
   timeoutMs?: number;
   modelPath?: string;
   log?: (line: string) => void;
+  /** Per-call language override (e.g. the owning agent's configured value).
+   * Falls back to resolveLang() (daemon-env CTX_WHISPER_LANG, then 'auto'). */
+  language?: string;
 }
 
 /**
@@ -71,7 +77,7 @@ export async function transcribeVoice(
   const modelPath = opts.modelPath || resolveModelPath();
   const ffmpegBin = resolveBin('CTX_FFMPEG_BIN', 'ffmpeg');
   const whisperBin = resolveBin('CTX_WHISPER_BIN', 'whisper-cli');
-  const lang = resolveLang();
+  const lang = opts.language?.trim() || resolveLang();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (!fs.existsSync(modelPath)) {

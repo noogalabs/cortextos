@@ -115,3 +115,19 @@ describe('resolveLang (CTX_WHISPER_LANG contract)', () => {
     expect(resolveLang()).toBe('no');
   });
 });
+
+describe('per-call language precedence (TranscribeOptions.language)', () => {
+  const saved = process.env.CTX_WHISPER_LANG;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.CTX_WHISPER_LANG;
+    else process.env.CTX_WHISPER_LANG = saved;
+  });
+
+  // The per-agent value travels as opts.language (daemon extracts it from the
+  // agent's .env); it must beat the daemon-env fallback, and a blank per-call
+  // value must fall through to resolveLang().
+  it('resolveLang is only the fallback: env value visible when no per-call value', () => {
+    process.env.CTX_WHISPER_LANG = 'de';
+    expect(resolveLang()).toBe('de');
+  });
+});
