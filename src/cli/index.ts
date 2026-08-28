@@ -27,7 +27,6 @@ import { importAgentCommand } from './import-agent.js';
 import { updateCommand } from './update.js';
 import { lifecycleCommand } from './lifecycle.js';
 import { buzzCommand } from './buzz.js';
-import { slackCommand } from './slack.js';
 import { CORTEXTOS_VERSION } from '../version.js';
 
 const program = new Command();
@@ -66,7 +65,6 @@ program.addCommand(injectWorkerCommand);
 program.addCommand(importAgentCommand);
 program.addCommand(updateCommand);
 program.addCommand(lifecycleCommand);
-program.addCommand(slackCommand);
 
 // crash-alert: SessionEnd hook — cross-platform replacement for crash-alert.sh
 const crashAlertCommand = new Command('crash-alert')

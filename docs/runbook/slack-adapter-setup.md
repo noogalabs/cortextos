@@ -1,125 +1,138 @@
-# Slack Adapter Setup
+# Slack adapter setup (per-agent routing)
 
-cortextOS agents can send and receive messages over Slack, in addition to
-Telegram. Outbound (`chat.postMessage`) and inbound (Socket Mode) are both
-supported. This guide covers creating the Slack app, configuring an agent,
-and verifying the setup.
+Operational runbook for this Slack stack: per-agent Socket Mode listeners with
+durable-inbox delivery and a fail-closed route gate. Builds on the setup runbook
+from the original Socket Mode adapter (#906).
 
-## 1. Create a Slack app
+## 1. Slack app prerequisites (ONE APP PER AGENT)
 
-1. Go to <https://api.slack.com/apps> and click **Create New App** → **From
-   scratch**.
-2. Name the app and pick the workspace it should install to.
-3. Under **Socket Mode**, enable Socket Mode. This generates an app-level
-   token (`xapp-...`) — save it, you'll need it as `SLACK_APP_TOKEN`.
-4. Under **OAuth & Permissions** → **Scopes** → **Bot Token Scopes**, add:
-   - `chat:write` — post messages (`chat.postMessage`, used by `slack send`
-     / `slack test-send`)
-   - `chat:write.customize` — post under a per-agent display name/icon
-     (`username`/`icon_emoji`/`icon_url` overrides in `slack.json`)
-   - `channels:history` — receive `message`/`app_mention` events from
-     public channels the bot is in (Socket Mode inbound)
-   - `channels:read` — list channels (`conversations.list`, used by
-     `slack discover-channels`)
-   - `users:read` — resolve a Slack user id to a display name for the
-     injected message header (`users.info`)
-   - If the agent needs to read/post in private channels, also add
-     `groups:history` and `groups:read`.
-5. Under **Event Subscriptions**, enable events and subscribe to bot events:
-   `message.channels` (and `message.groups` if using private channels),
-   `app_mention`.
-6. Install the app to the workspace. This generates a bot token
-   (`xoxb-...`) — save it as `SLACK_BOT_TOKEN`.
-7. Invite the bot to each channel it needs to read from or post to
-   (`/invite @your-bot-name` in Slack).
+Create **one Slack app for each agent** — never one shared app. Slack
+distributes an app's event envelopes across that app's open Socket Mode
+connections (each event reaches ONE connection), so two agents on a shared app
+would each receive a random subset of messages: silent loss, not fan-out. N:1
+works because each agent's own app gets its own full copy of a channel's
+events. The daemon detects two agents using the same app token and warns
+loudly, but the fix is always per-agent apps.
 
-## 2. Configure environment variables
+For each agent's app:
 
-The daemon process needs both tokens in its environment:
+1. Create a Slack app with **Socket Mode** enabled.
+2. Event subscriptions: `message.channels` (+ `message.groups` for private
+   channels).
+3. Bot token scopes: `chat:write`, `channels:read`, `channels:history`,
+   `groups:read`, `groups:history`, `users:read`, plus `chat:write.customize`
+   ONLY if the persona review has cleared custom display identity (see §5).
+4. Install the app; invite this agent's bot to every channel the agent should
+   read (each agent that should see a shared channel gets its own bot invited).
 
-```bash
+## 2. Per-agent tokens (`agents/<name>/.env` — secrets live here, never in slack.json)
+
+```
 SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
+SLACK_APP_TOKEN=xapp-...   # inbound Socket Mode; omit for outbound-only
 ```
 
-`SLACK_BOT_TOKEN` is required for any outbound send (`slack send`,
-`slack test-send`, `slack discover-channels`). Both `SLACK_BOT_TOKEN` and
-`SLACK_APP_TOKEN` are required for inbound Socket Mode — the daemon's
-orchestrator agent starts one shared Socket Mode connection per org at
-startup only when both are present; if either is missing, Slack inbound is
-simply inactive and nothing else is affected (agent startup, Telegram, etc.
-all continue normally).
+Add the channel this agent listens on:
 
-Socket Mode requires Node's native `WebSocket` global, which is stable
-starting in Node 22 — make sure the daemon runs on Node >=22.
+```bash
+SLACK_CHANNEL=C0123456789   # channel id the agent watches (inbound)
+```
 
-## 3. Configure an agent for Slack (`slack.json`)
+Missing tokens leave Slack inbound inactive for that agent; other transports
+continue.
 
-Per-agent Slack config lives at `agents/<name>/slack.json` (or the
-namespaced equivalent for `<org>/<agent>` layouts). Schema
-(`SlackConfig`, see `src/slack/identity.ts`):
+**Node < 22:** native `WebSocket` is unavailable, so Socket Mode cannot run and
+Slack inbound stays inactive for the agent — a clear log line says so, and there
+is no silent no-inbound state. Upgrade to Node 22+ to use Slack inbound.
+
+### What activates inbound
+
+Slack inbound starts for an agent when its `.env` provides `SLACK_APP_TOKEN`,
+`SLACK_BOT_TOKEN`, and `SLACK_CHANNEL` (and native `WebSocket` is available).
+Activation is by deliberate `.env` configuration — the tokens and channel are an
+explicit per-agent opt-in.
+
+Adding a `slack.json` (next section) is optional and layers the fail-closed route
+gate on top of the single-channel default; the route gate is what makes
+misconfiguration deny rather than fail open.
+
+- `SLACK_CHANNEL` is the primary channel. Under routing it must also appear in
+  `allowed_channels`, or the route gate denies it.
+- `interval_ms` is the poll cadence (ignored while Socket Mode is active).
+
+### Node < 22
+
+Socket Mode needs native `WebSocket` (Node 22+). On older Node the listener is
+skipped and Slack inbound stays inactive for the agent — a clear log line says
+so, never a silent no-inbound state. Upgrade Node to use Slack inbound.
+
+## 3. Per-agent routing (`agents/<name>/slack.json` — non-secret)
 
 ```json
 {
-  "display_name": "My Agent",
-  "icon_emoji": ":robot_face:",
-  "channels": {
-    "recap": "C0123456789",
-    "ops": "C0987654321"
-  },
+  "display_name": "sample-agent",
   "allowed_channels": ["C0123456789", "C0987654321"],
-  "allowed_users": ["T01234567:U01234567"]
+  "allowed_users": ["T0AAAAAA:U0BBBBBB"]
 }
 ```
 
-- `display_name` — the `username` used when posting (requires
-  `chat:write.customize`).
-- `icon_emoji` **or** `icon_url` — optional visual identity override; if
-  both are set, `icon_emoji` wins.
-- `channels` — a purpose → channel-id map for the agent's own reference
-  (e.g. which channel to post recaps to). Not enforced by the adapter
-  itself.
-- `allowed_channels` — channel ids (`Cxxx`) this agent will accept inbound
-  messages from. Required for inbound delivery — a channel not in this
-  list is never routed to the agent.
-- `allowed_users` — **required, fail-closed** allowlist of Slack identities
-  permitted to message this agent, as `"<team_id>:<user_id>"` composite
-  keys (not just `user_id` — Slack user ids are workspace-scoped, not
-  globally unique). An empty or missing list means the agent accepts
-  messages from **no one**, mirroring Telegram's `ALLOWED_USER` behavior
-  when unset. Find `team_id` and `user_id` from a message inspected via the
-  Slack API, or from `discover-channels` output plus Slack's own admin UI.
+- `allowed_channels`: channels this agent RECEIVES from. The listener watches
+  all of them. **Empty or absent denies all inbound** (fail-closed).
+- `allowed_users`: `"<team_id>:<user_id>"` composite senders. Channel
+  membership alone is never authority — both gates must pass. Find ids with
+  `cortextos bus slack-discover-channels` and the sender's Slack profile.
+- **No `slack.json` at all = legacy mode**: the agent keeps its `.env`-driven
+  single-channel behavior exactly. Routing is opt-in per agent.
+- A malformed `slack.json` is logged loudly at agent start and routing is
+  DISABLED for that agent (legacy mode) until fixed — check the daemon log if
+  routing seems inert.
+- N:1 is supported: several agents may list the same channel; each receives
+  its own inbox copy and acks independently. This works through the per-agent
+  apps from §1 — each agent's own app receives its own copy of the channel's
+  events. Agents sharing one app token would SPLIT events instead (see §1).
 
-A missing `slack.json` means the agent is Slack-disabled — this is a
-normal, supported state, not an error.
+Config changes are **restart-to-apply** (shared connections are rebuilt at
+agent start; hot reload is not a tested path).
 
 ## 4. Verify
 
-With `SLACK_BOT_TOKEN` set in your shell:
-
-```bash
-# List channels the bot is a member of, with ids
-cortextos slack discover-channels
-
-# Post a test message
-cortextos slack test-send C0123456789 "hello from cortextos" --org myorg
-
-# Post under a specific agent's identity (reads that agent's slack.json)
-cortextos slack test-send C0123456789 "hello" --as my-agent --org myorg
+```
+cortextos bus slack-discover-channels        # bot-member channels + ids
+cortextos bus slack-test-send C0123456789    # posts and reports the outcome
 ```
 
-`cortextos slack send` is the same command shape as `test-send` — it's the
-stable command name used internally for replies (the "Reply using: ..."
-line injected into an agent's session when a Slack message arrives).
+`slack-test-send` exits nonzero with Slack's reason on failure — a failing
+test is the answer, not a soft skip.
 
-To verify inbound delivery end-to-end: start the daemon with
-`SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` set, confirm the orchestrator log
-shows `Slack Socket Mode connected`, then post a message in a channel
-listed in an agent's `allowed_channels` from a user listed in that agent's
-`allowed_users`. The message should appear in the agent's session as:
+## 5. Display identity — PERSONA GATE (enforced, not advisory)
 
-```
-=== SLACK from [USER: <name>] (channel:<id>) ===
-<text>
-Reply using: cortextos slack send <channel> '<your reply>' --as <agent>
-```
+`display_name` / `icon_emoji` / `icon_url` change how a member-visible message
+is attributed, and the daemon ENFORCES the gate on the send path:
+
+- Every agent posts under its plain functional name — taken from the
+  daemon-provisioned agent context (`CTX_AGENT_NAME`) at process start, not
+  from any config or caller input. Setting `display_name` to anything else is
+  loudly suppressed at send time and the functional name is sent instead —
+  the custom value never reaches Slack.
+- `icon_emoji` / `icon_url` are never sent (no icon values are
+  persona-review approved yet); their presence is loudly logged.
+- Custom display names/icons are persona/brand surface and require the
+  brand-persona review — the same review that owns voice personas. Admitting
+  an approved value is a code change to the gate, not a config edit.
+
+## 6. Troubleshooting
+
+- **No inbound and no Slack lines in the log at all**: the agent's `.env` is
+  missing `SLACK_APP_TOKEN` or `SLACK_CHANNEL` (see §2), or Node is < 22 so
+  Socket Mode cannot run — tokens plus a channel on Node 22+ are what start the
+  listener.
+- **No inbound**: check the daemon log for the route-gate DENIED lines (they
+  name the reason: `no-config`, `channel-not-allowed`, `user-not-allowed`) and
+  for the malformed-slack.json warning. Fail-closed means misconfig looks like
+  silence — the log always says why.
+- **Auth dead**: a permanent auth failure alerts three ways (daemon log,
+  urgent agent inbox, operator Telegram) and does NOT self-heal — fix the
+  token and restart the agent.
+- **Duplicate deliveries**: socket redeliveries are collapsed per
+  (event, agent) in a bounded window; a duplicate that still lands after a
+  window eviction is expected-rare and harmless (agents dedup at read time).

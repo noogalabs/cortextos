@@ -9,9 +9,8 @@ import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
-import { SlackAPI } from '../slack/api.js';
-import { SlackSocketModeClient } from '../slack/socket-mode.js';
-import { dispatchSlackMessage, makeUserNameResolver, type DispatchTarget } from '../slack/dispatcher.js';
+import { SlackSocketListener } from './slack-socket-listener.js';
+import { loadSlackRoutingConfig, slackConfigPath, claimSlackAppToken, releaseSlackAppTokens } from '../slack/slack-routing.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
@@ -34,6 +33,7 @@ type AgentEntry = {
   checker: FastChecker;
   poller?: TelegramPoller;
   activityPoller?: TelegramPoller;
+  slackListener?: SlackSocketListener;
   telegramRejectCount?: number;
   telegramLastRejectAlertAt?: number;
   /**
@@ -122,13 +122,12 @@ export class AgentManager {
   // finishes so the next clean restart starts from a known-good baseline.
   private daemonJustCrashed: boolean = false;
 
-  // Slack Socket Mode: one shared connection for the whole daemon process
-  // (Slack is one app per workspace, not one bot per agent — see
-  // maybeStartSlackSocketMode's docblock). slackSocketStarted guards
-  // against starting a second connection if startAgent() runs again for
-  // the orchestrator (e.g. a restart) while this daemon process is alive.
-  private slackSocketStarted = false;
-  private slackSocketClient: SlackSocketModeClient | null = null;
+  // Slack Socket Mode ownership: appToken -> agent name. Slack distributes an
+  // app's event envelopes across its open connections, so two agents sharing
+  // one app token each receive only a random subset of events (silent loss).
+  // Detected at listener start and warned loudly; the supported topology is one
+  // Slack app per agent.
+  private slackAppTokenOwners: Map<string, string> = new Map();
 
   // silent-dormancy fix: epoch ms of when this AgentManager (i.e. the daemon)
   // was constructed. Used as the Face-B liveness baseline for enabled agents
@@ -480,6 +479,7 @@ export class AgentManager {
         const staleScheduler = this.cronSchedulers.get(name);
         try { stale.poller?.stop(); } catch { /* best-effort */ }
         try { stale.activityPoller?.stop(); } catch { /* best-effort */ }
+        try { stale.slackListener?.stop(); } catch { /* best-effort */ }
         try { stale.checker.stop(); } catch { /* best-effort */ }
         // process.stop() sets status='stopped', which neutralizes any pending
         // crash-backoff setTimeout on the old AgentProcess (its `if (status ===
@@ -1071,81 +1071,64 @@ export class AgentManager {
       log(`Buzz registration failed (non-fatal): ${err}`);
     }
 
-    // Slack Socket Mode. Deliberately OUTSIDE the Telegram gate above —
-    // Slack must work for an agent that has no Telegram config at all
-    // (a Slack-only agent). Same "only the orchestrator starts the shared
-    // connection" shape as maybeStartActivityChannelPoller, for the same
-    // reason: Slack is one app per workspace (a shared SLACK_BOT_TOKEN /
-    // SLACK_APP_TOKEN), not one bot per agent like Telegram, so there must
-    // be exactly one Socket Mode connection for the whole org, not one per
-    // agent.
-    await this.maybeStartSlackSocketMode(name, org, log);
-  }
-
-  /**
-   * If this agent is the org's orchestrator AND the org has SLACK_APP_TOKEN
-   * (and SLACK_BOT_TOKEN) configured, start the one shared
-   * SlackSocketModeClient for the whole daemon and wire its inbound events
-   * through dispatchSlackMessage() to every agent whose slack.json allows
-   * the channel+user. Safe no-op otherwise (non-orchestrator agent, or the
-   * tokens absent — Slack inbound is simply not configured yet).
-   *
-   * Failure isolation is deliberate and load-bearing: a Slack Socket Mode
-   * failure (a runtime that predates the Node 22 WebSocket global, an
-   * unreachable Slack API, anything unexpected) must degrade to "Slack
-   * inactive," never take down orchestrator startup — startAgent() awaits
-   * this method for every agent, so an uncaught throw here would block the
-   * orchestrator itself from starting. Mirrors
-   * maybeStartActivityChannelPoller's failure-isolation contract exactly.
-   */
-  private async maybeStartSlackSocketMode(
-    name: string,
-    org: string | undefined,
-    log: LogFn,
-  ): Promise<void> {
-    if (!org) return;
-    if (this.slackSocketStarted) return; // already running for this daemon process
-
-    const orgDir = join(this.frameworkRoot, 'orgs', org);
-    let orchestratorName: string | undefined;
+    // Slack Socket Mode (real-time inbound), per agent. Deliberately OUTSIDE
+    // the Telegram gate above — a Slack-only agent has no Telegram config.
+    // Each agent runs its own listener; its own slack.json (loaded from disk)
+    // drives the fail-closed route gate. Native WebSocket is required (Node
+    // 22+); without it the listener is skipped rather than crash-looping. Two
+    // agents sharing one Slack app token are detected and warned (Slack splits
+    // an app's events across connections — silent message loss).
     try {
-      const contextJson = stripBom(readFileSync(join(orgDir, 'context.json'), 'utf-8'));
-      orchestratorName = JSON.parse(contextJson).orchestrator;
-    } catch {
-      return; // No context.json or unreadable — skip
-    }
-    if (!orchestratorName || orchestratorName !== name) return;
+      let slackBotToken = '';
+      let slackAppToken = '';
+      let slackChannel = '';
+      const slackEnvPath = join(agentDir, '.env');
+      if (existsSync(slackEnvPath)) {
+        const envContent = readFileSync(slackEnvPath, 'utf-8');
+        slackBotToken = envContent.match(/^SLACK_BOT_TOKEN=(.+)$/m)?.[1]?.trim() ?? '';
+        slackAppToken = envContent.match(/^SLACK_APP_TOKEN=(.+)$/m)?.[1]?.trim() ?? '';
+        slackChannel = envContent.match(/^SLACK_CHANNEL=(.+)$/m)?.[1]?.trim() ?? '';
+      }
+      if (!slackBotToken) slackBotToken = process.env.SLACK_BOT_TOKEN ?? '';
+      if (!slackAppToken) slackAppToken = process.env.SLACK_APP_TOKEN ?? '';
+      if (!slackChannel) slackChannel = process.env.SLACK_CHANNEL ?? '';
 
-    const appToken = process.env.SLACK_APP_TOKEN;
-    const botToken = process.env.SLACK_BOT_TOKEN;
-    if (!appToken || !botToken) return; // Slack inbound not configured — normal state
+      const slackJsonPath = slackConfigPath(this.frameworkRoot, resolvedOrg, name);
+      const slackRouting = loadSlackRoutingConfig(this.frameworkRoot, resolvedOrg, name);
+      if (slackRouting === null && existsSync(slackJsonPath)) {
+        log(`WARNING: ${slackJsonPath} exists but is malformed (allowed_channels/allowed_users must be string arrays). Slack routing DISABLED for this agent — running in legacy single-channel mode. Fix the file and restart.`);
+      }
 
-    this.slackSocketStarted = true;
-    const slackApi = new SlackAPI(botToken);
-    const resolveUserName = makeUserNameResolver((userId) => slackApi.getUserInfo(userId));
-    const client = new SlackSocketModeClient(appToken, { log: (msg) => log(`[slack-socket-mode] ${msg}`) });
-
-    client.onMessage((event) => {
-      const targets: DispatchTarget[] = Array.from(this.agents.entries()).map(([n, entry]) => ({
-        name: n,
-        checker: entry.checker,
-      }));
-      dispatchSlackMessage(event, targets, this.frameworkRoot, org, resolveUserName)
-        .then((result) => {
-          if (result.delivered.length > 0) {
-            log(`[slack-socket-mode] delivered to: ${result.delivered.join(', ')}`);
-          }
-        })
-        .catch((err) => log(`[slack-socket-mode] dispatch error: ${err}`));
-    });
-
-    try {
-      await client.start();
-      this.slackSocketClient = client;
-      log('Slack Socket Mode connected (org-level, orchestrator-owned)');
+      const slackConfigured = Boolean(slackAppToken && slackBotToken && (slackChannel || slackRouting));
+      if (slackConfigured && typeof WebSocket === 'undefined') {
+        log('WARN: native WebSocket not available — Slack Socket Mode requires Node 22+; Slack inbound inactive for this agent.');
+      } else if (slackConfigured) {
+        const conflictOwner = claimSlackAppToken(this.slackAppTokenOwners, slackAppToken, name);
+        if (conflictOwner !== null) {
+          const sharedAppAlert = `⚠️ SLACK SHARED APP TOKEN: agents '${conflictOwner}' and '${name}' are using the SAME Slack app token. Slack splits events across an app's connections, so EACH agent receives only a random subset of messages (silent loss). Give each agent its own Slack app (see docs/runbook/slack-adapter-setup.md).`;
+          log(sharedAppAlert);
+          if (telegramApi && chatId) telegramApi.sendMessage(chatId, sharedAppAlert).catch(() => { /* best-effort */ });
+        }
+        const slackListener = new SlackSocketListener({
+          appToken: slackAppToken,
+          botToken: slackBotToken,
+          channel: slackChannel,
+          agentName: name,
+          paths,
+          log,
+          routing: slackRouting ?? undefined,
+          onFatalAuthError: (errorCode) => {
+            const alertText = `⚠️ SLACK AUTH DEAD: ${name}'s Slack connection hit a permanent auth failure (${errorCode}). Reconnection stopped — real-time Slack inbound is DOWN and will NOT recover on its own. Fix the Slack app token in the agent's .env and restart the agent.`;
+            log(alertText);
+            if (telegramApi && chatId) telegramApi.sendMessage(chatId, alertText).catch(() => { /* best-effort */ });
+          },
+        });
+        slackListener.start().catch(err => log(`Slack Socket Mode listener failed to start: ${err}`));
+        const slackEntry = this.agents.get(name);
+        if (slackEntry) slackEntry.slackListener = slackListener;
+      }
     } catch (err) {
-      this.slackSocketStarted = false; // allow a future startAgent() call (e.g. a restart) to retry
-      log(`Slack Socket Mode failed to start (Slack inactive, agent startup unaffected): ${err}`);
+      log(`Slack setup failed (non-fatal): ${err}`);
     }
   }
 
@@ -1405,6 +1388,8 @@ export class AgentManager {
       for (const buzzEntry of this.buzzClients.values()) {
         buzzEntry.dispatcher.unregister(name);
       }
+      try { entry.slackListener?.stop(); } catch { /* best-effort */ }
+      releaseSlackAppTokens(this.slackAppTokenOwners, name);
       entry.checker.stop();
       await entry.process.stop();
 
@@ -1548,9 +1533,10 @@ export class AgentManager {
    * time `pty.kill()` runs, every agent already has its marker on disk.
    */
   async stopAll(): Promise<void> {
-    this.slackSocketClient?.stop();
-    this.slackSocketClient = null;
-    this.slackSocketStarted = false;
+    for (const entry of this.agents.values()) {
+      try { entry.slackListener?.stop(); } catch { /* best-effort */ }
+    }
+    this.slackAppTokenOwners.clear();
     // DELIBERATE EXCEPTION to the identity rule used everywhere else in this
     // file, and NOT an oversight. Shutdown wants "stop whatever is running under
     // this name", which is a name question, so acting by name is correct routing

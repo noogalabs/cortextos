@@ -834,3 +834,24 @@ export interface AgentStatus {
   // relative to its own liveness baseline (uptime, or daemon uptime if absent-from-map)
   dormancyReason?: string; // human explanation of the dormancy verdict
 }
+
+export type TrustLevel = 'owner' | 'manager' | 'member';
+
+export const VALID_TRUST_LEVELS: TrustLevel[] = ['owner', 'manager', 'member'];
+
+/**
+ * A human team member connected via Slack.
+ * Stored in org config or agent config under team_members.
+ */
+export interface TeamMember {
+  /** Display name (e.g. "Jordan Rivera") */
+  name: string;
+  /** Job role or title (e.g. "Operations Manager") */
+  role: string;
+  /** Slack handle without @ (e.g. "jordan.rivera") */
+  slack_handle: string;
+  /** Trust level — determines how the agent treats messages from this person */
+  trust_level: TrustLevel;
+  /** Optional persona-agent routing hint */
+  assigned_to_agent?: string;
+}
