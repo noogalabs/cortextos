@@ -101,6 +101,32 @@ describe('SlackSocketListener.handleMessage', () => {
     expect(actualText).toContain('channel:C123');
   });
 
+  it('P1: redacts an SSN and Slack token BEFORE the durable inbox write', async () => {
+    const listener = makeListener();
+    await listener.handleMessage(
+      makeEvent({ text: 'ssn 123-45-6789 token xoxb-123456789012-abcdefghijkl' }),
+    );
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    const actualText = sendMessageMock.mock.calls[0][4];
+    // The raw sensitive values must never reach the durable inbox record.
+    expect(actualText).not.toContain('123-45-6789');
+    expect(actualText).not.toContain('xoxb-123456789012-abcdefghijkl');
+    // The redacted forms are what got persisted.
+    expect(actualText).toContain('[REDACTED-SSN]');
+    expect(actualText).toContain('xoxb-****');
+  });
+
+  it('preserves ordinary prose — inbound redaction never eats words like "not" after "bot"', async () => {
+    const listener = makeListener();
+    await listener.handleMessage(
+      makeEvent({ text: 'Tell the bot not to delete the lease; bearer of bad news, bot behavior aside.' }),
+    );
+    const actualText = sendMessageMock.mock.calls[0][4];
+    expect(actualText).toContain('Tell the bot not to delete the lease');
+    expect(actualText).toContain('bearer of bad news');
+    expect(actualText).not.toContain('****');
+  });
+
   it('enriched "from {name} (@handle, trust)" when team_members has the handle', async () => {
     getUserInfoMock.mockResolvedValue({ handle: 'maren.ellis', displayName: 'Maren Ellis' });
     const teamMembers: TeamMember[] = [
