@@ -232,18 +232,25 @@ export async function checkUsageApi(
     sevenDayUtilization?: number;
   };
 
-  // Normalize 0–100 → 0.0–1.0 if needed
-  const normalize = (v: number | undefined) => {
-    if (v === undefined) return 0;
+  // The NESTED shape is percent-scale by observation (e.g. utilization: 77.0
+  // means 77%), so it is ALWAYS divided by 100 — a >1 heuristic would misread
+  // genuinely-low nested readings (0.5 = 0.5% just after a reset) as 50%
+  // fractions, a 100x error. The heuristic survives only for the legacy FLAT
+  // fields, whose scale was never pinned.
+  const fromPercent = (v: number | undefined) => (v === undefined ? undefined : v / 100);
+  const normalizeFlat = (v: number | undefined) => {
+    if (v === undefined) return undefined;
     return v > 1 ? v / 100 : v;
   };
 
-  const fiveHour = normalize(
-    data.five_hour?.utilization ?? data.five_hour_utilization ?? data.fiveHourUtilization,
-  );
-  const sevenDay = normalize(
-    data.seven_day?.utilization ?? data.seven_day_utilization ?? data.sevenDayUtilization,
-  );
+  const fiveHour =
+    fromPercent(data.five_hour?.utilization)
+    ?? normalizeFlat(data.five_hour_utilization ?? data.fiveHourUtilization)
+    ?? 0;
+  const sevenDay =
+    fromPercent(data.seven_day?.utilization)
+    ?? normalizeFlat(data.seven_day_utilization ?? data.sevenDayUtilization)
+    ?? 0;
   const fetchedAt = new Date().toISOString();
 
   const snapshot: UsageSnapshot = {
