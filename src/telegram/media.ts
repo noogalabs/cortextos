@@ -57,7 +57,7 @@ export async function processMediaMessage(
   msg: TelegramMessage,
   api: TelegramAPI,
   downloadDir: string,
-  opts: { transcribeLanguage?: string } = {},
+  opts: { transcribeLanguage?: string; log?: (line: string) => void } = {},
 ): Promise<ProcessedMedia | null> {
   const chatId = msg.chat.id;
   const from = msg.from?.first_name || 'Unknown';
@@ -152,7 +152,7 @@ export async function processMediaMessage(
     const data = await api.downloadFile(filePath);
     fs.writeFileSync(localFile, data);
 
-    const transcript = await transcribeVoice(localFile, { language: opts.transcribeLanguage });
+    const transcript = await transcribeVoice(localFile, { language: opts.transcribeLanguage, log: opts.log });
 
     return {
       type: 'voice',

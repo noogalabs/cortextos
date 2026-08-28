@@ -53,6 +53,18 @@ export function resolveLang(): string {
   return lang !== '' ? lang : 'auto';
 }
 
+/**
+ * Structural validity for a whisper -l value: 'auto' or a 2-3 letter language
+ * code. This is a SHAPE check, not a language-list check — whisper-cli remains
+ * the authority on which codes exist; this only catches config values that
+ * could never be a code at all (paths, sentences, punctuation), so bad
+ * per-agent config degrades LOUDLY to auto instead of silently to
+ * no-transcript.
+ */
+export function isValidWhisperLang(value: string): boolean {
+  return /^(auto|[a-zA-Z]{2,3})$/.test(value.trim());
+}
+
 export interface TranscribeOptions {
   timeoutMs?: number;
   modelPath?: string;
@@ -77,7 +89,16 @@ export async function transcribeVoice(
   const modelPath = opts.modelPath || resolveModelPath();
   const ffmpegBin = resolveBin('CTX_FFMPEG_BIN', 'ffmpeg');
   const whisperBin = resolveBin('CTX_WHISPER_BIN', 'whisper-cli');
-  const lang = opts.language?.trim() || resolveLang();
+  // Effective language: per-call (owning agent) first, then daemon env, then
+  // auto. An invalid nonempty value falls back to auto WITH a diagnostic —
+  // whisper-cli would reject it and the whole transcription would silently
+  // become "no transcript", which is the worse failure.
+  const requestedLang = opts.language?.trim() || resolveLang();
+  let lang = requestedLang;
+  if (!isValidWhisperLang(requestedLang)) {
+    log(`[transcribe] invalid transcription language '${requestedLang}' (expected 'auto' or a 2-3 letter code) — falling back to auto`);
+    lang = 'auto';
+  }
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (!fs.existsSync(modelPath)) {

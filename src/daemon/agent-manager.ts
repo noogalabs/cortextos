@@ -20,6 +20,7 @@ import { collectTelegramCommands, registerTelegramCommands } from '../bus/metric
 import { rawDaemonBody, rawDaemonInjection, stripControlChars, structuralDaemonInjection } from '../utils/validate.js';
 import type { DaemonInjection } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
+import { isValidWhisperLang } from '../telegram/transcribe.js';
 import { computeDormancy, parseHeartbeatIntervalMs } from '../utils/dormancy.js';
 import { CRONS_DIRECTORY, CRONS_FILENAME } from '../bus/crons-schema.js';
 
@@ -354,6 +355,12 @@ export class AgentManager {
       const allowedUserMatch = envContent.match(/^ALLOWED_USER=(.+)$/m);
       const whisperLangMatch = envContent.match(/^CTX_WHISPER_LANG=(.+)$/m);
       whisperLang = whisperLangMatch?.[1]?.trim() || undefined;
+      // Bad per-agent config must be LOUD at startup, not a silent
+      // no-transcript at message time: an invalid code never leaves here.
+      if (whisperLang && !isValidWhisperLang(whisperLang)) {
+        log(`WARNING: CTX_WHISPER_LANG '${whisperLang}' is not a valid whisper language code (expected 'auto' or a 2-3 letter code like en/no/de). Falling back to the daemon default.`);
+        whisperLang = undefined;
+      }
       botToken = botTokenMatch?.[1]?.trim();
       chatId = chatIdMatch?.[1]?.trim();
       allowedUserId = allowedUserMatch?.[1]?.trim() || undefined;
@@ -499,7 +506,7 @@ export class AgentManager {
 
         if (isMedia && telegramApi) {
           const downloadDir = join(agentDir, 'telegram-images');
-          processMediaMessage(msg, telegramApi, downloadDir, { transcribeLanguage: whisperLang }).then((media) => {
+          processMediaMessage(msg, telegramApi, downloadDir, { transcribeLanguage: whisperLang, log }).then((media) => {
             if (!media) {
               log('Media processing returned null - falling back to text format');
               const text = stripControlChars(msg.caption || '');
